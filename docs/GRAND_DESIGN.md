@@ -266,6 +266,14 @@ Expected in-between work between `0.1.0` and `0.2.0`:
 
 These do not all need separate formal sprint docs unless the work grows. They are useful checkpoints before the snapshot builder starts trusting ingestion outputs.
 
+Expected bridge work between `0.2.0` and `0.3.0`:
+
+- `0.2.1`: multi-day mock trend data with deliberate stable, rising, falling, spiking, and missing-day behaviors.
+- `0.2.2`: narrow live Waites canary that saves raw API evidence through the same artifact contract as mock mode.
+- `0.2.3`: live raw shape validation and source-aware snapshot/trend processing for small, explicit date ranges.
+
+The rule for this bridge is: mock data owns behavior, live data validates assumptions. Normal tests should remain offline, deterministic, and fixture-backed. Live tests or smoke checks should be opt-in and should never require secrets, plant network access, or large real datasets for the default development workflow.
+
 ## Definition of Done
 
 A change is done when:
