@@ -368,9 +368,25 @@ Suggested shape:
         "facility[]": 679,
         "start_date": "2025-07-09T00:00:00Z",
         "end_date": "2025-07-09T23:59:59Z"
+      },
+      "artifact": {
+        "schema_version": 1,
+        "logical_path": "data/raw/waites/date=2025-07-09/readings-rms.json",
+        "storage_path": "data/raw/waites/date=2025-07-09/readings-rms.json",
+        "state": "plain",
+        "compression": "none",
+        "byte_count": 1024,
+        "sha256": "example",
+        "compressed_byte_count": null,
+        "compressed_sha256": null
       }
     }
-  ]
+  ],
+  "raw_lifecycle": {
+    "schema_version": 1,
+    "updated_at": "2026-07-19T00:00:00Z",
+    "artifact_count": 6
+  }
 }
 ```
 
@@ -384,6 +400,25 @@ Required manifest fields:
 - `endpoints[].path`
 - `endpoints[].record_count`
 - `endpoints[].params`
+
+Required artifact metadata fields once sprint `0.2.4` raw lifecycle controls are active:
+
+- `endpoints[].artifact.schema_version`
+- `endpoints[].artifact.logical_path`
+- `endpoints[].artifact.storage_path`
+- `endpoints[].artifact.state`
+- `endpoints[].artifact.compression`
+- `endpoints[].artifact.byte_count`
+- `endpoints[].artifact.sha256`
+- `endpoints[].artifact.compressed_byte_count`
+- `endpoints[].artifact.compressed_sha256`
+
+Allowed artifact states:
+
+- `plain`
+- `compressed`
+
+When an endpoint artifact is compressed, the logical path remains the original `.json` filename and `storage_path` points to `.json.gz`. Downstream readers must support both forms through the same logical path.
 
 Live manifests may also include endpoint-level `status_code` and `elapsed_ms`. A failed live fetch may include an endpoint `error`; that is a hard validation failure for downstream processing.
 

@@ -201,6 +201,78 @@ def test_cli_snapshot_and_trend_builds_write_mock_artifacts(tmp_path: Path) -> N
     assert (data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-09" / "sensor_trends.csv").exists()
 
 
+def test_cli_raw_lifecycle_commands(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    fetch_result = runner.invoke(
+        app,
+        [
+            "waites",
+            "fetch",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--facility",
+            "679",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert fetch_result.exit_code == 0
+
+    verify_result = runner.invoke(
+        app,
+        [
+            "raw",
+            "verify",
+            "--source",
+            "waites",
+            "--date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert verify_result.exit_code == 0
+    assert json.loads(verify_result.stdout)["status"] == "valid"
+
+    compress_result = runner.invoke(
+        app,
+        [
+            "raw",
+            "compress",
+            "--source",
+            "waites",
+            "--date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert compress_result.exit_code == 0
+    assert json.loads(compress_result.stdout)["compressed_count"] == 6
+    assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "equipment.json.gz").exists()
+
+    prune_result = runner.invoke(
+        app,
+        [
+            "raw",
+            "prune",
+            "--source",
+            "waites",
+            "--older-than-days",
+            "1",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert prune_result.exit_code == 0
+    assert json.loads(prune_result.stdout)["dry_run"] is True
+
+
 def test_cli_builds_multi_day_mock_trend(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"

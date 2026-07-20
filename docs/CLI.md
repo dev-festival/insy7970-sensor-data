@@ -150,6 +150,59 @@ validation_path
 
 Warnings are allowed to proceed. Hard validation errors exit nonzero and should be fixed before snapshot or trend processing.
 
+### Verify Raw Evidence
+
+```powershell
+uv run sensor-data raw verify --source waites --date 2026-07-19
+```
+
+Checks the raw run manifest, required endpoint artifacts, byte counts, SHA-256 checksums, and gzip readability. The command is read-only and prints JSON with:
+
+```text
+status
+error_count
+warning_count
+artifacts
+issues
+```
+
+Use this before and after compression when you want proof that the raw evidence is intact.
+
+### Compress Raw Evidence
+
+```powershell
+uv run sensor-data raw compress --source waites --date 2026-07-19
+```
+
+Validates the raw run, writes `.json.gz` endpoint artifacts, removes the replaced plain `.json` endpoint files, and updates `manifest.json` with:
+
+```text
+artifact.state
+artifact.compression
+artifact.byte_count
+artifact.sha256
+artifact.compressed_byte_count
+artifact.compressed_sha256
+```
+
+The logical artifact name remains the original `.json` path. Downstream readers can load either `equipment.json` or `equipment.json.gz` through the same code path.
+
+### Prune Raw Evidence
+
+```powershell
+uv run sensor-data raw prune --source waites --older-than-days 30
+```
+
+Dry-run is the default. It lists raw Waites date directories older than the cutoff and reports whether each candidate can be verified before deletion.
+
+To actually delete verified candidates:
+
+```powershell
+uv run sensor-data raw prune --source waites --older-than-days 30 --delete --confirm-delete
+```
+
+Prune will not delete a date directory that is missing a manifest or fails verification.
+
 ### Build Sensor Snapshot
 
 ```powershell
@@ -182,6 +235,17 @@ data/processed/trends/start=2025-07-09_end=2025-07-11/metadata.json
 ```
 
 Trend builds only consume snapshots whose metadata source matches the requested `--source`. This prevents mock and API snapshots from being mixed silently.
+
+## Raw Retention Guidance
+
+Keep live raw JSON long enough to validate, troubleshoot, and reprocess the daily facts. Compress validated raw runs early, especially live API pulls. Treat `data/processed/`, future SQLite observations, snapshots, trends, clusters, drift, and Maximo joins as the longer-lived working set.
+
+Deletion should stay deliberate:
+
+- run `raw verify`;
+- run `raw prune` as dry-run;
+- review candidate dates;
+- rerun with `--delete --confirm-delete` only when the processed outputs or SQLite observations are sufficient.
 
 Example multi-day mock workflow:
 

@@ -7,6 +7,7 @@ import csv
 import json
 
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.raw_lifecycle import refresh_waites_manifest_artifacts
 from insy_sensor_data.storage import StoragePaths, get_storage_paths
 from insy_sensor_data.waites.client import (
     WaitesApiClient,
@@ -89,6 +90,7 @@ def fetch_waites(
 
     manifest_path = run_dir / "manifest.json"
     _write_json(manifest_path, manifest)
+    refresh_waites_manifest_artifacts(settings=settings, run_date=run_date)
     reference_outputs = write_waites_reference_tables(storage, raw_envelopes)
 
     return {
@@ -250,6 +252,11 @@ def list_raw_waites_runs(settings: AppSettings) -> list[dict[str, Any]]:
                 "record_counts": {
                     endpoint.get("name"): endpoint.get("record_count")
                     for endpoint in manifest.get("endpoints", [])
+                },
+                "artifact_states": {
+                    endpoint.get("name"): (endpoint.get("artifact") or {}).get("state")
+                    for endpoint in manifest.get("endpoints", [])
+                    if isinstance(endpoint, dict)
                 },
             }
         )

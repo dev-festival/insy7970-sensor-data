@@ -3,13 +3,28 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import csv
+import gzip
 import json
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing required artifact: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    artifact_path = resolve_artifact_path(path)
+    if artifact_path.suffix == ".gz":
+        with gzip.open(artifact_path, "rt", encoding="utf-8") as json_file:
+            return json.load(json_file)
+    return json.loads(artifact_path.read_text(encoding="utf-8"))
+
+
+def resolve_artifact_path(path: Path) -> Path:
+    if path.exists():
+        return path
+
+    if path.suffix != ".gz":
+        compressed_path = path.with_name(f"{path.name}.gz")
+        if compressed_path.exists():
+            return compressed_path
+
+    raise FileNotFoundError(f"Missing required artifact: {path}")
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:

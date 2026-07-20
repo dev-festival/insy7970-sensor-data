@@ -57,6 +57,9 @@ uv run sensor-data health
 uv run sensor-data waites fetch --source mock --date 2026-07-15 --facility 679
 uv run sensor-data waites fetch --source api --date 2026-07-15 --facility 679
 uv run sensor-data waites validate --source api --date 2026-07-15
+uv run sensor-data raw verify --source waites --date 2026-07-15
+uv run sensor-data raw compress --source waites --date 2026-07-15
+uv run sensor-data raw prune --source waites --older-than-days 30
 
 uv run sensor-data snapshot build --date 2026-07-15 --source mock
 uv run sensor-data trend build --start-date 2026-07-01 --end-date 2026-07-15 --source mock
@@ -152,6 +155,8 @@ data/
 Raw files should be as close to the external response as possible. Processed files should be optimized for downstream commands, tests, API responses, and web views.
 
 Validation reports are the gate between raw evidence and processed outputs. They should describe source shape, record counts, warnings, and hard failures without transforming the raw files themselves.
+
+Raw endpoint artifacts may be stored as plain `.json` or gzip `.json.gz`; the logical artifact identity remains the original endpoint JSON filename. Manifests should record artifact state, byte counts, SHA-256 checksums, compressed byte counts, and compressed checksums. Pruning raw evidence must remain an explicit CLI action with dry-run default behavior.
 
 ## Core Architecture
 

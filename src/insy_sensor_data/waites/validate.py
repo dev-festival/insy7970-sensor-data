@@ -4,9 +4,10 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+import gzip
 import json
 
-from insy_sensor_data.artifacts import write_json
+from insy_sensor_data.artifacts import read_json, resolve_artifact_path, write_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.waites.client import ENDPOINT_FILENAMES
@@ -411,7 +412,10 @@ def _validate_records(
 
 
 def _read_json_with_issue(path: Path, report: dict[str, Any], endpoint: str) -> Any:
-    if not path.exists():
+    try:
+        resolve_artifact_path(path)
+        return read_json(path)
+    except FileNotFoundError:
         _add_issue(
             report,
             "error",
@@ -420,9 +424,6 @@ def _read_json_with_issue(path: Path, report: dict[str, Any], endpoint: str) -> 
             f"Missing required artifact: {path}",
         )
         return None
-
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         _add_issue(
             report,
@@ -431,6 +432,15 @@ def _read_json_with_issue(path: Path, report: dict[str, Any], endpoint: str) -> 
             "invalid_json",
             f"Invalid JSON in {path}: {exc.msg}",
             {"line": exc.lineno, "column": exc.colno},
+        )
+        return None
+    except (gzip.BadGzipFile, EOFError) as exc:
+        _add_issue(
+            report,
+            "error",
+            endpoint,
+            "invalid_gzip",
+            f"Invalid gzip artifact for {path}: {exc}",
         )
         return None
 
