@@ -271,8 +271,12 @@ Expected bridge work between `0.2.0` and `0.3.0`:
 - `0.2.1`: multi-day mock trend data with deliberate stable, rising, falling, spiking, and missing-day behaviors.
 - `0.2.2`: narrow live Waites canary that saves raw API evidence through the same artifact contract as mock mode.
 - `0.2.3`: live raw shape validation and source-aware snapshot/trend processing for small, explicit date ranges.
+- `0.2.4`: raw evidence lifecycle with compression, checksums, verification, and explicit pruning.
+- `0.2.5`: SQLite observation store for validated native measurements and query-backed daily facts.
 
 The rule for this bridge is: mock data owns behavior, live data validates assumptions. Normal tests should remain offline, deterministic, and fixture-backed. Live tests or smoke checks should be opt-in and should never require secrets, plant network access, or large real datasets for the default development workflow.
+
+Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof and reprocessing source: preserve them first, checksum them, compress them, and prune them only through explicit CLI commands. The long-term working layer should be validated native observations in SQLite plus processed daily snapshots, trends, clusters, drift, and maintenance context. Do not over-aggregate native timestamps away; RMS, temperature, and ImpactVue may have different cadences and should remain timestamp-native before daily rollups are derived.
 
 ## Definition of Done
 

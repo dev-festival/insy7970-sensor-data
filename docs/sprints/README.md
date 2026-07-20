@@ -14,6 +14,8 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.2.1](0.2.1-multi-day-mock-trends.md) | Multi-day mock trends | Controlled mock date ranges that demonstrate visible trend movement |
 | [0.2.2](0.2.2-live-waites-canary.md) | Live Waites canary | Narrow opt-in live API fetch that preserves raw evidence without changing downstream contracts |
 | [0.2.3](0.2.3-live-shape-validation.md) | Live shape validation | Live raw response validation and source-aware snapshot/trend processing |
+| [0.2.4](0.2.4-raw-evidence-lifecycle.md) | Raw evidence lifecycle | Compressed, verified, and explicitly pruned raw source evidence |
+| [0.2.5](0.2.5-sqlite-observation-store.md) | SQLite observation store | Validated native observations loaded into a compact queryable store |
 | [0.3.0](0.3.0-clustering.md) | Clustering | Clustered snapshots, metrics, PCA coordinates, and drift-ready artifacts |
 | [0.4.0](0.4.0-api-and-static-web.md) | API and web hardening | Dashboard polish, richer service responses, and browser workflow hardening |
 | [0.5.0](0.5.0-maximo-integration.md) | Maximo integration | Asset maintenance records aligned to Waites equipment by asset number |
