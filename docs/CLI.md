@@ -119,6 +119,7 @@ data/processed/trends/start=2025-07-09_end=2025-07-09/metadata.json
 
 ```powershell
 uv run pytest
+uv run pytest --cov=insy_sensor_data --cov-report=term-missing
 ```
 
 Runs the mock-mode test suite. Tests should not need Waites credentials, Maximo access, ODBC drivers, or plant network access.
