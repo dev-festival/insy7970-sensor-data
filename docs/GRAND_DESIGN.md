@@ -236,6 +236,8 @@ Mock mode should:
 - Include partial-data cases such as missing axes, missing temperature, missing asset alignment, and inactive sensors.
 - Be accepted by API and web workflows.
 
+The detailed fixture and artifact expectations live in [Mock Data Contract](MOCK_DATA_CONTRACT.md).
+
 ## Testing Strategy
 
 Use pytest as the default test runner.
