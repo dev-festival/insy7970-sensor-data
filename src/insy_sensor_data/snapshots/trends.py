@@ -44,8 +44,8 @@ def build_trends(
     end_date: date,
     source: str = "mock",
 ) -> dict[str, Any]:
-    if source != "mock":
-        raise NotImplementedError("Only mock trends are implemented in sprint 0.2.0.")
+    if source not in {"mock", "api"}:
+        raise ValueError("source must be one of: api, mock")
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
 
@@ -53,19 +53,26 @@ def build_trends(
     output_dir = storage.trend_dir(start_date.isoformat(), end_date.isoformat())
     sensor_rows: list[dict[str, Any]] = []
     skipped_dates: list[str] = []
+    source_mismatch_dates: list[str] = []
 
     for run_date in _date_range(start_date, end_date):
         snapshot_dir = storage.snapshot_dir(run_date.isoformat())
         snapshot_path = snapshot_dir / "sensor_snapshot.csv"
-        if not snapshot_path.exists():
+        metadata_path = snapshot_dir / "metadata.json"
+        if not snapshot_path.exists() or not metadata_path.exists():
             skipped_dates.append(run_date.isoformat())
+            continue
+
+        metadata = read_json(metadata_path)
+        if metadata.get("source") != source:
+            source_mismatch_dates.append(run_date.isoformat())
             continue
 
         for row in read_csv_rows(snapshot_path):
             sensor_rows.append({"date": run_date.isoformat(), **_sensor_trend_row(row)})
 
     if not sensor_rows:
-        raise FileNotFoundError("No snapshot artifacts found for the requested trend range.")
+        raise FileNotFoundError(f"No snapshot artifacts found for source {source} in the requested trend range.")
 
     equipment_rows = _equipment_trends(sensor_rows)
     sensor_path = output_dir / "sensor_trends.csv"
@@ -89,6 +96,7 @@ def build_trends(
             "sensor_record_count": len(sensor_rows),
             "equipment_record_count": len(equipment_rows),
             "skipped_dates": skipped_dates,
+            "source_mismatch_dates": source_mismatch_dates,
         },
     )
 
@@ -102,6 +110,7 @@ def build_trends(
         "sensor_record_count": len(sensor_rows),
         "equipment_record_count": len(equipment_rows),
         "skipped_dates": skipped_dates,
+        "source_mismatch_dates": source_mismatch_dates,
     }
 
 

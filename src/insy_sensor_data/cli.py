@@ -14,6 +14,7 @@ from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.client import WaitesApiError
+from insy_sensor_data.waites.validate import validate_waites_raw, validation_summary
 
 
 app = typer.Typer(
@@ -107,6 +108,32 @@ def waites_fetch(
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
+@waites_app.command("validate")
+def waites_validate(
+    validate_date: Annotated[
+        str,
+        typer.Option("--date", help="Raw Waites run date to validate in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Expected source mode: mock or api."),
+    ] = "mock",
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Validate raw Waites evidence before processing it."""
+    source_mode = _validate_source(source)
+    settings = AppSettings.from_env(env_file=env_file)
+    run_date = _parse_run_date(validate_date)
+    try:
+        report = validate_waites_raw(settings=settings, run_date=run_date, source=source_mode)
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+
+    typer.echo(json.dumps(validation_summary(report), sort_keys=True))
+    if report["error_count"]:
+        _fail(f"raw Waites validation failed; see {report['validation_path']}")
+
+
 @snapshot_app.command("build")
 def snapshot_build(
     snapshot_date: Annotated[
@@ -120,7 +147,7 @@ def snapshot_build(
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Build a processed sensor snapshot from raw Waites evidence."""
-    source_mode = _validate_mock_source(source)
+    source_mode = _validate_source(source)
     settings = AppSettings.from_env(env_file=env_file)
     run_date = _parse_run_date(snapshot_date)
     try:
@@ -147,7 +174,7 @@ def trend_build(
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Build lightweight trend-ready outputs from processed snapshots."""
-    source_mode = _validate_mock_source(source)
+    source_mode = _validate_source(source)
     settings = AppSettings.from_env(env_file=env_file)
     try:
         summary = build_trends(
@@ -161,13 +188,11 @@ def trend_build(
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
-def _validate_mock_source(source: str) -> str:
+def _validate_source(source: str) -> str:
     source_mode = source.strip().lower()
     if source_mode not in VALID_SOURCE_MODES:
         allowed = ", ".join(sorted(VALID_SOURCE_MODES))
         raise typer.BadParameter(f"source must be one of: {allowed}")
-    if source_mode != "mock":
-        raise typer.BadParameter("only --source mock is implemented in sprint 0.2.0")
     return source_mode
 
 

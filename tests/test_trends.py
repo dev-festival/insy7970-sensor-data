@@ -97,6 +97,30 @@ def test_build_trends_reports_missing_snapshot_dates(tmp_path: Path) -> None:
     assert summary["sensor_record_count"] == 18
 
 
+def test_build_trends_reads_api_source_snapshots_only(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    run_date = date(2025, 7, 9)
+    fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+    build_sensor_snapshot(settings=settings, run_date=run_date)
+    _rewrite_snapshot_source(tmp_path / "data", "2025-07-09", "api")
+
+    summary = build_trends(settings=settings, start_date=run_date, end_date=run_date, source="api")
+
+    assert summary["source"] == "api"
+    assert summary["sensor_record_count"] == 9
+    assert summary["source_mismatch_dates"] == []
+
+
+def test_build_trends_skips_snapshot_source_mismatches(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    run_date = date(2025, 7, 9)
+    fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+    build_sensor_snapshot(settings=settings, run_date=run_date)
+
+    with pytest.raises(FileNotFoundError, match="source api"):
+        build_trends(settings=settings, start_date=run_date, end_date=run_date, source="api")
+
+
 def _trend_dates() -> list[str]:
     return ["2025-07-09", "2025-07-10", "2025-07-11"]
 
@@ -116,3 +140,10 @@ def _metric(
     metric: str,
 ) -> float:
     return float(_row(rows, raw_date, installation_point_id)[metric])
+
+
+def _rewrite_snapshot_source(data_dir: Path, raw_date: str, source: str) -> None:
+    metadata_path = data_dir / "processed" / "snapshots" / f"date={raw_date}" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["source"] = source
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")

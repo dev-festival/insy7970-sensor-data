@@ -97,6 +97,49 @@ def test_cli_waites_fetch_api_requires_token(tmp_path: Path) -> None:
     assert "WAITES_ACCESS_TOKEN" in result.output or "WAITES_ACCESS_TOKEN" in str(result.exception)
 
 
+def test_cli_waites_validate_writes_report(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    fetch_result = runner.invoke(
+        app,
+        [
+            "waites",
+            "fetch",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--facility",
+            "679",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert fetch_result.exit_code == 0
+
+    validate_result = runner.invoke(
+        app,
+        [
+            "waites",
+            "validate",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert validate_result.exit_code == 0
+    payload = json.loads(validate_result.stdout)
+    assert payload["status"] in {"valid", "valid_with_warnings"}
+    assert payload["endpoint_record_counts"]["equipment"] == 6
+    assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "validation.json").exists()
+
+
 def test_cli_snapshot_and_trend_builds_write_mock_artifacts(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"

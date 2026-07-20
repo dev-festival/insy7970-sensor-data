@@ -80,6 +80,8 @@ The older reference code expects `equipment`, `installation-points`, and `action
 
 If the live API response differs, update this contract and the ingestion boundary before changing downstream processing.
 
+Sprint `0.2.3` live validation confirmed that the Waites endpoints currently used by this project return a top-level object with `list` for raw capture.
+
 ## Equipment Fixture
 
 Each equipment record should include:
@@ -101,6 +103,14 @@ Required fields:
 - `name`
 - `facility_id`
 - `customer_asset_id`
+
+Known optional live fields:
+
+- `installation_date`
+- `is_route_collector`
+- `idle_threshold`
+- `idle_threshold_type`
+- `alerts`
 
 Awkward cases:
 
@@ -205,6 +215,10 @@ Required fields:
 - `facility_id`
 - `impact_vue_acceleration`
 
+Known optional live fields:
+
+- `impact_vue_pk_pk`
+
 Awkward cases:
 
 - One high-impact outlier.
@@ -242,7 +256,7 @@ Awkward cases:
 
 ## Action Items Fixture
 
-The refs do not include a saved action-items response, so this shape is inferred from the old labeling code.
+The original refs did not include a saved action-items response, so the early mock shape was inferred from the old labeling code. Sprint `0.2.3` live shape validation confirmed that action items may also include work-order, status, sensor, equipment, node, gateway, location, report, and comment metadata.
 
 Each action item should include at least:
 
@@ -261,7 +275,35 @@ Each action item should include at least:
 Required fields for current use:
 
 - `closed_at`
+
+Useful nested fields when present:
+
 - `installation_point.installation_point_id`
+- `equipment.equipment_id`
+
+Known optional live fields:
+
+- `action_item_id`
+- `wo_number`
+- `wo_status`
+- `sensor_id`
+- `type`
+- `status`
+- `installation_point`
+- `equipment`
+- `description`
+- `time_created`
+- `updated_at`
+- `urgency`
+- `title`
+- `created_by`
+- `comments`
+- `node`
+- `router`
+- `gateway`
+- `facility_id`
+- `location_id`
+- `report`
 
 Awkward cases:
 
@@ -342,6 +384,40 @@ Required manifest fields:
 - `endpoints[].path`
 - `endpoints[].record_count`
 - `endpoints[].params`
+
+Live manifests may also include endpoint-level `status_code` and `elapsed_ms`. A failed live fetch may include an endpoint `error`; that is a hard validation failure for downstream processing.
+
+## Validation Report Contract
+
+Sprint `0.2.3` writes a validation report beside each raw Waites run when `waites validate` or `snapshot build` checks the raw evidence:
+
+```text
+data/raw/waites/date=YYYY-MM-DD/validation.json
+```
+
+Required validation report fields:
+
+- `schema_version`
+- `date`
+- `expected_source`
+- `source`
+- `validated_at`
+- `raw_dir`
+- `manifest_path`
+- `validation_path`
+- `status`
+- `error_count`
+- `warning_count`
+- `endpoints`
+- `issues`
+
+Allowed statuses:
+
+- `valid`
+- `valid_with_warnings`
+- `invalid`
+
+Warnings document tolerated awkwardness such as empty optional endpoints, null-heavy columns, missing nested action item references, or newly observed fields. Semantically nullable fields, such as `action-items.closed_at` for open action items, should not create null-heavy warnings. Hard errors include missing endpoint files, malformed envelopes, missing required fields, manifest record-count mismatches, source mismatches, and endpoint fetch errors.
 
 ## Minimum Fixture Set
 

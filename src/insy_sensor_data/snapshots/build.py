@@ -9,6 +9,7 @@ from typing import Any, Iterable
 from insy_sensor_data.artifacts import read_json, write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import get_storage_paths
+from insy_sensor_data.waites.validate import ensure_waites_raw_valid
 
 
 ACCELERATION_G_TO_MPS2 = 9.8
@@ -53,12 +54,13 @@ def build_sensor_snapshot(
     run_date: date,
     source: str = "mock",
 ) -> dict[str, Any]:
-    if source != "mock":
-        raise NotImplementedError("Only mock snapshots are implemented in sprint 0.2.0.")
+    if source not in {"mock", "api"}:
+        raise ValueError("source must be one of: api, mock")
 
     storage = get_storage_paths(settings.data_dir)
     raw_dir = storage.raw_waites_run_dir(run_date.isoformat())
     output_dir = storage.snapshot_dir(run_date.isoformat())
+    validation_report = ensure_waites_raw_valid(settings=settings, run_date=run_date, source=source)
 
     equipment = read_json(raw_dir / "equipment.json")["list"]
     installation_points = read_json(raw_dir / "installation-points.json")["list"]
@@ -114,6 +116,12 @@ def build_sensor_snapshot(
             "metadata": metadata_path.as_posix(),
         },
         "record_count": len(rows),
+        "validation": {
+            "status": validation_report["status"],
+            "error_count": validation_report["error_count"],
+            "warning_count": validation_report["warning_count"],
+            "path": validation_report["validation_path"],
+        },
         "raw_record_counts": {
             "equipment": len(equipment),
             "installation-points": len(installation_points),
@@ -137,6 +145,8 @@ def build_sensor_snapshot(
         "snapshot_path": snapshot_path.as_posix(),
         "metadata_path": metadata_path.as_posix(),
         "record_count": len(rows),
+        "validation_status": validation_report["status"],
+        "validation_warning_count": validation_report["warning_count"],
     }
 
 

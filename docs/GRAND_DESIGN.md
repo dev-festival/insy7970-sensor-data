@@ -56,6 +56,7 @@ uv run sensor-data health
 
 uv run sensor-data waites fetch --source mock --date 2026-07-15 --facility 679
 uv run sensor-data waites fetch --source api --date 2026-07-15 --facility 679
+uv run sensor-data waites validate --source api --date 2026-07-15
 
 uv run sensor-data snapshot build --date 2026-07-15 --source mock
 uv run sensor-data trend build --start-date 2026-07-01 --end-date 2026-07-15 --source mock
@@ -117,6 +118,7 @@ data/
         readings-temperature.json
         action-items.json
         manifest.json
+        validation.json
     maximo/
       assetnum=VALUE/
         workorders.json
@@ -149,6 +151,8 @@ data/
 
 Raw files should be as close to the external response as possible. Processed files should be optimized for downstream commands, tests, API responses, and web views.
 
+Validation reports are the gate between raw evidence and processed outputs. They should describe source shape, record counts, warnings, and hard failures without transforming the raw files themselves.
+
 ## Core Architecture
 
 Business logic belongs in a shared core package. Surfaces call the core; they do not own the rules.
@@ -176,6 +180,7 @@ src/
       client.py
       fetch.py
       fixtures.py
+      validate.py
     snapshots/
       build.py
       trends.py
@@ -198,6 +203,7 @@ Keep modules narrow:
 - `api/routes/*` validates HTTP inputs and delegates to core functions.
 - `waites/client.py` builds requests and performs real HTTP calls.
 - `waites/fetch.py` writes raw evidence and manifests.
+- `waites/validate.py` checks raw evidence before downstream processing.
 - `snapshots/build.py` transforms raw readings into daily rows.
 - `clustering/model.py` runs feature scaling, PCA, KMeans, and metrics.
 - `maximo/db.py` owns ODBC connection behavior.

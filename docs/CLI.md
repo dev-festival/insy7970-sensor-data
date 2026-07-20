@@ -122,14 +122,39 @@ The live manifest records endpoint names, sanitized request params, status codes
 
 The Waites client uses Python's `truststore` package so TLS verification can use the operating system trust store. This preserves certificate verification while supporting corporate root CAs such as the Honda gateway certificate chain.
 
-Do not use this sprint for long date-range backfills. Live shape validation and API-source snapshot builds belong to sprint `0.2.3`.
-
 If the canary still fails with `CERTIFICATE_VERIFY_FAILED`, fix the local Windows trust store or provide an approved CA path in a later configuration sprint. Do not commit certificates or disable verification in source code.
+
+### Validate Raw Waites Evidence
+
+```powershell
+uv run sensor-data waites validate --source mock --date 2025-07-09
+uv run sensor-data waites validate --source api --date 2026-07-19
+```
+
+Reads an existing raw Waites run and writes:
+
+```text
+data/raw/waites/date=YYYY-MM-DD/validation.json
+```
+
+The command prints JSON with:
+
+```text
+status
+error_count
+warning_count
+endpoint_record_counts
+issues
+validation_path
+```
+
+Warnings are allowed to proceed. Hard validation errors exit nonzero and should be fixed before snapshot or trend processing.
 
 ### Build Sensor Snapshot
 
 ```powershell
 uv run sensor-data snapshot build --source mock --date 2025-07-09
+uv run sensor-data snapshot build --source api --date 2026-07-19
 ```
 
 Reads raw Waites evidence for the selected date and writes:
@@ -139,10 +164,13 @@ data/processed/snapshots/date=2025-07-09/sensor_snapshot.csv
 data/processed/snapshots/date=2025-07-09/metadata.json
 ```
 
+Snapshot builds validate the matching raw run first. The snapshot metadata records the validation status and report path.
+
 ### Build Trends
 
 ```powershell
 uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
+uv run sensor-data trend build --source api --start-date 2026-07-19 --end-date 2026-07-19
 ```
 
 Reads processed snapshots and writes:
@@ -152,6 +180,8 @@ data/processed/trends/start=2025-07-09_end=2025-07-11/sensor_trends.csv
 data/processed/trends/start=2025-07-09_end=2025-07-11/equipment_trends.csv
 data/processed/trends/start=2025-07-09_end=2025-07-11/metadata.json
 ```
+
+Trend builds only consume snapshots whose metadata source matches the requested `--source`. This prevents mock and API snapshots from being mixed silently.
 
 Example multi-day mock workflow:
 
