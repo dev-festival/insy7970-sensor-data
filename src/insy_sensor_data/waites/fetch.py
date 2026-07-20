@@ -9,7 +9,7 @@ import json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import StoragePaths, get_storage_paths
 from insy_sensor_data.waites.client import build_waites_requests
-from insy_sensor_data.waites.fixtures import load_waites_fixture
+from insy_sensor_data.waites.fixtures import describe_mock_trend_date, load_waites_fixture
 
 
 REFERENCE_FIELDS = {
@@ -52,10 +52,17 @@ def fetch_waites(
         "fetched_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "endpoints": [],
     }
+    mock_trend = describe_mock_trend_date(run_date)
+    if mock_trend is not None:
+        manifest["mock_trend"] = mock_trend
 
     raw_envelopes: dict[str, dict[str, Any]] = {}
     for request in build_waites_requests(run_date=run_date, facility_id=facility_id):
-        envelope = load_waites_fixture(request.endpoint, fixture_dir=fixture_dir)
+        envelope = load_waites_fixture(
+            request.endpoint,
+            fixture_dir=fixture_dir,
+            run_date=run_date,
+        )
         raw_envelopes[request.endpoint] = envelope
 
         output_path = run_dir / request.filename

@@ -50,3 +50,69 @@ def test_build_trends_requires_at_least_one_snapshot(tmp_path: Path) -> None:
             start_date=date(2025, 7, 9),
             end_date=date(2025, 7, 9),
         )
+
+
+def test_build_trends_with_multi_day_mock_data_shows_movement(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    start_date = date(2025, 7, 9)
+    end_date = date(2025, 7, 11)
+    for run_date in [start_date, date(2025, 7, 10), end_date]:
+        fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+        build_sensor_snapshot(settings=settings, run_date=run_date)
+
+    summary = build_trends(settings=settings, start_date=start_date, end_date=end_date)
+
+    assert summary["skipped_dates"] == []
+    trend_path = tmp_path / "data" / "processed" / "trends" / "start=2025-07-09_end=2025-07-11"
+    with (trend_path / "sensor_trends.csv").open(newline="", encoding="utf-8") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+
+    rising = [_metric(rows, raw_date, "201300", "rms_vel_mean_x") for raw_date in _trend_dates()]
+    stable = [_metric(rows, raw_date, "201301", "rms_vel_mean_x") for raw_date in _trend_dates()]
+    normalizing = [_metric(rows, raw_date, "201303", "impact_mean") for raw_date in _trend_dates()]
+    temp_spike = [_metric(rows, raw_date, "201307", "temp_sensor_mean") for raw_date in _trend_dates()]
+
+    assert rising[0] < rising[1] < rising[2]
+    assert stable[0] == pytest.approx(stable[1])
+    assert stable[1] == pytest.approx(stable[2])
+    assert normalizing[0] > normalizing[1] > normalizing[2]
+    assert temp_spike[1] > temp_spike[0]
+    assert temp_spike[1] > temp_spike[2]
+    assert _row(rows, "2025-07-10", "201305")["rms_vel_mean_x"] == ""
+
+
+def test_build_trends_reports_missing_snapshot_dates(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    for run_date in [date(2025, 7, 9), date(2025, 7, 11)]:
+        fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+        build_sensor_snapshot(settings=settings, run_date=run_date)
+
+    summary = build_trends(
+        settings=settings,
+        start_date=date(2025, 7, 9),
+        end_date=date(2025, 7, 11),
+    )
+
+    assert summary["skipped_dates"] == ["2025-07-10"]
+    assert summary["sensor_record_count"] == 18
+
+
+def _trend_dates() -> list[str]:
+    return ["2025-07-09", "2025-07-10", "2025-07-11"]
+
+
+def _row(rows: list[dict[str, str]], raw_date: str, installation_point_id: str) -> dict[str, str]:
+    return next(
+        row
+        for row in rows
+        if row["date"] == raw_date and row["installation_point_id"] == installation_point_id
+    )
+
+
+def _metric(
+    rows: list[dict[str, str]],
+    raw_date: str,
+    installation_point_id: str,
+    metric: str,
+) -> float:
+    return float(_row(rows, raw_date, installation_point_id)[metric])

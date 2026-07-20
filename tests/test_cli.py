@@ -120,3 +120,64 @@ def test_cli_snapshot_and_trend_builds_write_mock_artifacts(tmp_path: Path) -> N
     trend_payload = json.loads(trend_result.stdout)
     assert trend_payload["sensor_record_count"] == 9
     assert (data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-09" / "sensor_trends.csv").exists()
+
+
+def test_cli_builds_multi_day_mock_trend(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    for raw_date in ["2025-07-09", "2025-07-10", "2025-07-11"]:
+        fetch_result = runner.invoke(
+            app,
+            [
+                "waites",
+                "fetch",
+                "--source",
+                "mock",
+                "--date",
+                raw_date,
+                "--facility",
+                "679",
+                "--env-file",
+                str(env_file),
+            ],
+        )
+        assert fetch_result.exit_code == 0
+
+        snapshot_result = runner.invoke(
+            app,
+            [
+                "snapshot",
+                "build",
+                "--source",
+                "mock",
+                "--date",
+                raw_date,
+                "--env-file",
+                str(env_file),
+            ],
+        )
+        assert snapshot_result.exit_code == 0
+
+    trend_result = runner.invoke(
+        app,
+        [
+            "trend",
+            "build",
+            "--source",
+            "mock",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-11",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert trend_result.exit_code == 0
+    trend_payload = json.loads(trend_result.stdout)
+    assert trend_payload["sensor_record_count"] == 27
+    assert trend_payload["skipped_dates"] == []
+    assert (data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-11" / "sensor_trends.csv").exists()

@@ -81,6 +81,27 @@ def test_snapshot_and_trend_endpoints_read_processed_artifacts(tmp_path: Path) -
     assert trend_payload["metadata"]["equipment_record_count"] >= 1
 
 
+def test_trend_endpoint_reads_multi_day_mock_artifact(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    for run_date in [date(2025, 7, 9), date(2025, 7, 10), date(2025, 7, 11)]:
+        fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+        build_sensor_snapshot(settings=settings, run_date=run_date)
+    build_trends(settings=settings, start_date=date(2025, 7, 9), end_date=date(2025, 7, 11))
+
+    response = client.get("/api/trends?start_date=2025-07-09&end_date=2025-07-11")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"]["sensor_record_count"] == 27
+    assert payload["metadata"]["skipped_dates"] == []
+    assert {row["date"] for row in payload["sensor_rows"]} == {
+        "2025-07-09",
+        "2025-07-10",
+        "2025-07-11",
+    }
+
+
 def test_snapshot_endpoint_returns_404_for_missing_artifact(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))

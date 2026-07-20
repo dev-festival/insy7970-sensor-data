@@ -359,6 +359,30 @@ For sprint `0.1.0`, target about this size:
 
 This is enough to exercise joins and missing-data paths without turning test fixtures into a second dataset.
 
+## Multi-Day Mock Trend Behavior
+
+Sprint `0.2.1` keeps one compact base fixture set and applies a small date-aware overlay when mock Waites data is fetched for supported trend dates. The written raw artifacts still use the normal Waites envelope and live under the same `data/raw/waites/date=YYYY-MM-DD/` paths.
+
+Supported mock trend dates:
+
+| Date | Purpose |
+|---|---|
+| `2025-07-09` | Baseline |
+| `2025-07-10` | Movement day |
+| `2025-07-11` | Follow-up |
+
+Expected sensor behaviors:
+
+| Installation Point | Behavior |
+|---|---|
+| `201300` | RMS velocity, acceleration, peak-to-peak, and ImpactVue rise across all three dates |
+| `201301` | RMS velocity remains stable across all three dates |
+| `201303` | High vibration and temperature normalize downward after the baseline date |
+| `201307` | Temperature spikes on `2025-07-10` and returns near baseline on `2025-07-11` |
+| `201305` | Readings are absent on `2025-07-10` and return on `2025-07-11` |
+
+The overlay should stay small and inspectable. Do not turn mock mode into a large synthetic data generator; its job is to prove contracts and awkward cases.
+
 ## Contract Tests
 
 Sprint `0.1.0` should add pytest coverage that checks:

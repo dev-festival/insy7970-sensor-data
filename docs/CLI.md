@@ -54,7 +54,7 @@ Default URLs:
 - `http://127.0.0.1:8000/api/dates`
 - `http://127.0.0.1:8000/api/waites/raw-runs`
 - `http://127.0.0.1:8000/api/snapshots/2025-07-09`
-- `http://127.0.0.1:8000/api/trends?start_date=2025-07-09&end_date=2025-07-09`
+- `http://127.0.0.1:8000/api/trends?start_date=2025-07-09&end_date=2025-07-11`
 - `http://127.0.0.1:8000/docs`
 
 Useful options:
@@ -88,6 +88,24 @@ data/processed/waites/reference/metadata.json
 
 The command prints a JSON summary with record counts and output paths.
 
+Supported mock trend dates:
+
+```text
+2025-07-09
+2025-07-10
+2025-07-11
+```
+
+These dates are deliberately shaped for trend testing:
+
+```text
+201300 rising vibration
+201301 stable vibration
+201303 normalizing vibration and temperature
+201307 temperature spike on 2025-07-10
+201305 missing readings on 2025-07-10
+```
+
 ### Build Sensor Snapshot
 
 ```powershell
@@ -104,15 +122,27 @@ data/processed/snapshots/date=2025-07-09/metadata.json
 ### Build Trends
 
 ```powershell
-uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-09
+uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
 ```
 
 Reads processed snapshots and writes:
 
 ```text
-data/processed/trends/start=2025-07-09_end=2025-07-09/sensor_trends.csv
-data/processed/trends/start=2025-07-09_end=2025-07-09/equipment_trends.csv
-data/processed/trends/start=2025-07-09_end=2025-07-09/metadata.json
+data/processed/trends/start=2025-07-09_end=2025-07-11/sensor_trends.csv
+data/processed/trends/start=2025-07-09_end=2025-07-11/equipment_trends.csv
+data/processed/trends/start=2025-07-09_end=2025-07-11/metadata.json
+```
+
+Example multi-day mock workflow:
+
+```powershell
+uv run sensor-data waites fetch --source mock --date 2025-07-09 --facility 679
+uv run sensor-data snapshot build --source mock --date 2025-07-09
+uv run sensor-data waites fetch --source mock --date 2025-07-10 --facility 679
+uv run sensor-data snapshot build --source mock --date 2025-07-10
+uv run sensor-data waites fetch --source mock --date 2025-07-11 --facility 679
+uv run sensor-data snapshot build --source mock --date 2025-07-11
+uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
 ```
 
 ## Current Test Command

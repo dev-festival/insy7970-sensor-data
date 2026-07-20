@@ -6,6 +6,7 @@ import json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.waites.client import build_waites_requests, utc_day_bounds
 from insy_sensor_data.waites.fetch import fetch_waites
+from insy_sensor_data.waites.fixtures import MOCK_TREND_DATES
 
 
 def test_build_waites_requests_uses_expected_endpoint_params() -> None:
@@ -75,3 +76,24 @@ def test_fetch_waites_mock_writes_raw_manifest_and_reference_tables(tmp_path: Pa
     assert len(equipment_rows) == 6
     assert len(installation_rows) == 8
     assert (reference_dir / "metadata.json").exists()
+
+
+def test_fetch_waites_mock_writes_supported_trend_dates(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+
+    for raw_date in MOCK_TREND_DATES:
+        run_date = date.fromisoformat(raw_date)
+        summary = fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+
+        raw_dir = tmp_path / "data" / "raw" / "waites" / f"date={raw_date}"
+        rms_payload = json.loads((raw_dir / "readings-rms.json").read_text(encoding="utf-8"))
+        manifest = json.loads((raw_dir / "manifest.json").read_text(encoding="utf-8"))
+
+        assert summary["date"] == raw_date
+        assert raw_dir.exists()
+        assert manifest["mock_trend"]["date"] == raw_date
+        assert all(row["timestamp"].startswith(raw_date) for row in rms_payload["list"])
+
+    missing_day_raw = tmp_path / "data" / "raw" / "waites" / "date=2025-07-10"
+    missing_day_rms = json.loads((missing_day_raw / "readings-rms.json").read_text(encoding="utf-8"))
+    assert all(row["installation_point_id"] != 201305 for row in missing_day_rms["list"])
