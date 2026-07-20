@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.1.0` adds mock Waites ingestion on top of the project and service foundation:
+Sprint `0.2.0` adds processed snapshots, trend artifacts, and read API endpoints on top of mock Waites ingestion:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -18,8 +18,11 @@ Sprint `0.1.0` adds mock Waites ingestion on top of the project and service foun
 - raw evidence capture under `data/raw/waites/`
 - processed Waites reference tables under `data/processed/waites/reference/`
 - raw-run visibility through FastAPI
+- daily sensor snapshots under `data/processed/snapshots/`
+- trend-ready outputs under `data/processed/trends/`
+- snapshot and trend visibility through FastAPI
 
-Snapshots, trends, clustering, and Maximo integration begin in later sprints.
+Clustering and Maximo integration begin in later sprints.
 
 ## Requirements
 
@@ -42,6 +45,8 @@ uv run sensor-data --help
 uv run sensor-data health
 uv run sensor-data serve --source mock
 uv run sensor-data waites fetch --source mock --date 2025-07-09 --facility 679
+uv run sensor-data snapshot build --source mock --date 2025-07-09
+uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-09
 ```
 
 The health command prints JSON so it can be used by scripts.
@@ -58,7 +63,10 @@ Then open:
 
 - `http://127.0.0.1:8000/`
 - `http://127.0.0.1:8000/health`
+- `http://127.0.0.1:8000/api/dates`
 - `http://127.0.0.1:8000/api/waites/raw-runs`
+- `http://127.0.0.1:8000/api/snapshots/2025-07-09`
+- `http://127.0.0.1:8000/api/trends?start_date=2025-07-09&end_date=2025-07-09`
 - `http://127.0.0.1:8000/docs`
 
 ## Source API
@@ -81,6 +89,8 @@ Mock Waites ingestion writes:
 ```text
 data/raw/waites/date=YYYY-MM-DD/
 data/processed/waites/reference/
+data/processed/snapshots/date=YYYY-MM-DD/
+data/processed/trends/start=YYYY-MM-DD_end=YYYY-MM-DD/
 ```
 
 ## Tests

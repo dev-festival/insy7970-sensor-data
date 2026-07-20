@@ -1,6 +1,6 @@
 [project]
 name = "insy7970-sensor-data"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lightweight vibration monitoring service for Waites sensor data and Maximo maintenance history."
 readme = "README.md"
 requires-python = ">=3.13"

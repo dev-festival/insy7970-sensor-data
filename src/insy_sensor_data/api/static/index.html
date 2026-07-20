@@ -9,9 +9,23 @@
   <body>
     <main class="shell">
       <section class="status-panel" aria-labelledby="app-title">
-        <p class="eyebrow">Mock-ready service shell</p>
+        <p class="eyebrow">Mock data service</p>
         <h1 id="app-title">INSY Sensor Data</h1>
         <p id="health-status">Checking service health...</p>
+        <dl class="data-status">
+          <div>
+            <dt>Raw Dates</dt>
+            <dd id="raw-dates">...</dd>
+          </div>
+          <div>
+            <dt>Snapshots</dt>
+            <dd id="snapshot-status">...</dd>
+          </div>
+          <div>
+            <dt>Trends</dt>
+            <dd id="trend-status">...</dd>
+          </div>
+        </dl>
       </section>
     </main>
     <script src="/static/app.js"></script>

@@ -67,6 +67,12 @@ class StoragePaths:
     def waites_reference_dir(self) -> Path:
         return self.processed_waites_dir / "reference"
 
+    def snapshot_dir(self, run_date: str) -> Path:
+        return self.snapshots_dir / f"date={run_date}"
+
+    def trend_dir(self, start_date: str, end_date: str) -> Path:
+        return self.trends_dir / f"start={start_date}_end={end_date}"
+
 
 def get_storage_paths(data_dir: str | Path) -> StoragePaths:
     return StoragePaths(data_dir=Path(data_dir))

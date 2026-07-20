@@ -59,3 +59,64 @@ def test_cli_waites_fetch_writes_mock_artifacts(tmp_path: Path) -> None:
     assert payload["record_counts"]["equipment"] == 6
     assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "manifest.json").exists()
     assert (data_dir / "processed" / "waites" / "reference" / "equipment.csv").exists()
+
+
+def test_cli_snapshot_and_trend_builds_write_mock_artifacts(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    fetch_result = runner.invoke(
+        app,
+        [
+            "waites",
+            "fetch",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--facility",
+            "679",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert fetch_result.exit_code == 0
+
+    snapshot_result = runner.invoke(
+        app,
+        [
+            "snapshot",
+            "build",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert snapshot_result.exit_code == 0
+    snapshot_payload = json.loads(snapshot_result.stdout)
+    assert snapshot_payload["record_count"] == 9
+    assert (data_dir / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv").exists()
+
+    trend_result = runner.invoke(
+        app,
+        [
+            "trend",
+            "build",
+            "--source",
+            "mock",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert trend_result.exit_code == 0
+    trend_payload = json.loads(trend_result.stdout)
+    assert trend_payload["sensor_record_count"] == 9
+    assert (data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-09" / "sensor_trends.csv").exists()
