@@ -1,0 +1,37 @@
+{
+  "list": [
+    {
+      "action_item_id": 9001,
+      "action_item_type": "regular",
+      "action_item_status": "active",
+      "closed_at": null,
+      "installation_point": {
+        "installation_point_id": 201300
+      }
+    },
+    {
+      "action_item_id": 9002,
+      "action_item_type": "regular",
+      "action_item_status": "closed",
+      "closed_at": "2025-07-08T12:00:00Z",
+      "installation_point": {
+        "installation_point_id": 201301
+      }
+    },
+    {
+      "action_item_id": 9003,
+      "action_item_type": "regular",
+      "action_item_status": "active",
+      "closed_at": null
+    },
+    {
+      "action_item_id": 9004,
+      "action_item_type": "regular",
+      "action_item_status": "active",
+      "closed_at": null,
+      "installation_point": {
+        "installation_point_id": 201999
+      }
+    }
+  ]
+}

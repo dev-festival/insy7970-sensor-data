@@ -1,0 +1,108 @@
+{
+  "list": [
+    {
+      "installation_point_id": 201300,
+      "name": "Bottom Shaft - NDE",
+      "equipment_id": 55576,
+      "sensor_id": 11414411,
+      "facility_id": 679,
+      "last_seen": "2025-07-08 13:24:18",
+      "is_route_collector": 0,
+      "idle_threshold": null,
+      "customer_asset_id": "LEVF412TS",
+      "idle_threshold_type": null,
+      "alerts": []
+    },
+    {
+      "installation_point_id": 201301,
+      "name": "Motor - DE",
+      "equipment_id": 55576,
+      "sensor_id": 11410842,
+      "facility_id": 679,
+      "last_seen": "2025-07-08 13:24:07",
+      "is_route_collector": 0,
+      "idle_threshold": null,
+      "customer_asset_id": "LEVF412TS",
+      "idle_threshold_type": null,
+      "alerts": []
+    },
+    {
+      "installation_point_id": 201302,
+      "name": "Gearbox - Input DE",
+      "equipment_id": 55577,
+      "sensor_id": null,
+      "facility_id": 679,
+      "last_seen": null,
+      "is_route_collector": 0,
+      "idle_threshold": null,
+      "customer_asset_id": "LEVF454TS",
+      "idle_threshold_type": null,
+      "alerts": []
+    },
+    {
+      "installation_point_id": 201303,
+      "name": "Top Shaft - NDE",
+      "equipment_id": 55577,
+      "sensor_id": 11417260,
+      "facility_id": 679,
+      "last_seen": "2024-01-01 00:00:00",
+      "is_route_collector": 0,
+      "idle_threshold": null,
+      "customer_asset_id": "LEVF454TS",
+      "idle_threshold_type": null,
+      "alerts": []
+    },
+    {
+      "installation_point_id": 201304,
+      "name": "Pump - DE",
+      "equipment_id": 99999,
+      "sensor_id": 11410526,
+      "facility_id": 679,
+      "last_seen": "2025-07-08 13:24:12",
+      "is_route_collector": 0,
+      "idle_threshold": null,
+      "customer_asset_id": "ORPHAN123",
+      "idle_threshold_type": null,
+      "alerts": []
+    },
+    {
+      "installation_point_id": 201305,
+      "name": "Motor - NDE",
+      "equipment_id": 55578,
+      "sensor_id": 11414192,
+      "facility_id": 679,
+      "last_seen": "2025-07-08 13:24:14",
+      "is_route_collector": 0,
+      "idle_threshold": null,
+      "customer_asset_id": "",
+      "idle_threshold_type": null,
+      "alerts": []
+    },
+    {
+      "installation_point_id": 201306,
+      "name": "Hydraulic Unit - DE",
+      "equipment_id": 55581,
+      "sensor_id": 11417348,
+      "facility_id": 679,
+      "last_seen": "2025-07-08 13:24:03",
+      "is_route_collector": 0,
+      "idle_threshold": null,
+      "customer_asset_id": "A119451",
+      "idle_threshold_type": null,
+      "alerts": []
+    },
+    {
+      "installation_point_id": 201307,
+      "name": "Temperature Only",
+      "equipment_id": 55580,
+      "sensor_id": 11417247,
+      "facility_id": 679,
+      "last_seen": "2025-07-08 13:23:59",
+      "is_route_collector": 0,
+      "idle_threshold": null,
+      "customer_asset_id": "UNMATCHED-WAITES",
+      "idle_threshold_type": null,
+      "alerts": []
+    }
+  ]
+}

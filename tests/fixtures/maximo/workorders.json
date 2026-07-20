@@ -1,0 +1,40 @@
+{
+  "list": [
+    {
+      "wonum": "1234567",
+      "assetnum": "LEVF412TS",
+      "description": "Inspect vibration on pinch roll",
+      "status": "COMP",
+      "worktype": "CM",
+      "reportdate": "2025-07-01",
+      "actfinish": "2025-07-03"
+    },
+    {
+      "wonum": "1234568",
+      "assetnum": "A119450",
+      "description": "Hydraulic unit corrective maintenance",
+      "status": "COMP",
+      "worktype": "CM",
+      "reportdate": "2025-06-25",
+      "actfinish": "2025-06-26"
+    },
+    {
+      "wonum": "1234569",
+      "assetnum": "MAXIMO-ONLY",
+      "description": "Asset not represented in Waites mock data",
+      "status": "COMP",
+      "worktype": "PM",
+      "reportdate": "2025-06-20",
+      "actfinish": "2025-06-20"
+    },
+    {
+      "wonum": "1234570",
+      "assetnum": "LEVF454TS",
+      "description": "Open inspection for steel pinch roll",
+      "status": "APPR",
+      "worktype": "CM",
+      "reportdate": "2025-07-10",
+      "actfinish": null
+    }
+  ]
+}

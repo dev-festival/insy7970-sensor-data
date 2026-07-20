@@ -1,0 +1,67 @@
+{
+  "list": [
+    {
+      "timestamp": "2025-07-09T00:05:44Z",
+      "installation_point_id": 201300,
+      "value": 35.92,
+      "ambient": 33.25,
+      "facility_id": 679
+    },
+    {
+      "timestamp": "2025-07-09T06:05:44Z",
+      "installation_point_id": 201300,
+      "value": 36.10,
+      "ambient": 33.30,
+      "facility_id": 679
+    },
+    {
+      "timestamp": "2025-07-09T00:10:44Z",
+      "installation_point_id": 201301,
+      "value": 32.10,
+      "ambient": null,
+      "facility_id": 679
+    },
+    {
+      "timestamp": "2025-07-09T01:15:44Z",
+      "installation_point_id": 201302,
+      "value": 31.80,
+      "ambient": 32.00,
+      "facility_id": 679
+    },
+    {
+      "timestamp": "2025-07-09T02:20:44Z",
+      "installation_point_id": 201303,
+      "value": 88.00,
+      "ambient": 32.50,
+      "facility_id": 679
+    },
+    {
+      "timestamp": "2025-07-09T04:40:44Z",
+      "installation_point_id": 201305,
+      "value": 30.10,
+      "ambient": 32.10,
+      "facility_id": 679
+    },
+    {
+      "timestamp": "2025-07-09T05:50:44Z",
+      "installation_point_id": 201307,
+      "value": 29.90,
+      "ambient": 31.90,
+      "facility_id": 679
+    },
+    {
+      "timestamp": "2025-07-09T06:50:44Z",
+      "installation_point_id": 201307,
+      "value": 30.30,
+      "ambient": 32.00,
+      "facility_id": 679
+    },
+    {
+      "timestamp": "2025-07-09T07:55:44Z",
+      "installation_point_id": 201999,
+      "value": 34.70,
+      "ambient": 33.00,
+      "facility_id": 679
+    }
+  ]
+}

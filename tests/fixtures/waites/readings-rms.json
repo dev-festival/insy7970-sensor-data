@@ -1,0 +1,214 @@
+{
+  "list": [
+    {
+      "timestamp": "2025-07-09T00:05:00Z",
+      "installation_point_id": 201300,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 0.80,
+      "velocity": 1.70,
+      "pk-pk": 81.4,
+      "cf": 4.8
+    },
+    {
+      "timestamp": "2025-07-09T00:05:00Z",
+      "installation_point_id": 201300,
+      "axis": "y",
+      "facility_id": 679,
+      "acceleration": 0.24,
+      "velocity": 3.20,
+      "pk-pk": 14.7,
+      "cf": 4.1
+    },
+    {
+      "timestamp": "2025-07-09T00:05:00Z",
+      "installation_point_id": 201300,
+      "axis": "z",
+      "facility_id": 679,
+      "acceleration": 0.30,
+      "velocity": 1.80,
+      "pk-pk": 21.6,
+      "cf": 4.9
+    },
+    {
+      "timestamp": "2025-07-09T00:05:00Z",
+      "installation_point_id": 201300,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 0.82,
+      "velocity": 1.72,
+      "pk-pk": 82.0,
+      "cf": 4.7
+    },
+    {
+      "timestamp": "2025-07-09T06:05:00Z",
+      "installation_point_id": 201300,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 0.88,
+      "velocity": 1.74,
+      "pk-pk": 83.2,
+      "cf": 4.8
+    },
+    {
+      "timestamp": "2025-07-09T06:05:00Z",
+      "installation_point_id": 201300,
+      "axis": "y",
+      "facility_id": 679,
+      "acceleration": 0.26,
+      "velocity": 3.18,
+      "pk-pk": 15.0,
+      "cf": 4.2
+    },
+    {
+      "timestamp": "2025-07-09T06:05:00Z",
+      "installation_point_id": 201300,
+      "axis": "z",
+      "facility_id": 679,
+      "acceleration": 0.33,
+      "velocity": 1.86,
+      "pk-pk": 22.4,
+      "cf": 4.9
+    },
+    {
+      "timestamp": "2025-07-09T00:10:00Z",
+      "installation_point_id": 201301,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 0.42,
+      "velocity": 1.10,
+      "pk-pk": 33.4,
+      "cf": 3.7
+    },
+    {
+      "timestamp": "2025-07-09T00:10:00Z",
+      "installation_point_id": 201301,
+      "axis": "y",
+      "facility_id": 679,
+      "acceleration": 0.39,
+      "velocity": 1.22,
+      "pk-pk": 31.8,
+      "cf": 3.8
+    },
+    {
+      "timestamp": "2025-07-09T06:10:00Z",
+      "installation_point_id": 201301,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 0.43,
+      "velocity": 1.12,
+      "pk-pk": 34.0,
+      "cf": 3.7
+    },
+    {
+      "timestamp": "2025-07-09T06:10:00Z",
+      "installation_point_id": 201301,
+      "axis": "y",
+      "facility_id": 679,
+      "acceleration": 0.40,
+      "velocity": 1.24,
+      "pk-pk": 32.2,
+      "cf": 3.8
+    },
+    {
+      "timestamp": "2025-07-09T01:15:00Z",
+      "installation_point_id": 201302,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": null,
+      "velocity": 0.90,
+      "pk-pk": 25.1,
+      "cf": 3.2
+    },
+    {
+      "timestamp": "2025-07-09T01:15:00Z",
+      "installation_point_id": 201302,
+      "axis": "y",
+      "facility_id": 679,
+      "acceleration": 0.30,
+      "velocity": 0.88,
+      "pk-pk": 24.9,
+      "cf": 3.1
+    },
+    {
+      "timestamp": "2025-07-09T01:15:00Z",
+      "installation_point_id": 201302,
+      "axis": "z",
+      "facility_id": 679,
+      "acceleration": 0.32,
+      "velocity": 0.91,
+      "pk-pk": 25.3,
+      "cf": 3.3
+    },
+    {
+      "timestamp": "2025-07-09T02:20:00Z",
+      "installation_point_id": 201303,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 1.10,
+      "velocity": 2.20,
+      "pk-pk": 90.0,
+      "cf": 5.1
+    },
+    {
+      "timestamp": "2025-07-09T02:20:00Z",
+      "installation_point_id": 201303,
+      "axis": "z",
+      "facility_id": 679,
+      "acceleration": 1.05,
+      "velocity": 2.10,
+      "pk-pk": 88.5,
+      "cf": 5.0
+    },
+    {
+      "timestamp": "2025-07-09T03:30:00Z",
+      "installation_point_id": 201304,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 0.55,
+      "velocity": 1.50,
+      "pk-pk": 44.2,
+      "cf": 4.0
+    },
+    {
+      "timestamp": "2025-07-09T03:30:00Z",
+      "installation_point_id": 201304,
+      "axis": "y",
+      "facility_id": 679,
+      "acceleration": 0.57,
+      "velocity": 1.55,
+      "pk-pk": 45.0,
+      "cf": 4.1
+    },
+    {
+      "timestamp": "2025-07-09T03:30:00Z",
+      "installation_point_id": 201304,
+      "axis": "z",
+      "facility_id": 679,
+      "acceleration": 0.58,
+      "velocity": 1.60,
+      "pk-pk": 45.4,
+      "cf": 4.2
+    },
+    {
+      "timestamp": "2025-07-09T04:40:00Z",
+      "installation_point_id": 201305,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 0.18,
+      "velocity": 0.60,
+      "pk-pk": 10.0,
+      "cf": 2.8
+    },
+    {
+      "timestamp": "2025-07-09T05:45:00Z",
+      "installation_point_id": 201999,
+      "axis": "x",
+      "facility_id": 679,
+      "acceleration": 0.70,
+      "velocity": 1.80,
+      "pk-pk": 60.0,
+      "cf": 4.5
+    }
+  ]
+}

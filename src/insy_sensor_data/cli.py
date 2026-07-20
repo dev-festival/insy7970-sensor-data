@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated
+from datetime import date
 import json
 import os
 
@@ -9,12 +10,15 @@ import typer
 
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
+from insy_sensor_data.waites.fetch import fetch_waites
 
 
 app = typer.Typer(
     add_completion=False,
     help="Small command-line tools for the INSY sensor data service.",
 )
+waites_app = typer.Typer(help="Waites source data commands.")
+app.add_typer(waites_app, name="waites")
 
 
 EnvFileOption = Annotated[
@@ -63,3 +67,40 @@ def serve(
         port=port,
         reload=reload,
     )
+
+
+@waites_app.command("fetch")
+def waites_fetch(
+    fetch_date: Annotated[
+        str,
+        typer.Option("--date", help="Source date to fetch in YYYY-MM-DD format."),
+    ],
+    facility: Annotated[
+        int,
+        typer.Option("--facility", help="Waites facility ID."),
+    ] = 679,
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    env_file: EnvFileOption = None,
+) -> None:
+    """Fetch Waites source data and preserve raw evidence."""
+    source_mode = source.strip().lower()
+    if source_mode not in VALID_SOURCE_MODES:
+        allowed = ", ".join(sorted(VALID_SOURCE_MODES))
+        raise typer.BadParameter(f"source must be one of: {allowed}")
+    if source_mode != "mock":
+        raise typer.BadParameter("only --source mock is implemented in sprint 0.1.0")
+
+    settings = AppSettings.from_env(env_file=env_file)
+    run_date = _parse_run_date(fetch_date)
+    summary = fetch_waites(settings=settings, run_date=run_date, facility_id=facility, source=source_mode)
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
+def _parse_run_date(raw_date: str) -> date:
+    try:
+        return date.fromisoformat(raw_date)
+    except ValueError as exc:
+        raise typer.BadParameter("date must be in YYYY-MM-DD format") from exc

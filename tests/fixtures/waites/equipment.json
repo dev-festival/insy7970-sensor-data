@@ -1,0 +1,46 @@
+{
+  "list": [
+    {
+      "equipment_id": 55576,
+      "asset_tree_id": 12440,
+      "name": "BL - Aluminium Pinch Roll",
+      "facility_id": 679,
+      "customer_asset_id": "LEVF412TS"
+    },
+    {
+      "equipment_id": 55577,
+      "asset_tree_id": 12440,
+      "name": " BL - Steel Pinch Roll ",
+      "facility_id": 679,
+      "customer_asset_id": "LEVF454TS"
+    },
+    {
+      "equipment_id": 55578,
+      "asset_tree_id": 12440,
+      "name": "BL - Stacker Scissor Lift Supply Pump",
+      "facility_id": 679,
+      "customer_asset_id": "HYDF128PX"
+    },
+    {
+      "equipment_id": 55579,
+      "asset_tree_id": 12440,
+      "name": "BL - Main Press Drive",
+      "facility_id": 679,
+      "customer_asset_id": ""
+    },
+    {
+      "equipment_id": 55580,
+      "asset_tree_id": 7526,
+      "name": "2AF - IPDL #2",
+      "facility_id": 679,
+      "customer_asset_id": "UNMATCHED-WAITES"
+    },
+    {
+      "equipment_id": 55581,
+      "asset_tree_id": 3759,
+      "name": "DC-LPDCM 8 Hydraulic Unit",
+      "facility_id": 679,
+      "customer_asset_id": "A119450"
+    }
+  ]
+}

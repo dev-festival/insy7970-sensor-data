@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 @dataclass(frozen=True)
 class StoragePaths:
     data_dir: Path
@@ -58,6 +61,16 @@ class StoragePaths:
             path.mkdir(parents=True, exist_ok=True)
         return dirs
 
+    def raw_waites_run_dir(self, run_date: str) -> Path:
+        return self.raw_waites_dir / f"date={run_date}"
+
+    def waites_reference_dir(self) -> Path:
+        return self.processed_waites_dir / "reference"
+
 
 def get_storage_paths(data_dir: str | Path) -> StoragePaths:
     return StoragePaths(data_dir=Path(data_dir))
+
+
+def get_default_fixture_dir() -> Path:
+    return PROJECT_ROOT / "tests" / "fixtures"
