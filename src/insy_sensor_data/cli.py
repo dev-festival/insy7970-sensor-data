@@ -6,7 +6,6 @@ from datetime import date
 import json
 import os
 
-import click
 import typer
 
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
@@ -14,6 +13,7 @@ from insy_sensor_data.health import build_health_report
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
+from insy_sensor_data.waites.client import WaitesApiError
 
 
 app = typer.Typer(
@@ -38,7 +38,7 @@ EnvFileOption = Annotated[
 
 
 @app.command()
-def health(env_file: EnvFileOption = None) -> None:
+def health(env_file: EnvFileOption = Path(".env")) -> None:
     """Print service health and configuration status as JSON."""
     settings = AppSettings.from_env(env_file=env_file)
     typer.echo(json.dumps(build_health_report(settings), sort_keys=True))
@@ -90,19 +90,20 @@ def waites_fetch(
         str,
         typer.Option("--source", help="Source mode: mock or api."),
     ] = "mock",
-    env_file: EnvFileOption = None,
+    env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Fetch Waites source data and preserve raw evidence."""
     source_mode = source.strip().lower()
     if source_mode not in VALID_SOURCE_MODES:
         allowed = ", ".join(sorted(VALID_SOURCE_MODES))
         raise typer.BadParameter(f"source must be one of: {allowed}")
-    if source_mode != "mock":
-        raise typer.BadParameter("only --source mock is implemented in sprint 0.1.0")
 
     settings = AppSettings.from_env(env_file=env_file)
     run_date = _parse_run_date(fetch_date)
-    summary = fetch_waites(settings=settings, run_date=run_date, facility_id=facility, source=source_mode)
+    try:
+        summary = fetch_waites(settings=settings, run_date=run_date, facility_id=facility, source=source_mode)
+    except (FileNotFoundError, NotImplementedError, ValueError, WaitesApiError) as exc:
+        _fail(str(exc))
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
@@ -116,7 +117,7 @@ def snapshot_build(
         str,
         typer.Option("--source", help="Source mode: mock or api."),
     ] = "mock",
-    env_file: EnvFileOption = None,
+    env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Build a processed sensor snapshot from raw Waites evidence."""
     source_mode = _validate_mock_source(source)
@@ -125,7 +126,7 @@ def snapshot_build(
     try:
         summary = build_sensor_snapshot(settings=settings, run_date=run_date, source=source_mode)
     except (FileNotFoundError, NotImplementedError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
+        _fail(str(exc))
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
@@ -143,7 +144,7 @@ def trend_build(
         str,
         typer.Option("--source", help="Source mode: mock or api."),
     ] = "mock",
-    env_file: EnvFileOption = None,
+    env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Build lightweight trend-ready outputs from processed snapshots."""
     source_mode = _validate_mock_source(source)
@@ -156,7 +157,7 @@ def trend_build(
             source=source_mode,
         )
     except (FileNotFoundError, NotImplementedError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
+        _fail(str(exc))
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
@@ -175,3 +176,8 @@ def _parse_run_date(raw_date: str) -> date:
         return date.fromisoformat(raw_date)
     except ValueError as exc:
         raise typer.BadParameter("date must be in YYYY-MM-DD format") from exc
+
+
+def _fail(message: str) -> None:
+    typer.echo(f"Error: {message}", err=True)
+    raise typer.Exit(code=1)

@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.2.1` adds multi-day mock trend behavior on top of processed snapshots, trend artifacts, and read API endpoints:
+Sprint `0.2.2` adds an opt-in live Waites canary on top of multi-day mock trend behavior, processed snapshots, trend artifacts, and read API endpoints:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -22,6 +22,7 @@ Sprint `0.2.1` adds multi-day mock trend behavior on top of processed snapshots,
 - trend-ready outputs under `data/processed/trends/`
 - snapshot and trend visibility through FastAPI
 - controlled mock trend dates for `2025-07-09` through `2025-07-11`
+- opt-in live Waites raw evidence capture with secret-safe manifests
 
 Clustering and Maximo integration begin in later sprints.
 
@@ -51,6 +52,14 @@ uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 
 ```
 
 The health command prints JSON so it can be used by scripts.
+
+Live Waites canary fetches are explicit and should use small date ranges:
+
+```powershell
+uv run sensor-data waites fetch --source api --date 2026-07-19 --facility 679
+```
+
+The live canary reads `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`, saves raw responses under `data/raw/waites/`, and omits secrets from manifests. Keep `.env` and `data/` out of Git.
 
 For a visible mock trend, fetch and build snapshots for each supported mock trend date first:
 
@@ -106,6 +115,14 @@ data/processed/snapshots/date=YYYY-MM-DD/
 data/processed/trends/start=YYYY-MM-DD_end=YYYY-MM-DD/
 ```
 
+Live Waites canary ingestion writes the same raw paths:
+
+```text
+data/raw/waites/date=YYYY-MM-DD/
+```
+
+Live response shape validation and source-aware snapshot building are planned for sprint `0.2.3`.
+
 The mock trend dates are intentionally small and controlled:
 
 | Sensor | Mock Behavior |
@@ -120,9 +137,10 @@ The mock trend dates are intentionally small and controlled:
 
 ```powershell
 uv run pytest
+uv run pytest -m live
 ```
 
-Tests should run in mock mode without API keys, ODBC drivers, DB2 access, or plant network access.
+Tests should run in mock mode without API keys, ODBC drivers, DB2 access, or plant network access. Live tests are skipped unless `INSY_RUN_LIVE_TESTS=1` is set.
 
 ## Design Docs
 

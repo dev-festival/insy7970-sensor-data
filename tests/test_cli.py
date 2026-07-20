@@ -23,6 +23,17 @@ def test_cli_health_outputs_json(tmp_path: Path) -> None:
     assert payload["waites"]["token_configured"] is False
 
 
+def test_cli_health_reads_default_env_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path(".env").write_text("INSY_DATA_DIR=default-env-data\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["health"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data_dir"] == "default-env-data"
+
+
 def test_cli_serve_help_is_discoverable() -> None:
     result = runner.invoke(app, ["serve", "--help"])
 
@@ -59,6 +70,31 @@ def test_cli_waites_fetch_writes_mock_artifacts(tmp_path: Path) -> None:
     assert payload["record_counts"]["equipment"] == 6
     assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "manifest.json").exists()
     assert (data_dir / "processed" / "waites" / "reference" / "equipment.csv").exists()
+
+
+def test_cli_waites_fetch_api_requires_token(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "waites",
+            "fetch",
+            "--source",
+            "api",
+            "--date",
+            "2025-07-09",
+            "--facility",
+            "679",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "WAITES_ACCESS_TOKEN" in result.output or "WAITES_ACCESS_TOKEN" in str(result.exception)
 
 
 def test_cli_snapshot_and_trend_builds_write_mock_artifacts(tmp_path: Path) -> None:

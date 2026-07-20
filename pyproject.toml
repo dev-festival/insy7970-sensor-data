@@ -1,11 +1,12 @@
 [project]
 name = "insy7970-sensor-data"
-version = "0.2.1"
+version = "0.2.2"
 description = "Lightweight vibration monitoring service for Waites sensor data and Maximo maintenance history."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115,<1.0",
+    "truststore>=0.10.4",
     "typer>=0.16,<1.0",
     "uvicorn[standard]>=0.34,<1.0",
 ]
@@ -30,3 +31,6 @@ packages = ["src/insy_sensor_data"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "live: opt-in tests that call external services and require local credentials",
+]

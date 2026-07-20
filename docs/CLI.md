@@ -106,6 +106,26 @@ These dates are deliberately shaped for trend testing:
 201305 missing readings on 2025-07-10
 ```
 
+### Fetch Live Waites Canary Data
+
+```powershell
+uv run sensor-data waites fetch --source api --date 2026-07-19 --facility 679
+```
+
+Uses `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`. This command is intentionally a narrow raw-data canary:
+
+```text
+data/raw/waites/date=2026-07-19/
+```
+
+The live manifest records endpoint names, sanitized request params, status codes, elapsed times, record counts, output paths, and error details when an endpoint fails. It must not include the access token.
+
+The Waites client uses Python's `truststore` package so TLS verification can use the operating system trust store. This preserves certificate verification while supporting corporate root CAs such as the Honda gateway certificate chain.
+
+Do not use this sprint for long date-range backfills. Live shape validation and API-source snapshot builds belong to sprint `0.2.3`.
+
+If the canary still fails with `CERTIFICATE_VERIFY_FAILED`, fix the local Windows trust store or provide an approved CA path in a later configuration sprint. Do not commit certificates or disable verification in source code.
+
 ### Build Sensor Snapshot
 
 ```powershell
@@ -153,6 +173,16 @@ uv run pytest --cov=insy_sensor_data --cov-report=term-missing
 ```
 
 Runs the mock-mode test suite. Tests should not need Waites credentials, Maximo access, ODBC drivers, or plant network access.
+
+Optional live Waites canary tests:
+
+```powershell
+$env:INSY_RUN_LIVE_TESTS = "1"
+$env:INSY_LIVE_WAITES_DATE = "2026-07-19"
+uv run pytest -m live
+```
+
+Unset `INSY_RUN_LIVE_TESTS` to return to offline-only test behavior.
 
 ## Planned Commands
 

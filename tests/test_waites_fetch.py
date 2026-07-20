@@ -4,9 +4,10 @@ import csv
 import json
 
 from insy_sensor_data.config import AppSettings
-from insy_sensor_data.waites.client import build_waites_requests, utc_day_bounds
+from insy_sensor_data.waites.client import WaitesApiError, WaitesApiResponse, build_waites_requests, utc_day_bounds
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.fixtures import MOCK_TREND_DATES
+import pytest
 
 
 def test_build_waites_requests_uses_expected_endpoint_params() -> None:
@@ -97,3 +98,139 @@ def test_fetch_waites_mock_writes_supported_trend_dates(tmp_path: Path) -> None:
     missing_day_raw = tmp_path / "data" / "raw" / "waites" / "date=2025-07-10"
     missing_day_rms = json.loads((missing_day_raw / "readings-rms.json").read_text(encoding="utf-8"))
     assert all(row["installation_point_id"] != 201305 for row in missing_day_rms["list"])
+
+
+def test_fetch_waites_api_requires_configured_token(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data", waites_access_token="")
+
+    with pytest.raises(ValueError, match="WAITES_ACCESS_TOKEN"):
+        fetch_waites(
+            settings=settings,
+            run_date=date(2025, 7, 9),
+            facility_id=679,
+            source="api",
+        )
+
+
+def test_fetch_waites_api_writes_raw_manifest_and_reference_tables(tmp_path: Path) -> None:
+    settings = AppSettings(
+        data_dir=tmp_path / "data",
+        waites_access_token="token-123",
+    )
+    api_client = FakeWaitesClient(_api_payloads())
+
+    summary = fetch_waites(
+        settings=settings,
+        run_date=date(2025, 7, 9),
+        facility_id=679,
+        source="api",
+        api_client=api_client,
+    )
+
+    raw_dir = tmp_path / "data" / "raw" / "waites" / "date=2025-07-09"
+    manifest = json.loads((raw_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest_text = json.dumps(manifest)
+
+    assert summary["source"] == "api"
+    assert summary["endpoint_count"] == 6
+    assert summary["record_counts"]["equipment"] == 1
+    assert (raw_dir / "equipment.json").exists()
+    assert manifest["source"] == "api"
+    assert manifest["endpoints"][0]["status_code"] == 200
+    assert manifest["endpoints"][0]["elapsed_ms"] == 7
+    assert "token-123" not in manifest_text
+    assert "access-token" not in manifest_text
+    assert (tmp_path / "data" / "processed" / "waites" / "reference" / "equipment.csv").exists()
+
+
+def test_fetch_waites_api_writes_error_manifest_without_secret(tmp_path: Path) -> None:
+    settings = AppSettings(
+        data_dir=tmp_path / "data",
+        waites_access_token="token-123",
+    )
+    api_client = ErrorWaitesClient(
+        WaitesApiError(
+            "equipment",
+            "Waites API authorization failed for equipment with HTTP 401.",
+            status_code=401,
+            elapsed_ms=3,
+        )
+    )
+
+    with pytest.raises(WaitesApiError, match="authorization failed"):
+        fetch_waites(
+            settings=settings,
+            run_date=date(2025, 7, 9),
+            facility_id=679,
+            source="api",
+            api_client=api_client,
+        )
+
+    manifest = json.loads(
+        (tmp_path / "data" / "raw" / "waites" / "date=2025-07-09" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest_text = json.dumps(manifest)
+    assert manifest["endpoints"][0]["status_code"] == 401
+    assert "authorization failed" in manifest["endpoints"][0]["error"]
+    assert "token-123" not in manifest_text
+    assert "access-token" not in manifest_text
+
+
+class FakeWaitesClient:
+    def __init__(self, payloads: dict[str, dict[str, object]]) -> None:
+        self.payloads = payloads
+
+    def fetch(self, request: object) -> WaitesApiResponse:
+        return WaitesApiResponse(
+            endpoint=request.endpoint,
+            status_code=200,
+            elapsed_ms=7,
+            payload=self.payloads[request.endpoint],
+        )
+
+
+class ErrorWaitesClient:
+    def __init__(self, error: WaitesApiError) -> None:
+        self.error = error
+
+    def fetch(self, _request: object) -> WaitesApiResponse:
+        raise self.error
+
+
+def _api_payloads() -> dict[str, dict[str, object]]:
+    return {
+        "equipment": {
+            "list": [
+                {
+                    "equipment_id": 55576,
+                    "asset_tree_id": 12440,
+                    "name": "BL - Aluminium Pinch Roll",
+                    "facility_id": 679,
+                    "customer_asset_id": "LEVF412TS",
+                }
+            ]
+        },
+        "installation-points": {
+            "list": [
+                {
+                    "installation_point_id": 201300,
+                    "name": "Bottom Shaft - NDE",
+                    "equipment_id": 55576,
+                    "sensor_id": 11414411,
+                    "facility_id": 679,
+                    "last_seen": "2025-07-08 13:24:18",
+                    "is_route_collector": 0,
+                    "idle_threshold": None,
+                    "customer_asset_id": "LEVF412TS",
+                    "idle_threshold_type": None,
+                    "alerts": [],
+                }
+            ]
+        },
+        "readings-rms": {"list": []},
+        "readings-impact-vue": {"list": []},
+        "readings-temperature": {"list": []},
+        "action-items": {"list": []},
+    }

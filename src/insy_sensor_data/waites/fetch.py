@@ -8,7 +8,12 @@ import json
 
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import StoragePaths, get_storage_paths
-from insy_sensor_data.waites.client import build_waites_requests
+from insy_sensor_data.waites.client import (
+    WaitesApiClient,
+    WaitesApiError,
+    WaitesRequest,
+    build_waites_requests,
+)
 from insy_sensor_data.waites.fixtures import describe_mock_trend_date, load_waites_fixture
 
 
@@ -36,9 +41,10 @@ def fetch_waites(
     facility_id: int,
     source: str = "mock",
     fixture_dir: Path | None = None,
+    api_client: Any | None = None,
 ) -> dict[str, Any]:
-    if source != "mock":
-        raise NotImplementedError("Only mock Waites fetches are implemented in sprint 0.1.0.")
+    if source not in {"mock", "api"}:
+        raise ValueError("source must be one of: api, mock")
 
     storage = get_storage_paths(settings.data_dir)
     storage.ensure_base_dirs()
@@ -58,23 +64,28 @@ def fetch_waites(
 
     raw_envelopes: dict[str, dict[str, Any]] = {}
     for request in build_waites_requests(run_date=run_date, facility_id=facility_id):
-        envelope = load_waites_fixture(
-            request.endpoint,
-            fixture_dir=fixture_dir,
-            run_date=run_date,
-        )
+        if source == "mock":
+            envelope = load_waites_fixture(
+                request.endpoint,
+                fixture_dir=fixture_dir,
+                run_date=run_date,
+            )
+            endpoint_manifest = _mock_manifest_entry(request, run_dir / request.filename, envelope)
+        else:
+            client = api_client or _build_api_client(settings)
+            try:
+                envelope, endpoint_manifest = _fetch_live_endpoint(client, request, run_dir / request.filename)
+            except WaitesApiError as exc:
+                manifest["endpoints"].append(
+                    _api_error_manifest_entry(request, run_dir / request.filename, exc)
+                )
+                _write_json(run_dir / "manifest.json", manifest)
+                raise
         raw_envelopes[request.endpoint] = envelope
 
         output_path = run_dir / request.filename
         _write_json(output_path, envelope)
-        manifest["endpoints"].append(
-            {
-                "name": request.endpoint,
-                "path": _path_string(output_path),
-                "record_count": len(envelope["list"]),
-                "params": request.params,
-            }
-        )
+        manifest["endpoints"].append(endpoint_manifest)
 
     manifest_path = run_dir / "manifest.json"
     _write_json(manifest_path, manifest)
@@ -92,6 +103,87 @@ def fetch_waites(
         },
         "reference_outputs": reference_outputs,
     }
+
+
+def _build_api_client(settings: AppSettings) -> WaitesApiClient:
+    if not settings.waites_token_configured:
+        raise ValueError("WAITES_ACCESS_TOKEN must be configured for --source api.")
+    return WaitesApiClient(
+        base_url=settings.waites_base_url,
+        access_token=settings.waites_access_token,
+    )
+
+
+def _fetch_live_endpoint(
+    client: Any,
+    request: WaitesRequest,
+    output_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    response = client.fetch(request)
+    _validate_waites_envelope(
+        request.endpoint,
+        response.payload,
+        status_code=response.status_code,
+        elapsed_ms=response.elapsed_ms,
+    )
+
+    return (
+        response.payload,
+        {
+            "name": request.endpoint,
+            "path": _path_string(output_path),
+            "record_count": len(response.payload["list"]),
+            "params": request.params,
+            "status_code": response.status_code,
+            "elapsed_ms": response.elapsed_ms,
+        },
+    )
+
+
+def _mock_manifest_entry(
+    request: WaitesRequest,
+    output_path: Path,
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "name": request.endpoint,
+        "path": _path_string(output_path),
+        "record_count": len(envelope["list"]),
+        "params": request.params,
+    }
+
+
+def _api_error_manifest_entry(
+    request: WaitesRequest,
+    output_path: Path,
+    exc: WaitesApiError,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "name": request.endpoint,
+        "path": _path_string(output_path),
+        "params": request.params,
+        "error": str(exc),
+    }
+    if exc.status_code is not None:
+        entry["status_code"] = exc.status_code
+    if exc.elapsed_ms is not None:
+        entry["elapsed_ms"] = exc.elapsed_ms
+    return entry
+
+
+def _validate_waites_envelope(
+    endpoint: str,
+    payload: dict[str, Any],
+    status_code: int | None = None,
+    elapsed_ms: int | None = None,
+) -> None:
+    if not isinstance(payload.get("list"), list):
+        raise WaitesApiError(
+            endpoint,
+            f"Waites API returned unsupported response shape for {endpoint}: expected object with list.",
+            status_code=status_code,
+            elapsed_ms=elapsed_ms,
+        )
 
 
 def write_waites_reference_tables(
