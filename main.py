@@ -1,6 +1,5 @@
-def main():
-    print("Hello from insy7970-sensor-data!")
+from insy_sensor_data.cli import app
 
 
 if __name__ == "__main__":
-    main()
+    app()
