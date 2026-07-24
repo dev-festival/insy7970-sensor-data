@@ -16,6 +16,9 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.2.3](0.2.3-live-shape-validation.md) | Live shape validation | Live raw response validation and source-aware snapshot/trend processing |
 | [0.2.4](0.2.4-raw-evidence-lifecycle.md) | Raw evidence lifecycle | Compressed, verified, and explicitly pruned raw source evidence |
 | [0.2.5](0.2.5-sqlite-observation-store.md) | SQLite observation store | Validated native observations loaded into a compact queryable store |
+| [0.2.6](0.2.6-human-readable-workflows.md) | Human-readable workflows | Friendly workflow commands over the JSON leaf commands |
+| [0.2.7](0.2.7-evidence-report.md) | Evidence report | Report artifacts with samples, charts, and expected-versus-observed checks |
+| [0.2.8](0.2.8-clustering-feature-contract.md) | Clustering feature contract | Feature matrix preview and readiness checks before clustering |
 | [0.3.0](0.3.0-clustering.md) | Clustering | Clustered snapshots, metrics, PCA coordinates, and drift-ready artifacts |
 | [0.4.0](0.4.0-api-and-static-web.md) | API and web hardening | Dashboard polish, richer service responses, and browser workflow hardening |
 | [0.5.0](0.5.0-maximo-integration.md) | Maximo integration | Asset maintenance records aligned to Waites equipment by asset number |

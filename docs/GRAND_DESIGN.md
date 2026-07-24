@@ -284,8 +284,11 @@ Expected bridge work between `0.2.0` and `0.3.0`:
 - `0.2.3`: live raw shape validation and source-aware snapshot/trend processing for small, explicit date ranges.
 - `0.2.4`: raw evidence lifecycle with compression, checksums, verification, and explicit pruning.
 - `0.2.5`: SQLite observation store for validated native measurements and query-backed daily facts.
+- `0.2.6`: human-readable workflow wrappers over the JSON leaf commands.
+- `0.2.7`: evidence reports with samples, charts, and expected-versus-observed checks.
+- `0.2.8`: clustering feature matrix contract and readiness checks.
 
-The rule for this bridge is: mock data owns behavior, live data validates assumptions. Normal tests should remain offline, deterministic, and fixture-backed. Live tests or smoke checks should be opt-in and should never require secrets, plant network access, or large real datasets for the default development workflow.
+The rule for this bridge is: mock data owns behavior, live data validates assumptions, and human-facing evidence earns trust before more advanced modeling is added. Normal tests should remain offline, deterministic, and fixture-backed. Live tests or smoke checks should be opt-in and should never require secrets, plant network access, or large real datasets for the default development workflow.
 
 Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof and reprocessing source: preserve them first, checksum them, compress them, and prune them only through explicit CLI commands. The long-term working layer should be validated native observations in SQLite plus processed daily snapshots, trends, clusters, drift, and maintenance context. Do not over-aggregate native timestamps away; RMS, temperature, and ImpactVue may have different cadences and should remain timestamp-native before daily rollups are derived.
 
