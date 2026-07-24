@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.2.7` adds evidence reports on top of the human-readable workflows:
+Sprint `0.2.8` adds a clustering feature contract on top of the evidence report layer:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -36,6 +36,9 @@ Sprint `0.2.7` adds evidence reports on top of the human-readable workflows:
 - mock trend evidence reports under `reports/mock-trend/`
 - deterministic sample CSVs, SVG charts, and expected-versus-observed checks
 - no-Quarto fallback report generation with optional Quarto HTML rendering
+- dimension-specific clustering feature previews under `data/processed/features/`
+- `cluster features` command for X, Y, Z, and temperature feature matrices
+- feature readiness rows in evidence reports when previews are available
 
 Clustering and Maximo integration begin in later sprints.
 
@@ -71,6 +74,7 @@ uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 
 uv run sensor-data workflow mock-day --date 2025-07-09
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+uv run sensor-data cluster features --source mock --date 2025-07-09
 ```
 
 The leaf commands print JSON so they can be composed by scripts. The `workflow` commands print human-readable summaries by default and support `--json` when a combined structured result is useful.
@@ -95,6 +99,9 @@ For a visible mock trend, fetch and build snapshots for each supported mock tren
 
 ```powershell
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+uv run sensor-data cluster features --source mock --date 2025-07-09
+uv run sensor-data cluster features --source mock --date 2025-07-10
+uv run sensor-data cluster features --source mock --date 2025-07-11
 uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 ```
 

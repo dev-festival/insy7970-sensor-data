@@ -82,6 +82,7 @@ def build_mock_trend_report(
         }
     ]
     checks = _mock_behavior_checks(sensor_trend_rows, dates)
+    feature_readiness = _feature_readiness(settings, dates)
 
     sample_paths = _write_samples(
         settings=settings,
@@ -92,6 +93,7 @@ def build_mock_trend_report(
         snapshot_counts=snapshot_counts,
         trend_counts=trend_counts,
         sensor_trend_rows=sensor_trend_rows,
+        feature_readiness=feature_readiness,
     )
     chart_paths = _write_charts(charts_dir, sensor_trend_rows, dates)
 
@@ -104,6 +106,7 @@ def build_mock_trend_report(
         "sqlite_loads": sqlite_loads,
         "snapshot_counts": snapshot_counts,
         "trend_counts": trend_counts,
+        "feature_readiness": feature_readiness,
         "checks": checks,
         "sample_paths": sample_paths,
         "chart_paths": chart_paths,
@@ -260,6 +263,7 @@ def _write_samples(
     snapshot_counts: list[dict[str, Any]],
     trend_counts: list[dict[str, Any]],
     sensor_trend_rows: list[dict[str, str]],
+    feature_readiness: list[dict[str, Any]],
 ) -> dict[str, str]:
     paths = {
         "raw_counts": samples_dir / "raw_counts.csv",
@@ -272,6 +276,8 @@ def _write_samples(
         "sensor_snapshot_sample": samples_dir / "sensor_snapshot_sample.csv",
         "sensor_trends_sample": samples_dir / "sensor_trends_sample.csv",
     }
+    if feature_readiness:
+        paths["feature_readiness"] = samples_dir / "feature_readiness.csv"
     write_csv_rows(
         paths["raw_counts"],
         raw_counts,
@@ -370,7 +376,49 @@ def _write_samples(
             "rms_vel_mean_z",
         ],
     )
+    if feature_readiness:
+        write_csv_rows(
+            paths["feature_readiness"],
+            feature_readiness,
+            [
+                "date",
+                "source",
+                "dimension",
+                "status",
+                "row_count",
+                "feature_count",
+                "imputed_value_count",
+                "matrix_path",
+                "summary_path",
+            ],
+        )
     return {name: path.as_posix() for name, path in paths.items()}
+
+
+def _feature_readiness(settings: AppSettings, dates: list[date]) -> list[dict[str, Any]]:
+    storage = get_storage_paths(settings.data_dir)
+    rows: list[dict[str, Any]] = []
+    for run_date in dates:
+        metadata_path = storage.feature_dir(run_date.isoformat(), "mock") / "metadata.json"
+        if not metadata_path.exists():
+            continue
+        metadata = read_json(metadata_path)
+        dimensions = metadata.get("dimensions") or metadata.get("axes", {})
+        for dimension, dimension_summary in sorted(dimensions.items()):
+            rows.append(
+                {
+                    "date": run_date.isoformat(),
+                    "source": metadata.get("source"),
+                    "dimension": dimension,
+                    "status": dimension_summary.get("status"),
+                    "row_count": dimension_summary.get("row_count"),
+                    "feature_count": dimension_summary.get("feature_count"),
+                    "imputed_value_count": dimension_summary.get("imputed_value_count"),
+                    "matrix_path": dimension_summary.get("matrix_path"),
+                    "summary_path": dimension_summary.get("summary_path"),
+                }
+            )
+    return rows
 
 
 def _sqlite_samples(
@@ -753,6 +801,15 @@ def _render_markdown_report(context: dict[str, Any]) -> str:
         _markdown_table(context["snapshot_counts"], ["date", "input_mode", "record_count"]),
         "",
         _markdown_table(context["trend_counts"], ["start_date", "end_date", "sensor_record_count", "equipment_record_count", "input_mode"]),
+        "",
+        "## Feature Readiness",
+        "",
+        _markdown_table(
+            context["feature_readiness"],
+            ["date", "dimension", "status", "row_count", "feature_count", "imputed_value_count"],
+        )
+        if context["feature_readiness"]
+        else "No feature readiness artifacts were found for this range.",
         "",
         "## Expected Versus Observed Checks",
         "",

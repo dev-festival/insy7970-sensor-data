@@ -8,6 +8,7 @@ import os
 
 import typer
 
+from insy_sensor_data.clustering.features import VALID_FEATURE_DIMENSIONS, build_feature_preview
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
 from insy_sensor_data.observations import load_waites_observations
@@ -39,6 +40,7 @@ snapshot_app = typer.Typer(help="Processed sensor snapshot commands.")
 trend_app = typer.Typer(help="Processed trend commands.")
 workflow_app = typer.Typer(help="Human-readable workflow commands.")
 report_app = typer.Typer(help="Evidence report commands.")
+cluster_app = typer.Typer(help="Clustering preparation and model commands.")
 app.add_typer(waites_app, name="waites")
 app.add_typer(raw_app, name="raw")
 app.add_typer(store_app, name="store")
@@ -46,6 +48,7 @@ app.add_typer(snapshot_app, name="snapshot")
 app.add_typer(trend_app, name="trend")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(report_app, name="report")
+app.add_typer(cluster_app, name="cluster")
 
 
 EnvFileOption = Annotated[
@@ -467,6 +470,42 @@ def report_mock_trend(
     _emit_report_summary(summary, json_output)
 
 
+@cluster_app.command("features")
+def cluster_features(
+    feature_date: Annotated[
+        str,
+        typer.Option("--date", help="Snapshot date in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    dimension: Annotated[
+        str,
+        typer.Option("--dimension", "--axis", help="Feature dimension to build: x, y, z, temperature, or all."),
+    ] = "all",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the feature preview summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Build dimension-specific feature matrix previews without running clustering."""
+    source_mode = _validate_source(source)
+    feature_dimension = _validate_input_mode(dimension, VALID_FEATURE_DIMENSIONS, "dimension")
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = build_feature_preview(
+            settings=settings,
+            run_date=_parse_run_date(feature_date),
+            source=source_mode,
+            axis=feature_dimension,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_feature_summary(summary, json_output)
+
+
 def _validate_source(source: str) -> str:
     source_mode = source.strip().lower()
     if source_mode not in VALID_SOURCE_MODES:
@@ -527,3 +566,23 @@ def _emit_report_summary(summary: dict[str, object], json_output: bool) -> None:
     typer.echo(f"Charts: {len(summary.get('chart_paths', {}))}")
     if failed:
         raise typer.Exit(code=1)
+
+
+def _emit_feature_summary(summary: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(summary, sort_keys=True))
+        return
+
+    dimensions = summary.get("dimensions", {})
+    typer.echo(f"Feature preview: {summary['date']} ({summary['source']})")
+    typer.echo("")
+    typer.echo(f"Policy: {summary['feature_policy']}")
+    typer.echo(f"Output: {summary['feature_dir']}")
+    for dimension_name, dimension_summary in dimensions.items():
+        typer.echo("")
+        typer.echo(f"Dimension {dimension_name}: {dimension_summary['status']}")
+        typer.echo(f"           Rows: {dimension_summary['row_count']}")
+        typer.echo(f"       Features: {dimension_summary['feature_count']}")
+        typer.echo(f"         Matrix: {dimension_summary['matrix_path']}")
+        warning_count = len(dimension_summary.get("warnings", []))
+        typer.echo(f"      Warnings: {warning_count}")

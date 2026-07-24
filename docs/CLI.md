@@ -346,6 +346,43 @@ Use `--json` when a script wants the report summary:
 uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11 --json
 ```
 
+### Preview Clustering Features
+
+```powershell
+uv run sensor-data cluster features --source mock --date 2025-07-09
+```
+
+Builds feature matrix previews without running clustering. The default writes one matrix per clustering dimension:
+
+```text
+data/processed/features/date=2025-07-09_source=mock/
+  feature_matrix_x.csv
+  feature_summary_x.csv
+  feature_matrix_y.csv
+  feature_summary_y.csv
+  feature_matrix_z.csv
+  feature_summary_z.csv
+  feature_matrix_temperature.csv
+  feature_summary_temperature.csv
+  metadata.json
+```
+
+The first feature contract is deliberately dimension-specific. X, Y, and Z vibration readings are kept separate so clustering compares like with like. Temperature is also clustered as its own `temperature` dimension because it is operationally important but not axis-specific. Current ImpactVue snapshot columns are excluded from the default feature matrices until their clustering role is explicit.
+
+Build a single dimension when you want to inspect one matrix:
+
+```powershell
+uv run sensor-data cluster features --source mock --date 2025-07-09 --dimension temperature
+```
+
+`--axis x` remains accepted as a compatibility alias for vibration dimensions.
+
+Use `--json` for the feature readiness summary:
+
+```powershell
+uv run sensor-data cluster features --source mock --date 2025-07-09 --json
+```
+
 ## Raw Retention Guidance
 
 Keep live raw JSON long enough to validate, troubleshoot, and reprocess the daily facts. Compress validated raw runs early, especially live API pulls. Treat `data/processed/observations.sqlite`, snapshots, trends, clusters, drift, and Maximo joins as the longer-lived working set.
@@ -361,6 +398,9 @@ Example multi-day mock workflow:
 
 ```powershell
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+uv run sensor-data cluster features --source mock --date 2025-07-09
+uv run sensor-data cluster features --source mock --date 2025-07-10
+uv run sensor-data cluster features --source mock --date 2025-07-11
 ```
 
 Equivalent lower-level JSON command sequence:
@@ -402,7 +442,7 @@ Unset `INSY_RUN_LIVE_TESTS` to return to offline-only test behavior.
 These are not implemented yet, but they are the intended shape from the sprint plan.
 
 ```powershell
-uv run sensor-data cluster run --date YYYY-MM-DD --k 4 --source mock
+uv run sensor-data cluster run --date YYYY-MM-DD --dimension x --k 4 --source mock
 uv run sensor-data drift compare --from YYYY-MM-DD --to YYYY-MM-DD --source mock
 uv run sensor-data maximo asset-history --assetnum A119450 --source mock
 ```

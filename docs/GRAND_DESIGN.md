@@ -64,7 +64,8 @@ uv run sensor-data raw prune --source waites --older-than-days 30
 uv run sensor-data snapshot build --date 2026-07-15 --source mock
 uv run sensor-data trend build --start-date 2026-07-01 --end-date 2026-07-15 --source mock
 
-uv run sensor-data cluster run --date 2026-07-15 --k 4 --source mock
+uv run sensor-data cluster features --date 2026-07-15 --dimension x --source mock
+uv run sensor-data cluster run --date 2026-07-15 --dimension x --k 4 --source mock
 uv run sensor-data drift compare --from 2026-07-14 --to 2026-07-15 --source mock
 
 uv run sensor-data maximo asset-history --assetnum A119450 --source mock
@@ -139,6 +140,17 @@ data/
       start=YYYY-MM-DD_end=YYYY-MM-DD/
         sensor_trends.csv
         equipment_trends.csv
+        metadata.json
+    features/
+      date=YYYY-MM-DD_source=VALUE/
+        feature_matrix_x.csv
+        feature_summary_x.csv
+        feature_matrix_y.csv
+        feature_summary_y.csv
+        feature_matrix_z.csv
+        feature_summary_z.csv
+        feature_matrix_temperature.csv
+        feature_summary_temperature.csv
         metadata.json
     clusters/
       date=YYYY-MM-DD_k=N/
@@ -329,6 +341,7 @@ The project should remain easy to reason about from the shell:
 fetch raw evidence
 build processed snapshots
 build trends
+build dimension-specific feature matrices
 run clusters
 compare drift
 join maintenance history
