@@ -332,6 +332,119 @@ def test_cli_store_load_waites_and_sqlite_snapshot(tmp_path: Path) -> None:
     assert json.loads(snapshot_result.stdout)["input_mode"] == "sqlite"
 
 
+def test_cli_workflow_mock_day_prints_human_summary(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-day",
+            "--date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Mock day workflow: 2025-07-09" in result.stdout
+    assert "Fetched Waites raw evidence" in result.stdout
+    assert "Validated raw evidence" in result.stdout
+    assert "Warnings:" in result.stdout
+    assert "Loaded SQLite observations" in result.stdout
+    assert "Built sensor snapshot" in result.stdout
+    assert "Next:" in result.stdout
+    assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "manifest.json").exists()
+    assert (data_dir / "processed" / "observations.sqlite").exists()
+    assert (data_dir / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv").exists()
+
+
+def test_cli_workflow_mock_day_json_outputs_combined_summary(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-day",
+            "--date",
+            "2025-07-09",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["workflow"] == "mock-day"
+    assert payload["fetch"]["endpoint_count"] == 6
+    assert payload["load"]["row_counts"]["rms"] == 21
+    assert payload["snapshot"]["record_count"] == 9
+    assert [step["title"] for step in payload["steps"]] == [
+        "Fetched Waites raw evidence",
+        "Validated raw evidence",
+        "Loaded SQLite observations",
+        "Built sensor snapshot",
+    ]
+
+
+def test_cli_workflow_mock_trend_writes_sqlite_backed_outputs(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-trend",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-11",
+            "--input",
+            "sqlite",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Mock trend workflow: 2025-07-09 to 2025-07-11" in result.stdout
+    assert "Prepared mock dates" in result.stdout
+    assert "Built trend outputs" in result.stdout
+    trend_dir = data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-11"
+    assert (trend_dir / "sensor_trends.csv").exists()
+    assert (trend_dir / "equipment_trends.csv").exists()
+
+
+def test_cli_workflow_api_day_requires_token(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "api-day",
+            "--date",
+            "2026-07-19",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "WAITES_ACCESS_TOKEN" in result.output or "WAITES_ACCESS_TOKEN" in str(result.exception)
+
+
 def test_cli_builds_multi_day_mock_trend(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"

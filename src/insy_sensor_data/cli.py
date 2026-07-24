@@ -19,6 +19,12 @@ from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.client import WaitesApiError
 from insy_sensor_data.waites.validate import validate_waites_raw, validation_summary
+from insy_sensor_data.workflows import (
+    format_workflow_summary,
+    run_api_day_workflow,
+    run_mock_day_workflow,
+    run_mock_trend_workflow,
+)
 
 
 app = typer.Typer(
@@ -30,11 +36,13 @@ raw_app = typer.Typer(help="Raw evidence lifecycle commands.")
 store_app = typer.Typer(help="SQLite observation store commands.")
 snapshot_app = typer.Typer(help="Processed sensor snapshot commands.")
 trend_app = typer.Typer(help="Processed trend commands.")
+workflow_app = typer.Typer(help="Human-readable workflow commands.")
 app.add_typer(waites_app, name="waites")
 app.add_typer(raw_app, name="raw")
 app.add_typer(store_app, name="store")
 app.add_typer(snapshot_app, name="snapshot")
 app.add_typer(trend_app, name="trend")
+app.add_typer(workflow_app, name="workflow")
 
 
 EnvFileOption = Annotated[
@@ -324,6 +332,104 @@ def trend_build(
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
+@workflow_app.command("mock-day")
+def workflow_mock_day(
+    workflow_date: Annotated[
+        str,
+        typer.Option("--date", help="Mock workflow date in YYYY-MM-DD format."),
+    ],
+    facility: Annotated[
+        int,
+        typer.Option("--facility", help="Waites facility ID."),
+    ] = 679,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the combined workflow summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Run the friendly one-day mock workflow."""
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = run_mock_day_workflow(
+            settings=settings,
+            run_date=_parse_run_date(workflow_date),
+            facility_id=facility,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_workflow_summary(summary, json_output)
+
+
+@workflow_app.command("mock-trend")
+def workflow_mock_trend(
+    start_date: Annotated[
+        str,
+        typer.Option("--start-date", help="Trend start date in YYYY-MM-DD format."),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Option("--end-date", help="Trend end date in YYYY-MM-DD format."),
+    ],
+    facility: Annotated[
+        int,
+        typer.Option("--facility", help="Waites facility ID."),
+    ] = 679,
+    input_mode: Annotated[
+        str,
+        typer.Option("--input", help="Trend input mode: snapshots or sqlite."),
+    ] = "snapshots",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the combined workflow summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Run the friendly multi-day mock trend workflow."""
+    trend_input = _validate_input_mode(input_mode, VALID_TREND_INPUT_MODES, "trend input")
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = run_mock_trend_workflow(
+            settings=settings,
+            start_date=_parse_run_date(start_date),
+            end_date=_parse_run_date(end_date),
+            facility_id=facility,
+            trend_input=trend_input,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_workflow_summary(summary, json_output)
+
+
+@workflow_app.command("api-day")
+def workflow_api_day(
+    workflow_date: Annotated[
+        str,
+        typer.Option("--date", help="API workflow date in YYYY-MM-DD format."),
+    ],
+    facility: Annotated[
+        int,
+        typer.Option("--facility", help="Waites facility ID."),
+    ] = 679,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the combined workflow summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Run the friendly one-day live Waites canary workflow."""
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = run_api_day_workflow(
+            settings=settings,
+            run_date=_parse_run_date(workflow_date),
+            facility_id=facility,
+        )
+    except (FileNotFoundError, ValueError, WaitesApiError) as exc:
+        _fail(str(exc))
+    _emit_workflow_summary(summary, json_output)
+
+
 def _validate_source(source: str) -> str:
     source_mode = source.strip().lower()
     if source_mode not in VALID_SOURCE_MODES:
@@ -357,3 +463,10 @@ def _parse_run_date(raw_date: str) -> date:
 def _fail(message: str) -> None:
     typer.echo(f"Error: {message}", err=True)
     raise typer.Exit(code=1)
+
+
+def _emit_workflow_summary(summary: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(summary, sort_keys=True))
+    else:
+        typer.echo(format_workflow_summary(summary))

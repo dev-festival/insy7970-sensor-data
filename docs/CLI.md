@@ -275,6 +275,38 @@ uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 
 
 Missing SQLite loads in the range are reported as skipped dates.
 
+### Run Human-Readable Workflows
+
+```powershell
+uv run sensor-data workflow mock-day --date 2025-07-09
+uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+uv run sensor-data workflow api-day --date 2026-07-19 --facility 679
+```
+
+Workflow commands run the normal multi-step paths and print a compact, human-readable summary. They are the comfortable operator surface. The lower-level commands above remain the composable JSON surface.
+
+`mock-day` fetches raw mock Waites evidence, validates it, loads SQLite observations, and builds a sensor snapshot.
+
+`mock-trend` runs the mock day flow across the requested date range and builds trend outputs. It reads processed snapshots by default:
+
+```powershell
+uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11 --input snapshots
+```
+
+It can also build trends directly from SQLite observation loads:
+
+```powershell
+uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11 --input sqlite
+```
+
+`api-day` is the friendly live canary wrapper. It fetches live Waites data, validates the raw shape, verifies checksums, loads SQLite observations, and builds an API-source snapshot. It requires `WAITES_ACCESS_TOKEN`.
+
+Each workflow supports `--json` when a script wants the combined structured result:
+
+```powershell
+uv run sensor-data workflow mock-day --date 2025-07-09 --json
+```
+
 ## Raw Retention Guidance
 
 Keep live raw JSON long enough to validate, troubleshoot, and reprocess the daily facts. Compress validated raw runs early, especially live API pulls. Treat `data/processed/observations.sqlite`, snapshots, trends, clusters, drift, and Maximo joins as the longer-lived working set.
@@ -287,6 +319,12 @@ Deletion should stay deliberate:
 - rerun with `--delete --confirm-delete` only when the processed outputs or SQLite observations are sufficient.
 
 Example multi-day mock workflow:
+
+```powershell
+uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+```
+
+Equivalent lower-level JSON command sequence:
 
 ```powershell
 uv run sensor-data waites fetch --source mock --date 2025-07-09 --facility 679

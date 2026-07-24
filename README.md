@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.2.5` adds a SQLite observation store on top of the disciplined raw evidence lifecycle:
+Sprint `0.2.6` adds human-readable workflows on top of the composable JSON leaf commands:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -31,12 +31,14 @@ Sprint `0.2.5` adds a SQLite observation store on top of the disciplined raw evi
 - idempotent `store load-waites` command for validated Waites raw runs
 - daily metric rollups for native RMS, temperature, and ImpactVue observations
 - SQLite-backed snapshot and trend builds when explicitly requested
+- human-readable `workflow mock-day`, `workflow mock-trend`, and `workflow api-day`
+- `--json` workflow output for scripts that want combined structured summaries
 
 Clustering and Maximo integration begin in later sprints.
 
 ## Requirements
 
-- Python 3.13
+- Python 3.13 or newer
 - uv
 
 ## Setup
@@ -63,9 +65,11 @@ uv run sensor-data snapshot build --source mock --date 2025-07-09
 uv run sensor-data snapshot build --source mock --date 2025-07-09 --input sqlite
 uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
 uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11 --input sqlite
+uv run sensor-data workflow mock-day --date 2025-07-09
+uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 ```
 
-The health command prints JSON so it can be used by scripts.
+The leaf commands print JSON so they can be composed by scripts. The `workflow` commands print human-readable summaries by default and support `--json` when a combined structured result is useful.
 
 Live Waites canary fetches are explicit and should use small date ranges:
 
@@ -78,11 +82,18 @@ uv run sensor-data store load-waites --source api --date 2026-07-19
 uv run sensor-data snapshot build --source api --date 2026-07-19
 uv run sensor-data snapshot build --source api --date 2026-07-19 --input sqlite
 uv run sensor-data trend build --source api --start-date 2026-07-19 --end-date 2026-07-19
+uv run sensor-data workflow api-day --date 2026-07-19 --facility 679
 ```
 
 The live workflow reads `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`, saves raw responses under `data/raw/waites/`, writes validation reports beside the raw run, records checksums in manifests, and omits secrets from manifests. Keep `.env` and `data/` out of Git.
 
 For a visible mock trend, fetch and build snapshots for each supported mock trend date first:
+
+```powershell
+uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+```
+
+Or run the lower-level JSON commands yourself:
 
 ```powershell
 uv run sensor-data waites fetch --source mock --date 2025-07-09 --facility 679

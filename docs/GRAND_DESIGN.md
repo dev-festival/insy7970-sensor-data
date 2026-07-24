@@ -292,6 +292,13 @@ The rule for this bridge is: mock data owns behavior, live data validates assump
 
 Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof and reprocessing source: preserve them first, checksum them, compress them, and prune them only through explicit CLI commands. The long-term working layer should be validated native observations in SQLite plus processed daily snapshots, trends, clusters, drift, and maintenance context. Do not over-aggregate native timestamps away; RMS, temperature, and ImpactVue may have different cadences and should remain timestamp-native before daily rollups are derived.
 
+Expected post-clustering hardening before `0.4.0`:
+
+- `0.3.1`: pipeline memory and windowing for date-chunked operating ranges.
+- `0.3.2`: artifact packing and retention for raw and processed outputs after clustering artifacts exist.
+
+The rule for this phase is: pull narrow, persist immediately, process from SQLite or compact per-date artifacts, and pack only after the working artifacts needed for clustering, drift, and reports are present. Range commands should never require loading a full operating window of raw endpoint JSON into memory.
+
 ## Definition of Done
 
 A change is done when:

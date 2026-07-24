@@ -20,6 +20,8 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.2.7](0.2.7-evidence-report.md) | Evidence report | Report artifacts with samples, charts, and expected-versus-observed checks |
 | [0.2.8](0.2.8-clustering-feature-contract.md) | Clustering feature contract | Feature matrix preview and readiness checks before clustering |
 | [0.3.0](0.3.0-clustering.md) | Clustering | Clustered snapshots, metrics, PCA coordinates, and drift-ready artifacts |
+| [0.3.1](0.3.1-pipeline-memory-and-windowing.md) | Pipeline memory and windowing | Date-chunked range processing with explicit memory-conscious workflow states |
+| [0.3.2](0.3.2-artifact-packing-and-retention.md) | Artifact packing and retention | Pack and verify raw and processed artifacts without breaking loaders |
 | [0.4.0](0.4.0-api-and-static-web.md) | API and web hardening | Dashboard polish, richer service responses, and browser workflow hardening |
 | [0.5.0](0.5.0-maximo-integration.md) | Maximo integration | Asset maintenance records aligned to Waites equipment by asset number |
 
