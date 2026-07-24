@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from insy_sensor_data.artifacts import read_json, write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.observations import load_waites_snapshot_inputs
 from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.waites.validate import ensure_waites_raw_valid
 
@@ -47,27 +48,108 @@ TEMP_FIELDS = [f"temp_sensor_{stat}" for stat in STATS] + [
     f"temp_ambient_{stat}" for stat in STATS
 ]
 SNAPSHOT_FIELDS = SNAPSHOT_METADATA_FIELDS + IMPACT_FIELDS + RMS_FIELDS + TEMP_FIELDS
+VALID_SNAPSHOT_INPUT_MODES = {"raw", "sqlite"}
 
 
 def build_sensor_snapshot(
     settings: AppSettings,
     run_date: date,
     source: str = "mock",
+    input_mode: str = "raw",
 ) -> dict[str, Any]:
     if source not in {"mock", "api"}:
         raise ValueError("source must be one of: api, mock")
+    if input_mode not in VALID_SNAPSHOT_INPUT_MODES:
+        allowed = ", ".join(sorted(VALID_SNAPSHOT_INPUT_MODES))
+        raise ValueError(f"input_mode must be one of: {allowed}")
 
     storage = get_storage_paths(settings.data_dir)
     raw_dir = storage.raw_waites_run_dir(run_date.isoformat())
     output_dir = storage.snapshot_dir(run_date.isoformat())
-    validation_report = ensure_waites_raw_valid(settings=settings, run_date=run_date, source=source)
+    inputs = _load_snapshot_inputs(settings, run_date, source, input_mode)
+    rows = build_sensor_snapshot_rows(
+        equipment=inputs["equipment"],
+        installation_points=inputs["installation_points"],
+        rms=inputs["rms"],
+        impact=inputs["impact"],
+        temperature=inputs["temperature"],
+    )
 
-    equipment = read_json(raw_dir / "equipment.json")["list"]
-    installation_points = read_json(raw_dir / "installation-points.json")["list"]
-    rms = read_json(raw_dir / "readings-rms.json")["list"]
-    impact = read_json(raw_dir / "readings-impact-vue.json")["list"]
-    temperature = read_json(raw_dir / "readings-temperature.json")["list"]
+    snapshot_path = output_dir / "sensor_snapshot.csv"
+    metadata_path = output_dir / "metadata.json"
+    write_csv_rows(snapshot_path, rows, SNAPSHOT_FIELDS)
+    metadata = {
+        "source": source,
+        "input_mode": input_mode,
+        "date": run_date.isoformat(),
+        "built_at": _utc_now(),
+        "input_dir": raw_dir.as_posix() if input_mode == "raw" else None,
+        "store_load": inputs.get("load"),
+        "outputs": {
+            "sensor_snapshot": snapshot_path.as_posix(),
+            "metadata": metadata_path.as_posix(),
+        },
+        "record_count": len(rows),
+        "validation": inputs["validation"],
+        "raw_record_counts": {
+            "equipment": len(inputs["equipment"]),
+            "installation-points": len(inputs["installation_points"]),
+            "readings-rms": len(inputs["rms"]),
+            "readings-impact-vue": len(inputs["impact"]),
+            "readings-temperature": len(inputs["temperature"]),
+        },
+        "unit_conversions": {
+            "impact_vue_acceleration": "g to m/s^2 using factor 9.8",
+            "rms.acceleration": "g to m/s^2 using factor 9.8",
+            "rms.velocity": "mm/s to in/s using divisor 25.4",
+            "temperature.value": "C to F",
+            "temperature.ambient": "C to F",
+        },
+    }
+    write_json(metadata_path, metadata)
 
+    return {
+        "source": source,
+        "input_mode": input_mode,
+        "date": run_date.isoformat(),
+        "snapshot_path": snapshot_path.as_posix(),
+        "metadata_path": metadata_path.as_posix(),
+        "record_count": len(rows),
+        "validation_status": inputs["validation"]["status"],
+        "validation_warning_count": inputs["validation"]["warning_count"],
+    }
+
+
+def list_snapshot_dates(settings: AppSettings) -> list[str]:
+    storage = get_storage_paths(settings.data_dir)
+    if not storage.snapshots_dir.exists():
+        return []
+    return sorted(
+        path.name.removeprefix("date=")
+        for path in storage.snapshots_dir.glob("date=*")
+        if (path / "sensor_snapshot.csv").exists()
+    )
+
+
+def load_snapshot(settings: AppSettings, run_date: date) -> dict[str, Any]:
+    from insy_sensor_data.artifacts import read_csv_rows
+
+    storage = get_storage_paths(settings.data_dir)
+    snapshot_dir = storage.snapshot_dir(run_date.isoformat())
+    return {
+        "date": run_date.isoformat(),
+        "metadata": read_json(snapshot_dir / "metadata.json"),
+        "rows": read_csv_rows(snapshot_dir / "sensor_snapshot.csv"),
+    }
+
+
+def build_sensor_snapshot_rows(
+    equipment: list[dict[str, Any]],
+    installation_points: list[dict[str, Any]],
+    rms: list[dict[str, Any]],
+    impact: list[dict[str, Any]],
+    temperature: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     equipment_by_id = {str(row["equipment_id"]): row for row in equipment}
     points_by_id = {str(row["installation_point_id"]): row for row in installation_points}
     installation_ids = _all_installation_ids(installation_points, rms, impact, temperature)
@@ -102,74 +184,41 @@ def build_sensor_snapshot(
         row.update(sensor_temp_stats.get(installation_id, {}))
         row.update(ambient_temp_stats.get(installation_id, {}))
         rows.append(row)
+    return rows
 
-    snapshot_path = output_dir / "sensor_snapshot.csv"
-    metadata_path = output_dir / "metadata.json"
-    write_csv_rows(snapshot_path, rows, SNAPSHOT_FIELDS)
-    metadata = {
-        "source": source,
-        "date": run_date.isoformat(),
-        "built_at": _utc_now(),
-        "input_dir": raw_dir.as_posix(),
-        "outputs": {
-            "sensor_snapshot": snapshot_path.as_posix(),
-            "metadata": metadata_path.as_posix(),
-        },
-        "record_count": len(rows),
+
+def _load_snapshot_inputs(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+    input_mode: str,
+) -> dict[str, Any]:
+    if input_mode == "sqlite":
+        inputs = load_waites_snapshot_inputs(settings=settings, run_date=run_date, source=source)
+        inputs["validation"] = {
+            "status": "loaded_from_sqlite",
+            "error_count": 0,
+            "warning_count": None,
+            "path": None,
+        }
+        return inputs
+
+    storage = get_storage_paths(settings.data_dir)
+    raw_dir = storage.raw_waites_run_dir(run_date.isoformat())
+    validation_report = ensure_waites_raw_valid(settings=settings, run_date=run_date, source=source)
+    return {
+        "load": None,
+        "equipment": read_json(raw_dir / "equipment.json")["list"],
+        "installation_points": read_json(raw_dir / "installation-points.json")["list"],
+        "rms": read_json(raw_dir / "readings-rms.json")["list"],
+        "impact": read_json(raw_dir / "readings-impact-vue.json")["list"],
+        "temperature": read_json(raw_dir / "readings-temperature.json")["list"],
         "validation": {
             "status": validation_report["status"],
             "error_count": validation_report["error_count"],
             "warning_count": validation_report["warning_count"],
             "path": validation_report["validation_path"],
         },
-        "raw_record_counts": {
-            "equipment": len(equipment),
-            "installation-points": len(installation_points),
-            "readings-rms": len(rms),
-            "readings-impact-vue": len(impact),
-            "readings-temperature": len(temperature),
-        },
-        "unit_conversions": {
-            "impact_vue_acceleration": "g to m/s^2 using factor 9.8",
-            "rms.acceleration": "g to m/s^2 using factor 9.8",
-            "rms.velocity": "mm/s to in/s using divisor 25.4",
-            "temperature.value": "C to F",
-            "temperature.ambient": "C to F",
-        },
-    }
-    write_json(metadata_path, metadata)
-
-    return {
-        "source": source,
-        "date": run_date.isoformat(),
-        "snapshot_path": snapshot_path.as_posix(),
-        "metadata_path": metadata_path.as_posix(),
-        "record_count": len(rows),
-        "validation_status": validation_report["status"],
-        "validation_warning_count": validation_report["warning_count"],
-    }
-
-
-def list_snapshot_dates(settings: AppSettings) -> list[str]:
-    storage = get_storage_paths(settings.data_dir)
-    if not storage.snapshots_dir.exists():
-        return []
-    return sorted(
-        path.name.removeprefix("date=")
-        for path in storage.snapshots_dir.glob("date=*")
-        if (path / "sensor_snapshot.csv").exists()
-    )
-
-
-def load_snapshot(settings: AppSettings, run_date: date) -> dict[str, Any]:
-    from insy_sensor_data.artifacts import read_csv_rows
-
-    storage = get_storage_paths(settings.data_dir)
-    snapshot_dir = storage.snapshot_dir(run_date.isoformat())
-    return {
-        "date": run_date.isoformat(),
-        "metadata": read_json(snapshot_dir / "metadata.json"),
-        "rows": read_csv_rows(snapshot_dir / "sensor_snapshot.csv"),
     }
 
 

@@ -203,6 +203,29 @@ uv run sensor-data raw prune --source waites --older-than-days 30 --delete --con
 
 Prune will not delete a date directory that is missing a manifest or fails verification.
 
+### Load Waites Observations
+
+```powershell
+uv run sensor-data store load-waites --source mock --date 2025-07-09
+uv run sensor-data store load-waites --source api --date 2026-07-19
+```
+
+Loads a validated raw Waites run into SQLite:
+
+```text
+data/processed/observations.sqlite
+```
+
+The load preserves native timestamps for RMS, temperature, ImpactVue, equipment, installation points, and action items. It records source date, source mode, facility, manifest SHA-256, load time, schema version, endpoint row counts, and daily metric rollup counts.
+
+The command is idempotent by source date. By default, rerunning it replaces the existing rows for that date:
+
+```powershell
+uv run sensor-data store load-waites --source mock --date 2025-07-09 --replace
+```
+
+Use `--no-replace` when you want the command to fail if the date is already loaded.
+
 ### Build Sensor Snapshot
 
 ```powershell
@@ -210,7 +233,7 @@ uv run sensor-data snapshot build --source mock --date 2025-07-09
 uv run sensor-data snapshot build --source api --date 2026-07-19
 ```
 
-Reads raw Waites evidence for the selected date and writes:
+Reads raw Waites evidence for the selected date by default and writes:
 
 ```text
 data/processed/snapshots/date=2025-07-09/sensor_snapshot.csv
@@ -218,6 +241,14 @@ data/processed/snapshots/date=2025-07-09/metadata.json
 ```
 
 Snapshot builds validate the matching raw run first. The snapshot metadata records the validation status and report path.
+
+To build from the SQLite observation store instead:
+
+```powershell
+uv run sensor-data snapshot build --source mock --date 2025-07-09 --input sqlite
+```
+
+Load the date first with `store load-waites`.
 
 ### Build Trends
 
@@ -236,9 +267,17 @@ data/processed/trends/start=2025-07-09_end=2025-07-11/metadata.json
 
 Trend builds only consume snapshots whose metadata source matches the requested `--source`. This prevents mock and API snapshots from being mixed silently.
 
+To build trend outputs directly from SQLite observation loads:
+
+```powershell
+uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11 --input sqlite
+```
+
+Missing SQLite loads in the range are reported as skipped dates.
+
 ## Raw Retention Guidance
 
-Keep live raw JSON long enough to validate, troubleshoot, and reprocess the daily facts. Compress validated raw runs early, especially live API pulls. Treat `data/processed/`, future SQLite observations, snapshots, trends, clusters, drift, and Maximo joins as the longer-lived working set.
+Keep live raw JSON long enough to validate, troubleshoot, and reprocess the daily facts. Compress validated raw runs early, especially live API pulls. Treat `data/processed/observations.sqlite`, snapshots, trends, clusters, drift, and Maximo joins as the longer-lived working set.
 
 Deletion should stay deliberate:
 
@@ -251,10 +290,13 @@ Example multi-day mock workflow:
 
 ```powershell
 uv run sensor-data waites fetch --source mock --date 2025-07-09 --facility 679
+uv run sensor-data store load-waites --source mock --date 2025-07-09
 uv run sensor-data snapshot build --source mock --date 2025-07-09
 uv run sensor-data waites fetch --source mock --date 2025-07-10 --facility 679
+uv run sensor-data store load-waites --source mock --date 2025-07-10
 uv run sensor-data snapshot build --source mock --date 2025-07-10
 uv run sensor-data waites fetch --source mock --date 2025-07-11 --facility 679
+uv run sensor-data store load-waites --source mock --date 2025-07-11
 uv run sensor-data snapshot build --source mock --date 2025-07-11
 uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
 ```

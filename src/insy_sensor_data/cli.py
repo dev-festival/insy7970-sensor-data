@@ -10,8 +10,11 @@ import typer
 
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
+from insy_sensor_data.observations import load_waites_observations
 from insy_sensor_data.raw_lifecycle import compress_raw_waites, prune_raw_waites, verify_raw_waites
+from insy_sensor_data.snapshots.build import VALID_SNAPSHOT_INPUT_MODES
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
+from insy_sensor_data.snapshots.trends import VALID_TREND_INPUT_MODES
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.client import WaitesApiError
@@ -24,10 +27,12 @@ app = typer.Typer(
 )
 waites_app = typer.Typer(help="Waites source data commands.")
 raw_app = typer.Typer(help="Raw evidence lifecycle commands.")
+store_app = typer.Typer(help="SQLite observation store commands.")
 snapshot_app = typer.Typer(help="Processed sensor snapshot commands.")
 trend_app = typer.Typer(help="Processed trend commands.")
 app.add_typer(waites_app, name="waites")
 app.add_typer(raw_app, name="raw")
+app.add_typer(store_app, name="store")
 app.add_typer(snapshot_app, name="snapshot")
 app.add_typer(trend_app, name="trend")
 
@@ -218,6 +223,37 @@ def raw_prune(
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
+@store_app.command("load-waites")
+def store_load_waites(
+    load_date: Annotated[
+        str,
+        typer.Option("--date", help="Validated raw Waites run date to load in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    replace: Annotated[
+        bool,
+        typer.Option("--replace/--no-replace", help="Replace any existing load for this source date."),
+    ] = True,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Load validated raw Waites evidence into SQLite native observation tables."""
+    source_mode = _validate_source(source)
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = load_waites_observations(
+            settings=settings,
+            run_date=_parse_run_date(load_date),
+            source=source_mode,
+            replace=replace,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
 @snapshot_app.command("build")
 def snapshot_build(
     snapshot_date: Annotated[
@@ -228,14 +264,24 @@ def snapshot_build(
         str,
         typer.Option("--source", help="Source mode: mock or api."),
     ] = "mock",
+    input_mode: Annotated[
+        str,
+        typer.Option("--input", help="Snapshot input mode: raw or sqlite."),
+    ] = "raw",
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Build a processed sensor snapshot from raw Waites evidence."""
     source_mode = _validate_source(source)
+    snapshot_input = _validate_input_mode(input_mode, VALID_SNAPSHOT_INPUT_MODES, "snapshot input")
     settings = AppSettings.from_env(env_file=env_file)
     run_date = _parse_run_date(snapshot_date)
     try:
-        summary = build_sensor_snapshot(settings=settings, run_date=run_date, source=source_mode)
+        summary = build_sensor_snapshot(
+            settings=settings,
+            run_date=run_date,
+            source=source_mode,
+            input_mode=snapshot_input,
+        )
     except (FileNotFoundError, NotImplementedError, ValueError) as exc:
         _fail(str(exc))
     typer.echo(json.dumps(summary, sort_keys=True))
@@ -255,10 +301,15 @@ def trend_build(
         str,
         typer.Option("--source", help="Source mode: mock or api."),
     ] = "mock",
+    input_mode: Annotated[
+        str,
+        typer.Option("--input", help="Trend input mode: snapshots or sqlite."),
+    ] = "snapshots",
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Build lightweight trend-ready outputs from processed snapshots."""
     source_mode = _validate_source(source)
+    trend_input = _validate_input_mode(input_mode, VALID_TREND_INPUT_MODES, "trend input")
     settings = AppSettings.from_env(env_file=env_file)
     try:
         summary = build_trends(
@@ -266,6 +317,7 @@ def trend_build(
             start_date=_parse_run_date(start_date),
             end_date=_parse_run_date(end_date),
             source=source_mode,
+            input_mode=trend_input,
         )
     except (FileNotFoundError, NotImplementedError, ValueError) as exc:
         _fail(str(exc))
@@ -285,6 +337,14 @@ def _validate_raw_source(source: str) -> str:
     if source_system != "waites":
         raise typer.BadParameter("raw source must be: waites")
     return source_system
+
+
+def _validate_input_mode(input_mode: str, allowed_modes: set[str], label: str) -> str:
+    normalized = input_mode.strip().lower()
+    if normalized not in allowed_modes:
+        allowed = ", ".join(sorted(allowed_modes))
+        raise typer.BadParameter(f"{label} must be one of: {allowed}")
+    return normalized
 
 
 def _parse_run_date(raw_date: str) -> date:

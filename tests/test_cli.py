@@ -273,6 +273,65 @@ def test_cli_raw_lifecycle_commands(tmp_path: Path) -> None:
     assert json.loads(prune_result.stdout)["dry_run"] is True
 
 
+def test_cli_store_load_waites_and_sqlite_snapshot(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    fetch_result = runner.invoke(
+        app,
+        [
+            "waites",
+            "fetch",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--facility",
+            "679",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert fetch_result.exit_code == 0
+
+    load_result = runner.invoke(
+        app,
+        [
+            "store",
+            "load-waites",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert load_result.exit_code == 0
+    load_payload = json.loads(load_result.stdout)
+    assert load_payload["row_counts"]["rms"] == 21
+    assert (data_dir / "processed" / "observations.sqlite").exists()
+
+    snapshot_result = runner.invoke(
+        app,
+        [
+            "snapshot",
+            "build",
+            "--source",
+            "mock",
+            "--input",
+            "sqlite",
+            "--date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert snapshot_result.exit_code == 0
+    assert json.loads(snapshot_result.stdout)["input_mode"] == "sqlite"
+
+
 def test_cli_builds_multi_day_mock_trend(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"

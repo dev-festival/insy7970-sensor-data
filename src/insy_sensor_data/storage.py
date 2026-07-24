@@ -47,6 +47,10 @@ class StoragePaths:
     def drift_dir(self) -> Path:
         return self.processed_dir / "drift"
 
+    @property
+    def observations_db_path(self) -> Path:
+        return self.processed_dir / "observations.sqlite"
+
     def ensure_base_dirs(self) -> list[Path]:
         dirs = [
             self.raw_waites_dir,

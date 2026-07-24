@@ -5,6 +5,8 @@ from typing import Any
 
 from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.observations import load_waites_snapshot_inputs
+from insy_sensor_data.snapshots.build import build_sensor_snapshot_rows
 from insy_sensor_data.storage import get_storage_paths
 
 
@@ -36,6 +38,7 @@ EQUIPMENT_TREND_FIELDS = [
     "rms_vel_mean_y_avg",
     "rms_vel_mean_z_avg",
 ]
+VALID_TREND_INPUT_MODES = {"snapshots", "sqlite"}
 
 
 def build_trends(
@@ -43,11 +46,15 @@ def build_trends(
     start_date: date,
     end_date: date,
     source: str = "mock",
+    input_mode: str = "snapshots",
 ) -> dict[str, Any]:
     if source not in {"mock", "api"}:
         raise ValueError("source must be one of: api, mock")
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
+    if input_mode not in VALID_TREND_INPUT_MODES:
+        allowed = ", ".join(sorted(VALID_TREND_INPUT_MODES))
+        raise ValueError(f"input_mode must be one of: {allowed}")
 
     storage = get_storage_paths(settings.data_dir)
     output_dir = storage.trend_dir(start_date.isoformat(), end_date.isoformat())
@@ -56,23 +63,23 @@ def build_trends(
     source_mismatch_dates: list[str] = []
 
     for run_date in _date_range(start_date, end_date):
-        snapshot_dir = storage.snapshot_dir(run_date.isoformat())
-        snapshot_path = snapshot_dir / "sensor_snapshot.csv"
-        metadata_path = snapshot_dir / "metadata.json"
-        if not snapshot_path.exists() or not metadata_path.exists():
-            skipped_dates.append(run_date.isoformat())
-            continue
+        if input_mode == "sqlite":
+            try:
+                snapshot_rows = _sqlite_snapshot_rows(settings, run_date, source)
+            except FileNotFoundError:
+                skipped_dates.append(run_date.isoformat())
+                continue
+        else:
+            snapshot_rows = _file_snapshot_rows(storage, run_date, source, skipped_dates, source_mismatch_dates)
+            if snapshot_rows is None:
+                continue
 
-        metadata = read_json(metadata_path)
-        if metadata.get("source") != source:
-            source_mismatch_dates.append(run_date.isoformat())
-            continue
-
-        for row in read_csv_rows(snapshot_path):
+        for row in snapshot_rows:
             sensor_rows.append({"date": run_date.isoformat(), **_sensor_trend_row(row)})
 
     if not sensor_rows:
-        raise FileNotFoundError(f"No snapshot artifacts found for source {source} in the requested trend range.")
+        input_label = "SQLite observation loads" if input_mode == "sqlite" else "snapshot artifacts"
+        raise FileNotFoundError(f"No {input_label} found for source {source} in the requested trend range.")
 
     equipment_rows = _equipment_trends(sensor_rows)
     sensor_path = output_dir / "sensor_trends.csv"
@@ -85,6 +92,7 @@ def build_trends(
         metadata_path,
         {
             "source": source,
+            "input_mode": input_mode,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "built_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -102,6 +110,7 @@ def build_trends(
 
     return {
         "source": source,
+        "input_mode": input_mode,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "sensor_trends_path": sensor_path.as_posix(),
@@ -146,6 +155,43 @@ def list_trend_ranges(settings: AppSettings) -> list[dict[str, str]]:
     return ranges
 
 
+def _file_snapshot_rows(
+    storage: Any,
+    run_date: date,
+    source: str,
+    skipped_dates: list[str],
+    source_mismatch_dates: list[str],
+) -> list[dict[str, str]] | None:
+    snapshot_dir = storage.snapshot_dir(run_date.isoformat())
+    snapshot_path = snapshot_dir / "sensor_snapshot.csv"
+    metadata_path = snapshot_dir / "metadata.json"
+    if not snapshot_path.exists() or not metadata_path.exists():
+        skipped_dates.append(run_date.isoformat())
+        return None
+
+    metadata = read_json(metadata_path)
+    if metadata.get("source") != source:
+        source_mismatch_dates.append(run_date.isoformat())
+        return None
+
+    return read_csv_rows(snapshot_path)
+
+
+def _sqlite_snapshot_rows(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+) -> list[dict[str, Any]]:
+    inputs = load_waites_snapshot_inputs(settings=settings, run_date=run_date, source=source)
+    return build_sensor_snapshot_rows(
+        equipment=inputs["equipment"],
+        installation_points=inputs["installation_points"],
+        rms=inputs["rms"],
+        impact=inputs["impact"],
+        temperature=inputs["temperature"],
+    )
+
+
 def _sensor_trend_row(row: dict[str, str]) -> dict[str, str]:
     return {field: row.get(field, "") for field in SENSOR_TREND_FIELDS if field != "date"}
 
@@ -153,7 +199,7 @@ def _sensor_trend_row(row: dict[str, str]) -> dict[str, str]:
 def _equipment_trends(sensor_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in sensor_rows:
-        key = (row["date"], row.get("equipment_id") or "")
+        key = (row["date"], str(row.get("equipment_id") or ""))
         grouped.setdefault(key, []).append(row)
 
     output: list[dict[str, Any]] = []
