@@ -445,6 +445,93 @@ def test_cli_workflow_api_day_requires_token(tmp_path: Path) -> None:
     assert "WAITES_ACCESS_TOKEN" in result.output or "WAITES_ACCESS_TOKEN" in str(result.exception)
 
 
+def test_cli_report_mock_trend_writes_evidence_report(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    workflow_result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-trend",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-11",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert workflow_result.exit_code == 0
+
+    report_result = runner.invoke(
+        app,
+        [
+            "report",
+            "mock-trend",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-11",
+            "--no-render",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert report_result.exit_code == 0
+    assert "Mock trend evidence report: 2025-07-09 to 2025-07-11" in report_result.stdout
+    assert "Checks: 5 passed, 0 failed" in report_result.stdout
+    report_dir = tmp_path / "reports" / "mock-trend" / "start=2025-07-09_end=2025-07-11"
+    assert (report_dir / "report.md").exists()
+    assert (report_dir / "checks.json").exists()
+
+
+def test_cli_report_mock_trend_json_outputs_summary(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    workflow_result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-trend",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-11",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert workflow_result.exit_code == 0
+
+    report_result = runner.invoke(
+        app,
+        [
+            "report",
+            "mock-trend",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-11",
+            "--no-render",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert report_result.exit_code == 0
+    payload = json.loads(report_result.stdout)
+    assert payload["report"] == "mock-trend"
+    assert payload["failed_check_count"] == 0
+    assert payload["check_count"] == 5
+    assert "rising-vibration" in payload["chart_paths"]
+
+
 def test_cli_builds_multi_day_mock_trend(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"

@@ -12,6 +12,7 @@ wheels/
 # Local secrets and runtime state
 .env
 data/
+reports/
 app.db
 .pytest_cache/
 .ruff_cache/

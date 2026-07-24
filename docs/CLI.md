@@ -307,6 +307,45 @@ Each workflow supports `--json` when a script wants the combined structured resu
 uv run sensor-data workflow mock-day --date 2025-07-09 --json
 ```
 
+### Build Evidence Reports
+
+```powershell
+uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+```
+
+Builds an inspectable report for the controlled mock trend range. Run the mock trend workflow first so raw counts, SQLite loads, snapshots, and trend artifacts exist:
+
+```powershell
+uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+```
+
+The report writes:
+
+```text
+reports/mock-trend/start=2025-07-09_end=2025-07-11/
+  report.md
+  report.qmd
+  report.html
+  checks.json
+  samples/
+  charts/
+```
+
+It includes raw endpoint counts, SQLite load counts, snapshot and trend counts, sample CSVs, SVG charts, and expected-versus-observed checks for the known mock behaviors.
+
+The command writes a fallback HTML report without external dependencies. If Quarto is installed, it also attempts to render `report.qmd` to HTML. To skip Quarto rendering:
+
+```powershell
+uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11 --no-render
+```
+
+Use `--json` when a script wants the report summary:
+
+```powershell
+uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11 --json
+```
+
 ## Raw Retention Guidance
 
 Keep live raw JSON long enough to validate, troubleshoot, and reprocess the daily facts. Compress validated raw runs early, especially live API pulls. Treat `data/processed/observations.sqlite`, snapshots, trends, clusters, drift, and Maximo joins as the longer-lived working set.

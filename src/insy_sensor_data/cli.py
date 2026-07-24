@@ -12,6 +12,7 @@ from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
 from insy_sensor_data.observations import load_waites_observations
 from insy_sensor_data.raw_lifecycle import compress_raw_waites, prune_raw_waites, verify_raw_waites
+from insy_sensor_data.reports import build_mock_trend_report
 from insy_sensor_data.snapshots.build import VALID_SNAPSHOT_INPUT_MODES
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import VALID_TREND_INPUT_MODES
@@ -37,12 +38,14 @@ store_app = typer.Typer(help="SQLite observation store commands.")
 snapshot_app = typer.Typer(help="Processed sensor snapshot commands.")
 trend_app = typer.Typer(help="Processed trend commands.")
 workflow_app = typer.Typer(help="Human-readable workflow commands.")
+report_app = typer.Typer(help="Evidence report commands.")
 app.add_typer(waites_app, name="waites")
 app.add_typer(raw_app, name="raw")
 app.add_typer(store_app, name="store")
 app.add_typer(snapshot_app, name="snapshot")
 app.add_typer(trend_app, name="trend")
 app.add_typer(workflow_app, name="workflow")
+app.add_typer(report_app, name="report")
 
 
 EnvFileOption = Annotated[
@@ -430,6 +433,40 @@ def workflow_api_day(
     _emit_workflow_summary(summary, json_output)
 
 
+@report_app.command("mock-trend")
+def report_mock_trend(
+    start_date: Annotated[
+        str,
+        typer.Option("--start-date", help="Report start date in YYYY-MM-DD format."),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Option("--end-date", help="Report end date in YYYY-MM-DD format."),
+    ],
+    render_quarto: Annotated[
+        bool,
+        typer.Option("--render/--no-render", help="Render HTML with Quarto when available."),
+    ] = True,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the report summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Build an evidence report for the controlled mock trend range."""
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = build_mock_trend_report(
+            settings=settings,
+            start_date=_parse_run_date(start_date),
+            end_date=_parse_run_date(end_date),
+            render_quarto=render_quarto,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_report_summary(summary, json_output)
+
+
 def _validate_source(source: str) -> str:
     source_mode = source.strip().lower()
     if source_mode not in VALID_SOURCE_MODES:
@@ -470,3 +507,23 @@ def _emit_workflow_summary(summary: dict[str, object], json_output: bool) -> Non
         typer.echo(json.dumps(summary, sort_keys=True))
     else:
         typer.echo(format_workflow_summary(summary))
+
+
+def _emit_report_summary(summary: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(summary, sort_keys=True))
+        return
+
+    failed = int(summary.get("failed_check_count") or 0)
+    total = int(summary.get("check_count") or 0)
+    passed = total - failed
+    typer.echo(f"Mock trend evidence report: {summary['start_date']} to {summary['end_date']}")
+    typer.echo("")
+    typer.echo(f"Report directory: {summary['report_dir']}")
+    typer.echo(f"Markdown: {summary['report_md_path']}")
+    typer.echo(f"HTML: {summary['report_html_path']}")
+    typer.echo(f"Checks: {passed} passed, {failed} failed")
+    typer.echo(f"Samples: {len(summary.get('sample_paths', {}))}")
+    typer.echo(f"Charts: {len(summary.get('chart_paths', {}))}")
+    if failed:
+        raise typer.Exit(code=1)
