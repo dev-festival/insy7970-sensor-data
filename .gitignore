@@ -20,3 +20,6 @@ app.db
 
 # References
 /refs
+
+#Dev
+.coverage

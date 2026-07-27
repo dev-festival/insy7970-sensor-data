@@ -17,7 +17,7 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.2.4](0.2.4-raw-evidence-lifecycle.md) | Raw evidence lifecycle | Compressed, verified, and explicitly pruned raw source evidence |
 | [0.2.5](0.2.5-sqlite-observation-store.md) | SQLite observation store | Validated native observations loaded into a compact queryable store |
 | [0.2.6](0.2.6-human-readable-workflows.md) | Human-readable workflows | Friendly workflow commands over the JSON leaf commands |
-| [0.2.7](0.2.7-evidence-report.md) | Evidence report | Report artifacts with samples, charts, and expected-versus-observed checks |
+| [0.2.7](0.2.7-evidence-report.md) | Evidence report | Report artifacts with samples, min/avg/max charts, and expected-versus-observed checks |
 | [0.2.8](0.2.8-clustering-feature-contract.md) | Clustering feature contract | Feature matrix preview and readiness checks before clustering |
 | [0.3.0](0.3.0-clustering.md) | Clustering | Clustered snapshots, metrics, PCA coordinates, and drift-ready artifacts |
 | [0.3.1](0.3.1-pipeline-memory-and-windowing.md) | Pipeline memory and windowing | Date-chunked range processing with explicit memory-conscious workflow states |

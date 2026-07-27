@@ -58,6 +58,12 @@ def test_build_mock_trend_report_writes_evidence_artifacts(tmp_path: Path) -> No
         assert chart_path.exists()
         assert chart_path.stat().st_size > 100
 
+    rising_chart = (report_dir / "charts" / "rising-vibration.svg").read_text(encoding="utf-8")
+    assert "<polygon" in rising_chart
+    assert "Max" in rising_chart
+    assert "Avg" in rising_chart
+    assert "Min" in rising_chart
+
     report_text = (report_dir / "report.md").read_text(encoding="utf-8")
     assert "Mock Trend Evidence Report" in report_text
     assert "Expected Versus Observed Checks" in report_text

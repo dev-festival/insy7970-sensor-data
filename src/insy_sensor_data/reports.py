@@ -369,9 +369,15 @@ def _write_samples(
             "equipment_id",
             "equipment_name",
             "customer_asset_id",
+            "impact_min",
             "impact_mean",
+            "impact_max",
+            "temp_sensor_min",
             "temp_sensor_mean",
+            "temp_sensor_max",
+            "rms_vel_min_x",
             "rms_vel_mean_x",
+            "rms_vel_max_x",
             "rms_vel_mean_y",
             "rms_vel_mean_z",
         ],
@@ -611,6 +617,7 @@ def _series(
     installation_point_id: str,
     metric: str,
 ) -> list[dict[str, Any]]:
+    min_metric, max_metric = _metric_bound_fields(metric)
     by_date = {
         row["date"]: row
         for row in rows
@@ -618,9 +625,26 @@ def _series(
     }
     output: list[dict[str, Any]] = []
     for raw_date in date_labels:
-        value = by_date.get(raw_date, {}).get(metric, "")
-        output.append({"date": raw_date, "value": _float_or_none(value)})
+        row = by_date.get(raw_date, {})
+        value = _float_or_none(row.get(metric, ""))
+        output.append(
+            {
+                "date": raw_date,
+                "value": value,
+                "min": _float_or_none(row.get(min_metric, "")) if min_metric else value,
+                "max": _float_or_none(row.get(max_metric, "")) if max_metric else value,
+            }
+        )
     return output
+
+
+def _metric_bound_fields(metric: str) -> tuple[str | None, str | None]:
+    if "_mean_" in metric:
+        return metric.replace("_mean_", "_min_"), metric.replace("_mean_", "_max_")
+    if metric.endswith("_mean"):
+        base = metric.removesuffix("_mean")
+        return f"{base}_min", f"{base}_max"
+    return None, None
 
 
 def _all_increasing(series: list[dict[str, Any]]) -> bool:
@@ -698,15 +722,20 @@ def _write_charts(
 
 
 def _line_chart_svg(title: str, series: list[dict[str, Any]], y_label: str) -> str:
-    width = 720
-    height = 300
-    left = 70
-    right = 30
-    top = 36
-    bottom = 62
+    width = 760
+    height = 320
+    left = 76
+    right = 96
+    top = 42
+    bottom = 64
     plot_width = width - left - right
     plot_height = height - top - bottom
-    values = [item["value"] for item in series if item["value"] is not None]
+    values = [
+        value
+        for item in series
+        for value in (item.get("min"), item.get("value"), item.get("max"))
+        if value is not None
+    ]
     min_value = min(values) if values else 0.0
     max_value = max(values) if values else 1.0
     if min_value == max_value:
@@ -719,7 +748,9 @@ def _line_chart_svg(title: str, series: list[dict[str, Any]], y_label: str) -> s
     def y_at(value: float) -> float:
         return top + ((max_value - value) / (max_value - min_value) * plot_height)
 
-    points: list[str] = []
+    min_points: list[str] = []
+    avg_points: list[str] = []
+    max_points: list[str] = []
     circles: list[str] = []
     labels: list[str] = []
     for index, item in enumerate(series):
@@ -735,20 +766,49 @@ def _line_chart_svg(title: str, series: list[dict[str, Any]], y_label: str) -> s
                 'text-anchor="middle" font-size="12" fill="#9a3412">missing</text>'
             )
             continue
+        min_item = item.get("min") if item.get("min") is not None else value
+        max_item = item.get("max") if item.get("max") is not None else value
         y_value = y_at(value)
-        points.append(f"{x_value:.1f},{y_value:.1f}")
+        avg_points.append(f"{x_value:.1f},{y_value:.1f}")
+        min_points.append(f"{x_value:.1f},{y_at(min_item):.1f}")
+        max_points.append(f"{x_value:.1f},{y_at(max_item):.1f}")
         circles.append(
             f'<circle cx="{x_value:.1f}" cy="{y_value:.1f}" r="4" fill="#1f6feb" />'
             f'<text x="{x_value:.1f}" y="{y_value - 10:.1f}" text-anchor="middle" '
             f'font-size="11">{value:.4g}</text>'
         )
 
-    polyline = (
-        f'<polyline points="{" ".join(points)}" fill="none" stroke="#1f6feb" '
-        'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />'
-        if len(points) >= 2
+    upper_band = (
+        f'<polygon points="{" ".join(max_points + list(reversed(avg_points)))}" '
+        'fill="#16a34a" opacity="0.22" />'
+        if len(max_points) >= 2 and len(avg_points) >= 2
         else ""
     )
+    lower_band = (
+        f'<polygon points="{" ".join(avg_points + list(reversed(min_points)))}" '
+        'fill="#dc2626" opacity="0.18" />'
+        if len(avg_points) >= 2 and len(min_points) >= 2
+        else ""
+    )
+    max_line = (
+        f'<polyline points="{" ".join(max_points)}" fill="none" stroke="#064e3b" '
+        'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />'
+        if len(max_points) >= 2
+        else ""
+    )
+    avg_line = (
+        f'<polyline points="{" ".join(avg_points)}" fill="none" stroke="#3b44ff" '
+        'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />'
+        if len(avg_points) >= 2
+        else ""
+    )
+    min_line = (
+        f'<polyline points="{" ".join(min_points)}" fill="none" stroke="#7f1d1d" '
+        'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />'
+        if len(min_points) >= 2
+        else ""
+    )
+    legend_x = left + plot_width + 24
     return "\n".join(
         [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
@@ -766,9 +826,19 @@ def _line_chart_svg(title: str, series: list[dict[str, Any]], y_label: str) -> s
             f'font-size="11">{max_value:.4g}</text>',
             f'<text x="{left - 8}" y="{y_at(min_value) + 4:.1f}" text-anchor="end" '
             f'font-size="11">{min_value:.4g}</text>',
-            polyline,
+            upper_band,
+            lower_band,
+            max_line,
+            avg_line,
+            min_line,
             *circles,
             *labels,
+            f'<line x1="{legend_x}" y1="{top + 14}" x2="{legend_x + 22}" y2="{top + 14}" stroke="#064e3b" stroke-width="2" />',
+            f'<text x="{legend_x + 30}" y="{top + 19}" font-size="13">Max</text>',
+            f'<line x1="{legend_x}" y1="{top + 38}" x2="{legend_x + 22}" y2="{top + 38}" stroke="#3b44ff" stroke-width="2.5" />',
+            f'<text x="{legend_x + 30}" y="{top + 43}" font-size="13">Avg</text>',
+            f'<line x1="{legend_x}" y1="{top + 62}" x2="{legend_x + 22}" y2="{top + 62}" stroke="#7f1d1d" stroke-width="2" />',
+            f'<text x="{legend_x + 30}" y="{top + 67}" font-size="13">Min</text>',
             "</svg>",
         ]
     )

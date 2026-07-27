@@ -35,7 +35,16 @@ def test_build_trends_writes_sensor_and_equipment_outputs(tmp_path: Path) -> Non
         equipment_rows = list(csv.DictReader(csv_file))
 
     assert len(sensor_rows) == 9
-    assert {"date", "installation_point_id", "impact_mean", "temp_sensor_mean"} <= set(sensor_rows[0])
+    assert {
+        "date",
+        "installation_point_id",
+        "impact_min",
+        "impact_mean",
+        "impact_max",
+        "temp_sensor_min",
+        "temp_sensor_mean",
+        "temp_sensor_max",
+    } <= set(sensor_rows[0])
     assert {"date", "equipment_id", "sensor_count", "impact_mean_avg"} <= set(equipment_rows[0])
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["skipped_dates"] == []
@@ -73,6 +82,8 @@ def test_build_trends_with_multi_day_mock_data_shows_movement(tmp_path: Path) ->
     temp_spike = [_metric(rows, raw_date, "201307", "temp_sensor_mean") for raw_date in _trend_dates()]
 
     assert rising[0] < rising[1] < rising[2]
+    assert _metric(rows, "2025-07-09", "201300", "rms_vel_min_x") <= rising[0]
+    assert _metric(rows, "2025-07-09", "201300", "rms_vel_max_x") >= rising[0]
     assert stable[0] == pytest.approx(stable[1])
     assert stable[1] == pytest.approx(stable[2])
     assert normalizing[0] > normalizing[1] > normalizing[2]

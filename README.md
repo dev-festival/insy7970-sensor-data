@@ -34,7 +34,7 @@ Sprint `0.2.8` adds a clustering feature contract on top of the evidence report 
 - human-readable `workflow mock-day`, `workflow mock-trend`, and `workflow api-day`
 - `--json` workflow output for scripts that want combined structured summaries
 - mock trend evidence reports under `reports/mock-trend/`
-- deterministic sample CSVs, SVG charts, and expected-versus-observed checks
+- deterministic sample CSVs, min/avg/max SVG trend charts, and expected-versus-observed checks
 - no-Quarto fallback report generation with optional Quarto HTML rendering
 - dimension-specific clustering feature previews under `data/processed/features/`
 - `cluster features` command for X, Y, Z, and temperature feature matrices

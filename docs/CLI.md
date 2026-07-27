@@ -332,7 +332,7 @@ reports/mock-trend/start=2025-07-09_end=2025-07-11/
   charts/
 ```
 
-It includes raw endpoint counts, SQLite load counts, snapshot and trend counts, sample CSVs, SVG charts, and expected-versus-observed checks for the known mock behaviors.
+It includes raw endpoint counts, SQLite load counts, snapshot and trend counts, sample CSVs, min/avg/max SVG trend charts, and expected-versus-observed checks for the known mock behaviors.
 
 The command writes a fallback HTML report without external dependencies. If Quarto is installed, it also attempts to render `report.qmd` to HTML. To skip Quarto rendering:
 
