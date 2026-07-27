@@ -431,6 +431,65 @@ Use `--json` for the feature readiness summary:
 uv run sensor-data cluster features --source mock --date 2025-07-09 --json
 ```
 
+### Run Clustering
+
+```powershell
+uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k 4
+uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension temperature --k 3
+```
+
+Runs deterministic KMeans clustering for one like-for-like dimension. The command consumes the dimension-specific feature matrix contract. If the matching feature matrix does not exist yet, it builds that dimension's feature preview from the daily snapshot first.
+
+Outputs are written under:
+
+```text
+data/processed/clusters/date=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
+  sensor_clusters.csv
+  cluster_summary.csv
+  pca_coordinates.csv
+  metrics.json
+```
+
+`sensor_clusters.csv` contains one row per sensor with the assigned `cluster`, distance to centroid, identifiers, and feature values. `cluster_summary.csv` contains cluster counts, within-cluster error, original feature means, and scaled centroids. `pca_coordinates.csv` gives two plotting coordinates for quick inspection. `metrics.json` records feature columns, scaler means/scales, inertia, silhouette score, Calinski-Harabasz score, cluster counts, and output paths.
+
+Dimension guidance:
+
+- Use `x`, `y`, or `z` for axis-specific vibration comparisons.
+- Use `temperature` for non-axis temperature behavior.
+- Do not compare cluster labels across different dimensions; compare within the same dimension and source.
+
+Choosing `k`:
+
+- Start small for the current mock/live pilot, usually `--k 2`, `--k 3`, or `--k 4`.
+- `k` must be less than or equal to the feature row count.
+- Silhouette and Calinski-Harabasz metrics are available only when `2 <= k < row_count`.
+- Treat cluster numbers as deterministic labels for a run, not permanent semantic names.
+
+Use `--json` when a script wants the run summary:
+
+```powershell
+uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k 4 --json
+```
+
+### Compare Cluster Drift
+
+```powershell
+uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
+```
+
+Compares two existing cluster runs for the same source, dimension, and `k`. Run `cluster run` for both dates first.
+
+Outputs are written under:
+
+```text
+data/processed/drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
+  cluster_drift.csv
+  centroid_drift.csv
+  metrics.json
+```
+
+`cluster_drift.csv` compares per-sensor assignments and marks whether the cluster changed. `centroid_drift.csv` compares same-label scaled centroid distances. This is a first drift artifact for inspection; later sprints can add label alignment and richer interpretation.
+
 ## Raw Retention Guidance
 
 The default live operating layer is now the daily snapshot CSV plus the SQLite `sensor_daily_snapshots` table and `waites_ingestion_ledger`. Keep live raw JSON only long enough to validate, troubleshoot, and persist the daily facts.
@@ -467,6 +526,9 @@ uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-0
 uv run sensor-data cluster features --source mock --date 2025-07-09
 uv run sensor-data cluster features --source mock --date 2025-07-10
 uv run sensor-data cluster features --source mock --date 2025-07-11
+uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k 4
+uv run sensor-data cluster run --source mock --date 2025-07-10 --dimension x --k 4
+uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
 ```
 
 Equivalent lower-level JSON command sequence:
@@ -508,8 +570,6 @@ Unset `INSY_RUN_LIVE_TESTS` to return to offline-only test behavior.
 These are not implemented yet, but they are the intended shape from the sprint plan.
 
 ```powershell
-uv run sensor-data cluster run --date YYYY-MM-DD --dimension x --k 4 --source mock
-uv run sensor-data drift compare --from YYYY-MM-DD --to YYYY-MM-DD --source mock
 uv run sensor-data maximo asset-history --assetnum A119450 --source mock
 ```
 

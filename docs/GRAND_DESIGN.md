@@ -160,14 +160,15 @@ data/
         feature_summary_temperature.csv
         metadata.json
     clusters/
-      date=YYYY-MM-DD_k=N/
+      date=YYYY-MM-DD_source=VALUE_dimension=VALUE_k=N/
         sensor_clusters.csv
         cluster_summary.csv
         pca_coordinates.csv
         metrics.json
     drift/
-      from=YYYY-MM-DD_to=YYYY-MM-DD/
+      from=YYYY-MM-DD_to=YYYY-MM-DD_source=VALUE_dimension=VALUE_k=N/
         cluster_drift.csv
+        centroid_drift.csv
         metrics.json
 ```
 
@@ -314,11 +315,12 @@ Raw evidence is not the long-term working set. Treat live JSON payloads like sho
 
 Expected post-clustering hardening before `0.4.0`:
 
-- `0.3.1`: pipeline memory and windowing for date-chunked operating ranges.
-- `0.3.2`: artifact packing and retention for raw and processed outputs after clustering artifacts exist.
+- `0.3.0`: deterministic dimension-specific clustering, PCA coordinates, metrics, and first drift artifacts.
+- `0.3.1`: operating-window orchestration, cluster quality summaries, and centroid-aligned drift interpretation.
+- `0.3.2`: deferred artifact packing and retention for raw and processed outputs after artifact volume justifies loader complexity.
 - `0.4.x`: on-demand live source drilldown from dashboard points without restoring raw detail as default local storage.
 
-The rule for this phase is: pull narrow, persist immediately, process from SQLite or compact per-date artifacts, and pack only after the working artifacts needed for clustering, drift, and reports are present. Range commands should never require loading a full operating window of raw endpoint JSON into memory.
+The rule for this phase is: pull narrow, persist immediately, process from SQLite or compact per-date artifacts, and interpret cluster movement before presenting drift as an operational signal. Range commands should never require loading a full operating window of raw endpoint JSON into memory. Packing should wait until processed artifacts are large enough or old enough to justify loader complexity.
 
 ## Definition of Done
 

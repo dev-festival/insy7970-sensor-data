@@ -9,6 +9,12 @@ import os
 import typer
 
 from insy_sensor_data.clustering.features import VALID_FEATURE_DIMENSIONS, build_feature_preview
+from insy_sensor_data.clustering.model import (
+    DEFAULT_RANDOM_SEED,
+    VALID_CLUSTER_DIMENSIONS,
+    build_cluster_run,
+    compare_cluster_drift,
+)
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
 from insy_sensor_data.observations import (
@@ -615,6 +621,98 @@ def cluster_features(
     _emit_feature_summary(summary, json_output)
 
 
+@cluster_app.command("run")
+def cluster_run(
+    cluster_date: Annotated[
+        str,
+        typer.Option("--date", help="Snapshot date in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    dimension: Annotated[
+        str,
+        typer.Option("--dimension", "--axis", help="Clustering dimension: x, y, z, or temperature."),
+    ] = "x",
+    k: Annotated[
+        int,
+        typer.Option("--k", help="Number of KMeans clusters."),
+    ] = 4,
+    random_seed: Annotated[
+        int,
+        typer.Option("--random-seed", help="Deterministic KMeans initialization seed."),
+    ] = DEFAULT_RANDOM_SEED,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the cluster run summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Run deterministic dimension-specific KMeans clustering."""
+    source_mode = _validate_source(source)
+    cluster_dimension = _validate_input_mode(dimension, VALID_CLUSTER_DIMENSIONS, "dimension")
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = build_cluster_run(
+            settings=settings,
+            run_date=_parse_run_date(cluster_date),
+            source=source_mode,
+            dimension=cluster_dimension,
+            k=k,
+            random_seed=random_seed,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_cluster_summary(summary, json_output)
+
+
+@cluster_app.command("drift")
+def cluster_drift(
+    from_date: Annotated[
+        str,
+        typer.Option("--from-date", help="Earlier cluster date in YYYY-MM-DD format."),
+    ],
+    to_date: Annotated[
+        str,
+        typer.Option("--to-date", help="Later cluster date in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    dimension: Annotated[
+        str,
+        typer.Option("--dimension", "--axis", help="Clustering dimension: x, y, z, or temperature."),
+    ] = "x",
+    k: Annotated[
+        int,
+        typer.Option("--k", help="Cluster count used by both cluster runs."),
+    ] = 4,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the drift summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Compare cluster assignments and centroids between two processed dates."""
+    source_mode = _validate_source(source)
+    cluster_dimension = _validate_input_mode(dimension, VALID_CLUSTER_DIMENSIONS, "dimension")
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = compare_cluster_drift(
+            settings=settings,
+            from_date=_parse_run_date(from_date),
+            to_date=_parse_run_date(to_date),
+            source=source_mode,
+            dimension=cluster_dimension,
+            k=k,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_cluster_drift_summary(summary, json_output)
+
+
 def _validate_source(source: str) -> str:
     source_mode = source.strip().lower()
     if source_mode not in VALID_SOURCE_MODES:
@@ -704,3 +802,39 @@ def _emit_feature_summary(summary: dict[str, object], json_output: bool) -> None
         typer.echo(f"         Matrix: {dimension_summary['matrix_path']}")
         warning_count = len(dimension_summary.get("warnings", []))
         typer.echo(f"      Warnings: {warning_count}")
+
+
+def _emit_cluster_summary(summary: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(summary, sort_keys=True))
+        return
+
+    typer.echo(f"Cluster run: {summary['date']} ({summary['source']}, {summary['dimension']}, k={summary['k']})")
+    typer.echo("")
+    typer.echo(f"Output: {summary['cluster_dir']}")
+    typer.echo(f"Rows: {summary['row_count']}")
+    typer.echo(f"Features: {summary['feature_count']}")
+    typer.echo(f"Inertia: {summary['inertia']}")
+    typer.echo(f"Silhouette: {summary.get('silhouette_score')}")
+    typer.echo(f"Calinski-Harabasz: {summary.get('calinski_harabasz_score')}")
+    typer.echo(f"Sensor clusters: {summary['sensor_clusters_path']}")
+    typer.echo(f"Cluster summary: {summary['cluster_summary_path']}")
+    typer.echo(f"PCA coordinates: {summary['pca_coordinates_path']}")
+
+
+def _emit_cluster_drift_summary(summary: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(summary, sort_keys=True))
+        return
+
+    typer.echo(
+        f"Cluster drift: {summary['from_date']} to {summary['to_date']} "
+        f"({summary['source']}, {summary['dimension']}, k={summary['k']})"
+    )
+    typer.echo("")
+    typer.echo(f"Output: {summary['drift_dir']}")
+    typer.echo(f"Matched sensors: {summary['matched_sensor_count']}")
+    typer.echo(f"Changed sensors: {summary['changed_sensor_count']}")
+    typer.echo(f"Changed ratio: {summary.get('changed_ratio')}")
+    typer.echo(f"Assignment drift: {summary['cluster_drift_path']}")
+    typer.echo(f"Centroid drift: {summary['centroid_drift_path']}")

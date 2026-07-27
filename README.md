@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.2.9` makes daily snapshots the durable operating layer:
+Sprint `0.3.0` adds deterministic clustering on top of durable daily snapshots:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -39,13 +39,17 @@ Sprint `0.2.9` makes daily snapshots the durable operating layer:
 - dimension-specific clustering feature previews under `data/processed/features/`
 - `cluster features` command for X, Y, Z, and temperature feature matrices
 - feature readiness rows in evidence reports when previews are available
+- deterministic dimension-specific KMeans cluster runs under `data/processed/clusters/`
+- scaled feature metrics, cluster summaries, and PCA coordinate outputs
+- cluster drift comparison artifacts under `data/processed/drift/`
+- `cluster run` and `cluster drift` commands
 - SQLite daily snapshot store mirrored from `sensor_snapshot.csv`
 - Waites ingestion ledger with endpoint counts, validation status, checksums, and retention status
 - workflow raw-retention modes: `keep`, `compress`, and `release`
 - date-scoped staging purge after snapshot and ledger persistence are verified
 - compact Waites reference tables with one row per equipment and one row per sensor
 
-Clustering and Maximo integration begin in later sprints.
+Maximo integration begins in later sprints.
 
 ## Requirements
 
@@ -82,6 +86,8 @@ uv run sensor-data workflow mock-day --date 2025-07-09
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 uv run sensor-data cluster features --source mock --date 2025-07-09
+uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k 4
+uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
 ```
 
 The leaf commands print JSON so they can be composed by scripts. The `workflow` commands print human-readable summaries by default and support `--json` when a combined structured result is useful.
@@ -108,6 +114,9 @@ uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-0
 uv run sensor-data cluster features --source mock --date 2025-07-09
 uv run sensor-data cluster features --source mock --date 2025-07-10
 uv run sensor-data cluster features --source mock --date 2025-07-11
+uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k 4
+uv run sensor-data cluster run --source mock --date 2025-07-10 --dimension x --k 4
+uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
 uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 ```
 
@@ -163,6 +172,9 @@ data/raw/waites/date=YYYY-MM-DD/
 data/processed/waites/reference/
 data/processed/snapshots/date=YYYY-MM-DD/
 data/processed/trends/start=YYYY-MM-DD_end=YYYY-MM-DD/
+data/processed/features/date=YYYY-MM-DD_source=SOURCE/
+data/processed/clusters/date=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
+data/processed/drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
 ```
 
 Live Waites canary ingestion writes the same raw paths:
