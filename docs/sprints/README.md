@@ -24,6 +24,9 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.3.1](0.3.1-operating-window-and-cluster-interpretation.md) | Operating window and cluster interpretation | Date-window orchestration, cluster quality summaries, and centroid-aligned drift |
 | [0.3.2](0.3.2-artifact-packing-and-retention.md) | Deferred artifact packing and retention | Parking lot for future packing once artifact volume justifies loader complexity |
 | [0.4.0](0.4.0-api-and-static-web.md) | API and web hardening | Dashboard polish, richer service responses, and browser workflow hardening |
+| [0.4.1](0.4.1-navigation-and-parameter-model.md) | Navigation and parameter model | Global context, equipment/sensor navigation, and view-local controls |
+| [0.4.2](0.4.2-chart-rendering-and-ui-polish.md) | Chart rendering and UI polish | Stable chart layout, metric controls, and dependency-light rendering decisions |
+| [0.4.3](0.4.3-on-demand-cluster-builds.md) | On-demand cluster builds | Explicit build/reuse flow for parameterized cluster and cluster-window artifacts |
 | [0.4.x](0.4.x-on-demand-source-drilldown.md) | On-demand source drilldown | Temporary live source detail for selected dashboard points without permanent raw storage |
 | [0.5.0](0.5.0-maximo-integration.md) | Maximo integration | Asset maintenance records aligned to Waites equipment by asset number |
 
