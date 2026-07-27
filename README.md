@@ -6,12 +6,12 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.3.1` adds operating-window workflows and centroid-aligned cluster interpretation on top of durable daily snapshots:
+Sprint `0.4.0` adds a read-only API and static web review surface on top of durable daily snapshots, trends, clusters, and centroid-aligned cluster-window interpretation:
 
 - uv-managed Python package
 - Typer CLI entry point
 - FastAPI app factory and `/health`
-- static browser app shell
+- static browser review dashboard
 - `.env.example` configuration contract
 - pytest harness
 - mock Waites fixtures
@@ -21,6 +21,7 @@ Sprint `0.3.1` adds operating-window workflows and centroid-aligned cluster inte
 - daily sensor snapshots under `data/processed/snapshots/`
 - trend-ready outputs under `data/processed/trends/`
 - snapshot and trend visibility through FastAPI
+- artifact discovery, equipment lookup, cluster, drift, and cluster-window visibility through FastAPI
 - controlled mock trend dates for `2025-07-09` through `2025-07-11`
 - opt-in live Waites raw evidence capture with secret-safe manifests
 - raw Waites validation reports under `data/raw/waites/date=YYYY-MM-DD/validation.json`
@@ -52,6 +53,8 @@ Sprint `0.3.1` adds operating-window workflows and centroid-aligned cluster inte
 - workflow raw-retention modes: `keep`, `compress`, and `release`
 - date-scoped staging purge after snapshot and ledger persistence are verified
 - compact Waites reference tables with one row per equipment and one row per sensor
+- browser controls for source, date range, dimension, `k`, equipment, and sensor filters
+- Plotly-based snapshot, trend, cluster, and drift views over API responses
 
 Maximo integration begins in later sprints.
 
@@ -155,10 +158,17 @@ Then open:
 - `http://127.0.0.1:8000/`
 - `http://127.0.0.1:8000/health`
 - `http://127.0.0.1:8000/api/dates`
+- `http://127.0.0.1:8000/api/artifacts`
 - `http://127.0.0.1:8000/api/waites/raw-runs`
-- `http://127.0.0.1:8000/api/snapshots/2025-07-09`
-- `http://127.0.0.1:8000/api/trends?start_date=2025-07-09&end_date=2025-07-11`
+- `http://127.0.0.1:8000/api/equipment?source=mock`
+- `http://127.0.0.1:8000/api/snapshots/2025-07-09?source=mock`
+- `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11`
+- `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4`
+- `http://127.0.0.1:8000/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&dimension=x&k=4`
+- `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4`
 - `http://127.0.0.1:8000/docs`
+
+The web and API are read-only over existing processed artifacts in sprint `0.4.0`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser.
 
 ## Source API
 

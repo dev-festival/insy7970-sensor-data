@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from insy_sensor_data import __version__
-from insy_sensor_data.api.routes import dates, health, snapshots, trends, waites
+from insy_sensor_data.api.routes import artifacts, dates, health, snapshots, trends, waites
 from insy_sensor_data.config import AppSettings
 
 
@@ -25,6 +25,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(dates.router)
+    app.include_router(artifacts.router)
     app.include_router(waites.router)
     app.include_router(snapshots.router)
     app.include_router(trends.router)

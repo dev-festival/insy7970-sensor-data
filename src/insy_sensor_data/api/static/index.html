@@ -5,29 +5,76 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>INSY Sensor Data</title>
     <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+    <script src="/static/app.js" defer></script>
   </head>
   <body>
-    <main class="shell">
-      <section class="status-panel" aria-labelledby="app-title">
-        <p class="eyebrow">Mock data service</p>
-        <h1 id="app-title">INSY Sensor Data</h1>
-        <p id="health-status">Checking service health...</p>
-        <dl class="data-status">
-          <div>
-            <dt>Raw Dates</dt>
-            <dd id="raw-dates">...</dd>
-          </div>
-          <div>
-            <dt>Snapshots</dt>
-            <dd id="snapshot-status">...</dd>
-          </div>
-          <div>
-            <dt>Trends</dt>
-            <dd id="trend-status">...</dd>
-          </div>
-        </dl>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Sensor Review</p>
+          <h1 id="app-title">INSY Sensor Data</h1>
+        </div>
+        <p id="health-status" class="health-status">Checking service health...</p>
+      </header>
+
+      <section class="controls" aria-label="Review controls">
+        <label>
+          <span>Source</span>
+          <select id="source-select"></select>
+        </label>
+        <label>
+          <span>Date</span>
+          <select id="date-select"></select>
+        </label>
+        <label>
+          <span>Start</span>
+          <select id="start-date-select"></select>
+        </label>
+        <label>
+          <span>End</span>
+          <select id="end-date-select"></select>
+        </label>
+        <label>
+          <span>Dimension</span>
+          <select id="dimension-select"></select>
+        </label>
+        <label>
+          <span>k</span>
+          <select id="k-select"></select>
+        </label>
+        <label class="wide-control">
+          <span>Equipment</span>
+          <select id="equipment-select"></select>
+        </label>
+        <label>
+          <span>Sensor</span>
+          <input id="sensor-input" type="search" inputmode="numeric" autocomplete="off">
+        </label>
+        <button id="refresh-button" type="button">Refresh</button>
+      </section>
+
+      <nav class="tabs" aria-label="Views">
+        <button class="tab is-active" type="button" data-view="snapshot">Snapshot</button>
+        <button class="tab" type="button" data-view="trend">Trend</button>
+        <button class="tab" type="button" data-view="cluster">Cluster</button>
+        <button class="tab" type="button" data-view="drift">Drift</button>
+      </nav>
+
+      <p id="status-line" class="status-line">Loading artifacts...</p>
+
+      <section id="summary-grid" class="summary-grid" aria-label="Summary"></section>
+
+      <section class="workspace">
+        <div id="plot" class="plot" role="img" aria-label="Current view chart"></div>
+      </section>
+
+      <section class="table-shell" aria-label="Data table">
+        <table>
+          <thead id="data-table-head"></thead>
+          <tbody id="data-table-body"></tbody>
+        </table>
       </section>
     </main>
-    <script src="/static/app.js"></script>
   </body>
 </html>
