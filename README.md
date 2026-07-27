@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.2.8` adds a clustering feature contract on top of the evidence report layer:
+Sprint `0.2.9` makes daily snapshots the durable operating layer:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -39,6 +39,11 @@ Sprint `0.2.8` adds a clustering feature contract on top of the evidence report 
 - dimension-specific clustering feature previews under `data/processed/features/`
 - `cluster features` command for X, Y, Z, and temperature feature matrices
 - feature readiness rows in evidence reports when previews are available
+- SQLite daily snapshot store mirrored from `sensor_snapshot.csv`
+- Waites ingestion ledger with endpoint counts, validation status, checksums, and retention status
+- workflow raw-retention modes: `keep`, `compress`, and `release`
+- date-scoped staging purge after snapshot and ledger persistence are verified
+- compact Waites reference tables with one row per equipment and one row per sensor
 
 Clustering and Maximo integration begin in later sprints.
 
@@ -69,6 +74,8 @@ uv run sensor-data raw compress --source waites --date 2025-07-09
 uv run sensor-data store load-waites --source mock --date 2025-07-09
 uv run sensor-data snapshot build --source mock --date 2025-07-09
 uv run sensor-data snapshot build --source mock --date 2025-07-09 --input sqlite
+uv run sensor-data snapshot store --source mock --date 2025-07-09
+uv run sensor-data store purge-native --source mock --date 2025-07-09 --dry-run
 uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
 uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11 --input sqlite
 uv run sensor-data workflow mock-day --date 2025-07-09
@@ -85,15 +92,14 @@ Live Waites canary fetches are explicit and should use small date ranges:
 uv run sensor-data waites fetch --source api --date 2026-07-19 --facility 679
 uv run sensor-data waites validate --source api --date 2026-07-19
 uv run sensor-data raw verify --source waites --date 2026-07-19
-uv run sensor-data raw compress --source waites --date 2026-07-19
 uv run sensor-data store load-waites --source api --date 2026-07-19
-uv run sensor-data snapshot build --source api --date 2026-07-19
 uv run sensor-data snapshot build --source api --date 2026-07-19 --input sqlite
-uv run sensor-data trend build --source api --start-date 2026-07-19 --end-date 2026-07-19
-uv run sensor-data workflow api-day --date 2026-07-19 --facility 679
+uv run sensor-data store purge-native --source api --date 2026-07-19 --confirm-delete
+uv run sensor-data trend build --source api --input sqlite --start-date 2026-07-19 --end-date 2026-07-19
+uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-retention release
 ```
 
-The live workflow reads `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`, saves raw responses under `data/raw/waites/`, writes validation reports beside the raw run, records checksums in manifests, and omits secrets from manifests. Keep `.env` and `data/` out of Git.
+The live workflow reads `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`, saves raw responses under `data/raw/waites/`, writes validation reports beside the raw run, stores the daily snapshot in CSV and SQLite, records a compact ingestion ledger, and defaults to releasing bulky raw/native/date-scoped staging rows after snapshot success. Use `--raw-retention keep --keep-native` when you need inspection/replay. Keep `.env` and `data/` out of Git.
 
 For a visible mock trend, fetch and build snapshots for each supported mock trend date first:
 
@@ -165,7 +171,7 @@ Live Waites canary ingestion writes the same raw paths:
 data/raw/waites/date=YYYY-MM-DD/
 ```
 
-Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite native observation tables while preserving source timestamps. API-source snapshot builds read the same raw directory once validation has no hard errors, including compressed `.json.gz` artifacts, or can read the SQLite observation store with `--input sqlite`. API-source trend builds only consume snapshots whose metadata source is `api` unless `--input sqlite` is requested.
+Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_equipment_reference` and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations.
 
 The mock trend dates are intentionally small and controlled:
 

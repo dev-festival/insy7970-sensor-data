@@ -87,6 +87,61 @@ def compress_raw_waites(settings: AppSettings, run_date: date) -> dict[str, Any]
     }
 
 
+def release_raw_waites(settings: AppSettings, run_date: date) -> dict[str, Any]:
+    raw_dir = _waites_raw_dir(settings, run_date)
+    manifest = _load_manifest(raw_dir)
+    source = manifest.get("source")
+    if source not in {"mock", "api"}:
+        raise ValueError("Waites manifest source must be one of: api, mock")
+
+    if not _all_artifacts_released(manifest):
+        ensure_waites_raw_valid(settings=settings, run_date=run_date, source=source)
+
+    released: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    deleted_paths: list[str] = []
+    for endpoint, filename in ENDPOINT_FILENAMES.items():
+        entry = _manifest_entry(manifest, endpoint)
+        if entry is None:
+            continue
+        artifact = entry.get("artifact") if isinstance(entry.get("artifact"), dict) else {}
+        logical_path = raw_dir / filename
+        if artifact.get("state") == "released":
+            skipped.append({"endpoint": endpoint, "reason": "already_released"})
+            continue
+
+        actual_path = resolve_artifact_path(logical_path)
+        metadata = _released_artifact_metadata(logical_path, actual_path, artifact)
+        for path in _raw_storage_variants(logical_path, actual_path):
+            if path.exists():
+                path.unlink()
+                deleted_paths.append(path.as_posix())
+        _set_manifest_artifact(manifest, endpoint, metadata)
+        released.append(
+            {
+                "endpoint": endpoint,
+                "logical_path": logical_path.as_posix(),
+                "byte_count": metadata["byte_count"],
+                "sha256": metadata["sha256"],
+            }
+        )
+
+    _touch_lifecycle(manifest)
+    _write_manifest(raw_dir, manifest)
+    return {
+        "source": RAW_SOURCE_WAITES,
+        "date": run_date.isoformat(),
+        "raw_dir": raw_dir.as_posix(),
+        "manifest_path": (raw_dir / "manifest.json").as_posix(),
+        "released_count": len(released),
+        "skipped_count": len(skipped),
+        "deleted_count": len(deleted_paths),
+        "released": released,
+        "skipped": skipped,
+        "deleted_paths": sorted(deleted_paths),
+    }
+
+
 def verify_raw_waites(settings: AppSettings, run_date: date) -> dict[str, Any]:
     raw_dir = _waites_raw_dir(settings, run_date)
     manifest = _load_manifest(raw_dir)
@@ -198,6 +253,13 @@ def _verify_artifact(
         "compressed_byte_count": None,
     }
 
+    if state == "released":
+        result["storage_path"] = artifact.get("storage_path")
+        result["byte_count"] = artifact.get("byte_count")
+        result["compressed_byte_count"] = artifact.get("compressed_byte_count")
+        result["released_at"] = artifact.get("released_at")
+        return result
+
     try:
         actual_path = resolve_artifact_path(logical_path)
     except FileNotFoundError as exc:
@@ -286,6 +348,58 @@ def _compressed_artifact_metadata(logical_path: Path, compressed_path: Path) -> 
         "compressed_byte_count": compressed_digest.byte_count,
         "compressed_sha256": compressed_digest.sha256,
         "compressed_at": _utc_now(),
+    }
+
+
+def _released_artifact_metadata(
+    logical_path: Path,
+    actual_path: Path,
+    artifact: dict[str, Any],
+) -> dict[str, Any]:
+    if actual_path.suffix == ".gz":
+        compressed_digest = _file_digest(actual_path)
+        uncompressed_digest = _gzip_uncompressed_digest(actual_path)
+        byte_count = artifact.get("byte_count") or uncompressed_digest.byte_count
+        sha256 = artifact.get("sha256") or uncompressed_digest.sha256
+        compressed_byte_count = artifact.get("compressed_byte_count") or compressed_digest.byte_count
+        compressed_sha256 = artifact.get("compressed_sha256") or compressed_digest.sha256
+    else:
+        digest = _file_digest(actual_path)
+        byte_count = artifact.get("byte_count") or digest.byte_count
+        sha256 = artifact.get("sha256") or digest.sha256
+        compressed_byte_count = artifact.get("compressed_byte_count")
+        compressed_sha256 = artifact.get("compressed_sha256")
+
+    return {
+        "schema_version": RAW_LIFECYCLE_SCHEMA_VERSION,
+        "logical_path": logical_path.as_posix(),
+        "storage_path": None,
+        "released_storage_path": actual_path.as_posix(),
+        "state": "released",
+        "previous_state": artifact.get("state"),
+        "compression": artifact.get("compression", "none"),
+        "byte_count": byte_count,
+        "sha256": sha256,
+        "compressed_byte_count": compressed_byte_count,
+        "compressed_sha256": compressed_sha256,
+        "released_at": _utc_now(),
+    }
+
+
+def _all_artifacts_released(manifest: dict[str, Any]) -> bool:
+    states = []
+    for endpoint in ENDPOINT_FILENAMES:
+        entry = _manifest_entry(manifest, endpoint)
+        artifact = entry.get("artifact") if isinstance(entry, dict) and isinstance(entry.get("artifact"), dict) else {}
+        states.append(artifact.get("state"))
+    return bool(states) and all(state == "released" for state in states)
+
+
+def _raw_storage_variants(logical_path: Path, actual_path: Path) -> set[Path]:
+    return {
+        actual_path,
+        logical_path,
+        logical_path.with_name(f"{logical_path.name}.gz"),
     }
 
 

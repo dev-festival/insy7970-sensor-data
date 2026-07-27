@@ -61,8 +61,12 @@ uv run sensor-data raw verify --source waites --date 2026-07-15
 uv run sensor-data raw compress --source waites --date 2026-07-15
 uv run sensor-data raw prune --source waites --older-than-days 30
 
+uv run sensor-data store load-waites --source api --date 2026-07-15
+uv run sensor-data store purge-native --source api --date 2026-07-15 --confirm-delete
 uv run sensor-data snapshot build --date 2026-07-15 --source mock
+uv run sensor-data snapshot store --date 2026-07-15 --source mock
 uv run sensor-data trend build --start-date 2026-07-01 --end-date 2026-07-15 --source mock
+uv run sensor-data workflow api-day --date 2026-07-15 --facility 679 --raw-retention release
 
 uv run sensor-data cluster features --date 2026-07-15 --dimension x --source mock
 uv run sensor-data cluster run --date 2026-07-15 --dimension x --k 4 --source mock
@@ -171,7 +175,7 @@ Raw files should be as close to the external response as possible. Processed fil
 
 Validation reports are the gate between raw evidence and processed outputs. They should describe source shape, record counts, warnings, and hard failures without transforming the raw files themselves.
 
-Raw endpoint artifacts may be stored as plain `.json` or gzip `.json.gz`; the logical artifact identity remains the original endpoint JSON filename. Manifests should record artifact state, byte counts, SHA-256 checksums, compressed byte counts, and compressed checksums. For live operating workflows, raw endpoint payloads are short-lived proof. Once validation, ingestion ledger records, snapshot CSVs, and SQLite daily snapshot rows exist for a date, the default pipeline may release raw payload files and timestamp-native observation rows unless the operator explicitly requests inspection retention.
+Raw endpoint artifacts may be stored as plain `.json` or gzip `.json.gz`; the logical artifact identity remains the original endpoint JSON filename. Manifests should record artifact state, byte counts, SHA-256 checksums, compressed byte counts, and compressed checksums. For live operating workflows, raw endpoint payloads are short-lived proof. Once validation, ingestion ledger records, snapshot CSVs, and SQLite daily snapshot rows exist for a date, the default pipeline may release raw payload files, timestamp-native observation rows, and date-scoped equipment/installation staging rows unless the operator explicitly requests inspection retention. Compact equipment and installation-point reference tables may stay as the one-row-per-ID view.
 
 ## Core Architecture
 
@@ -306,7 +310,7 @@ Expected bridge work between `0.2.0` and `0.3.0`:
 
 The rule for this bridge is: mock data owns behavior, live data validates assumptions, and human-facing evidence earns trust before more advanced modeling is added. Normal tests should remain offline, deterministic, and fixture-backed. Live tests or smoke checks should be opt-in and should never require secrets, plant network access, or large real datasets for the default development workflow.
 
-Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof: preserve them first, checksum them, validate them, summarize them into an ingestion ledger, and then release or pack them according to the workflow retention mode. The long-term working layer should be daily snapshots in CSV and SQLite, plus trends, features, clusters, drift, reports, and maintenance context. Timestamp-native SQLite observations are useful for inspection and replay, but they should not be required for the default clustering path after daily snapshots have been persisted.
+Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof: preserve them first, checksum them, validate them, summarize them into an ingestion ledger, and then release or pack them according to the workflow retention mode. The long-term working layer should be daily snapshots in CSV and SQLite, compact source reference tables, plus trends, features, clusters, drift, reports, and maintenance context. Timestamp-native SQLite observations and date-scoped source metadata copies are useful for inspection and replay, but they should not be required for the default clustering path after daily snapshots have been persisted.
 
 Expected post-clustering hardening before `0.4.0`:
 

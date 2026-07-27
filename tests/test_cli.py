@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import sqlite3
 
 from typer.testing import CliRunner
 
@@ -329,7 +330,63 @@ def test_cli_store_load_waites_and_sqlite_snapshot(tmp_path: Path) -> None:
         ],
     )
     assert snapshot_result.exit_code == 0
-    assert json.loads(snapshot_result.stdout)["input_mode"] == "sqlite"
+    snapshot_payload = json.loads(snapshot_result.stdout)
+    assert snapshot_payload["input_mode"] == "sqlite"
+    assert snapshot_payload["snapshot_store"]["row_count"] == 9
+
+    store_snapshot_result = runner.invoke(
+        app,
+        [
+            "snapshot",
+            "store",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert store_snapshot_result.exit_code == 0
+    assert json.loads(store_snapshot_result.stdout)["snapshot_store"]["row_count"] == 9
+
+    purge_preview = runner.invoke(
+        app,
+        [
+            "store",
+            "purge-native",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--dry-run",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert purge_preview.exit_code == 0
+    assert json.loads(purge_preview.stdout)["candidates"][0]["delete_ready"] is True
+
+    purge_result = runner.invoke(
+        app,
+        [
+            "store",
+            "purge-native",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--confirm-delete",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert purge_result.exit_code == 0
+    assert json.loads(purge_result.stdout)["rows_deleted"] == 57
+    assert _sqlite_count(data_dir, "waites_rms_observations") == 0
+    assert _sqlite_count(data_dir, "waites_installation_points") == 0
+    assert _sqlite_count(data_dir, "sensor_daily_snapshots") == 9
+    assert _sqlite_count(data_dir, "waites_installation_point_reference") == 8
 
 
 def test_cli_workflow_mock_day_prints_human_summary(tmp_path: Path) -> None:
@@ -392,6 +449,80 @@ def test_cli_workflow_mock_day_json_outputs_combined_summary(tmp_path: Path) -> 
         "Loaded SQLite observations",
         "Built sensor snapshot",
     ]
+
+
+def test_cli_workflow_mock_day_release_keeps_snapshot_only_operating_path(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-day",
+            "--date",
+            "2025-07-09",
+            "--raw-retention",
+            "release",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["retention"]["raw_retention_status"] == "released"
+    assert payload["retention"]["native_retention_status"] == "purged"
+    assert "Applied retention policy" in [step["title"] for step in payload["steps"]]
+    raw_dir = data_dir / "raw" / "waites" / "date=2025-07-09"
+    assert not (raw_dir / "equipment.json").exists()
+    assert (raw_dir / "manifest.json").exists()
+    assert (raw_dir / "validation.json").exists()
+    assert _sqlite_count(data_dir, "waites_rms_observations") == 0
+    assert _sqlite_count(data_dir, "waites_installation_points") == 0
+    assert _sqlite_count(data_dir, "sensor_daily_snapshots") == 9
+    assert _sqlite_count(data_dir, "waites_installation_point_reference") == 8
+
+    trend_result = runner.invoke(
+        app,
+        [
+            "trend",
+            "build",
+            "--source",
+            "mock",
+            "--input",
+            "sqlite",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-09",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert trend_result.exit_code == 0
+    assert json.loads(trend_result.stdout)["sensor_record_count"] == 9
+
+    feature_result = runner.invoke(
+        app,
+        [
+            "cluster",
+            "features",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--dimension",
+            "temperature",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert feature_result.exit_code == 0
+    assert json.loads(feature_result.stdout)["dimensions"]["temperature"]["row_count"] == 9
 
 
 def test_cli_workflow_mock_trend_writes_sqlite_backed_outputs(tmp_path: Path) -> None:
@@ -591,3 +722,8 @@ def test_cli_builds_multi_day_mock_trend(tmp_path: Path) -> None:
     assert trend_payload["sensor_record_count"] == 27
     assert trend_payload["skipped_dates"] == []
     assert (data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-11" / "sensor_trends.csv").exists()
+
+
+def _sqlite_count(data_dir: Path, table_name: str) -> int:
+    with sqlite3.connect(data_dir / "processed" / "observations.sqlite") as connection:
+        return int(connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])

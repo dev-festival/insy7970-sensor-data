@@ -8,7 +8,12 @@ import pytest
 
 from insy_sensor_data.artifacts import read_json
 from insy_sensor_data.config import AppSettings
-from insy_sensor_data.raw_lifecycle import compress_raw_waites, prune_raw_waites, verify_raw_waites
+from insy_sensor_data.raw_lifecycle import (
+    compress_raw_waites,
+    prune_raw_waites,
+    release_raw_waites,
+    verify_raw_waites,
+)
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.validate import validate_waites_raw
@@ -68,6 +73,33 @@ def test_verify_raw_waites_passes_for_plain_and_compressed_artifacts(tmp_path: P
     assert compressed["status"] == "valid"
     assert compressed["error_count"] == 0
     assert {artifact["state"] for artifact in compressed["artifacts"]} == {"compressed"}
+
+
+def test_release_raw_waites_deletes_payloads_but_keeps_manifest_verifiable(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    run_date = date(2025, 7, 9)
+    fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+    validate_waites_raw(settings=settings, run_date=run_date, source="mock")
+
+    summary = release_raw_waites(settings=settings, run_date=run_date)
+
+    raw_dir = tmp_path / "data" / "raw" / "waites" / "date=2025-07-09"
+    assert summary["released_count"] == 6
+    assert not (raw_dir / "equipment.json").exists()
+    assert not (raw_dir / "equipment.json.gz").exists()
+    assert (raw_dir / "manifest.json").exists()
+    assert (raw_dir / "validation.json").exists()
+
+    manifest = _manifest(tmp_path, "2025-07-09")
+    artifact = _endpoint(manifest, "equipment")["artifact"]
+    assert artifact["state"] == "released"
+    assert artifact["storage_path"] is None
+    assert artifact["released_storage_path"].endswith("equipment.json")
+    assert len(artifact["sha256"]) == 64
+
+    verification = verify_raw_waites(settings=settings, run_date=run_date)
+    assert verification["status"] == "valid"
+    assert {artifact["state"] for artifact in verification["artifacts"]} == {"released"}
 
 
 def test_verify_raw_waites_fails_on_checksum_mismatch(tmp_path: Path) -> None:

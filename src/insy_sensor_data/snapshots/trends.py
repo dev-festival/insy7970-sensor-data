@@ -5,8 +5,7 @@ from typing import Any
 
 from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
-from insy_sensor_data.observations import load_waites_snapshot_inputs
-from insy_sensor_data.snapshots.build import build_sensor_snapshot_rows
+from insy_sensor_data.observations import load_sensor_daily_snapshots
 from insy_sensor_data.storage import get_storage_paths
 
 
@@ -90,7 +89,7 @@ def build_trends(
             sensor_rows.append({"date": run_date.isoformat(), **_sensor_trend_row(row)})
 
     if not sensor_rows:
-        input_label = "SQLite observation loads" if input_mode == "sqlite" else "snapshot artifacts"
+        input_label = "SQLite daily snapshots" if input_mode == "sqlite" else "snapshot artifacts"
         raise FileNotFoundError(f"No {input_label} found for source {source} in the requested trend range.")
 
     equipment_rows = _equipment_trends(sensor_rows)
@@ -194,14 +193,7 @@ def _sqlite_snapshot_rows(
     run_date: date,
     source: str,
 ) -> list[dict[str, Any]]:
-    inputs = load_waites_snapshot_inputs(settings=settings, run_date=run_date, source=source)
-    return build_sensor_snapshot_rows(
-        equipment=inputs["equipment"],
-        installation_points=inputs["installation_points"],
-        rms=inputs["rms"],
-        impact=inputs["impact"],
-        temperature=inputs["temperature"],
-    )
+    return load_sensor_daily_snapshots(settings=settings, run_date=run_date, source=source)
 
 
 def _sensor_trend_row(row: dict[str, str]) -> dict[str, str]:

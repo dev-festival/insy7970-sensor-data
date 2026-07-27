@@ -11,11 +11,15 @@ import typer
 from insy_sensor_data.clustering.features import VALID_FEATURE_DIMENSIONS, build_feature_preview
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
-from insy_sensor_data.observations import load_waites_observations
+from insy_sensor_data.observations import (
+    VALID_RAW_RETENTION_MODES,
+    load_waites_observations,
+    purge_waites_native_observations,
+)
 from insy_sensor_data.raw_lifecycle import compress_raw_waites, prune_raw_waites, verify_raw_waites
 from insy_sensor_data.reports import build_mock_trend_report
 from insy_sensor_data.snapshots.build import VALID_SNAPSHOT_INPUT_MODES
-from insy_sensor_data.snapshots.build import build_sensor_snapshot
+from insy_sensor_data.snapshots.build import build_sensor_snapshot, store_existing_sensor_snapshot
 from insy_sensor_data.snapshots.trends import VALID_TREND_INPUT_MODES
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
@@ -268,6 +272,52 @@ def store_load_waites(
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
+@store_app.command("purge-native")
+def store_purge_native(
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode whose ledger/snapshot must exist: mock or api."),
+    ],
+    purge_date: Annotated[
+        str | None,
+        typer.Option("--date", help="Single source date to purge in YYYY-MM-DD format."),
+    ] = None,
+    start_date: Annotated[
+        str | None,
+        typer.Option("--start-date", help="Start date for a native-row purge range."),
+    ] = None,
+    end_date: Annotated[
+        str | None,
+        typer.Option("--end-date", help="End date for a native-row purge range."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Preview native-row purge candidates without deleting."),
+    ] = False,
+    confirm_delete: Annotated[
+        bool,
+        typer.Option("--confirm-delete", help="Required to delete timestamp-native SQLite rows."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Delete timestamp-native SQLite Waites rows after snapshot persistence is verified."""
+    source_mode = _validate_source(source)
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = purge_waites_native_observations(
+            settings=settings,
+            source=source_mode,
+            run_date=_parse_optional_run_date(purge_date, "date"),
+            start_date=_parse_optional_run_date(start_date, "start-date"),
+            end_date=_parse_optional_run_date(end_date, "end-date"),
+            dry_run=dry_run,
+            confirm_delete=confirm_delete,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
 @snapshot_app.command("build")
 def snapshot_build(
     snapshot_date: Annotated[
@@ -297,6 +347,32 @@ def snapshot_build(
             input_mode=snapshot_input,
         )
     except (FileNotFoundError, NotImplementedError, ValueError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
+@snapshot_app.command("store")
+def snapshot_store(
+    snapshot_date: Annotated[
+        str,
+        typer.Option("--date", help="Existing snapshot date in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Store an existing sensor_snapshot.csv in the SQLite daily snapshot table."""
+    source_mode = _validate_source(source)
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = store_existing_sensor_snapshot(
+            settings=settings,
+            run_date=_parse_run_date(snapshot_date),
+            source=source_mode,
+        )
+    except (FileNotFoundError, ValueError) as exc:
         _fail(str(exc))
     typer.echo(json.dumps(summary, sort_keys=True))
 
@@ -352,15 +428,26 @@ def workflow_mock_day(
         bool,
         typer.Option("--json", help="Print the combined workflow summary as JSON."),
     ] = False,
+    raw_retention: Annotated[
+        str,
+        typer.Option("--raw-retention", help="Raw retention mode after snapshot success: keep, compress, or release."),
+    ] = "keep",
+    keep_native: Annotated[
+        bool,
+        typer.Option("--keep-native", help="With release mode, keep timestamp-native SQLite rows for inspection."),
+    ] = False,
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Run the friendly one-day mock workflow."""
+    retention_mode = _validate_input_mode(raw_retention, VALID_RAW_RETENTION_MODES, "raw retention")
     settings = AppSettings.from_env(env_file=env_file)
     try:
         summary = run_mock_day_workflow(
             settings=settings,
             run_date=_parse_run_date(workflow_date),
             facility_id=facility,
+            raw_retention=retention_mode,
+            keep_native=keep_native,
         )
     except (FileNotFoundError, ValueError) as exc:
         _fail(str(exc))
@@ -389,10 +476,19 @@ def workflow_mock_trend(
         bool,
         typer.Option("--json", help="Print the combined workflow summary as JSON."),
     ] = False,
+    raw_retention: Annotated[
+        str,
+        typer.Option("--raw-retention", help="Raw retention mode after each snapshot success: keep, compress, or release."),
+    ] = "keep",
+    keep_native: Annotated[
+        bool,
+        typer.Option("--keep-native", help="With release mode, keep timestamp-native SQLite rows for inspection."),
+    ] = False,
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Run the friendly multi-day mock trend workflow."""
     trend_input = _validate_input_mode(input_mode, VALID_TREND_INPUT_MODES, "trend input")
+    retention_mode = _validate_input_mode(raw_retention, VALID_RAW_RETENTION_MODES, "raw retention")
     settings = AppSettings.from_env(env_file=env_file)
     try:
         summary = run_mock_trend_workflow(
@@ -401,6 +497,8 @@ def workflow_mock_trend(
             end_date=_parse_run_date(end_date),
             facility_id=facility,
             trend_input=trend_input,
+            raw_retention=retention_mode,
+            keep_native=keep_native,
         )
     except (FileNotFoundError, ValueError) as exc:
         _fail(str(exc))
@@ -421,15 +519,26 @@ def workflow_api_day(
         bool,
         typer.Option("--json", help="Print the combined workflow summary as JSON."),
     ] = False,
+    raw_retention: Annotated[
+        str,
+        typer.Option("--raw-retention", help="Raw retention mode after snapshot success: release, compress, or keep."),
+    ] = "release",
+    keep_native: Annotated[
+        bool,
+        typer.Option("--keep-native", help="With release mode, keep timestamp-native SQLite rows for inspection."),
+    ] = False,
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Run the friendly one-day live Waites canary workflow."""
+    retention_mode = _validate_input_mode(raw_retention, VALID_RAW_RETENTION_MODES, "raw retention")
     settings = AppSettings.from_env(env_file=env_file)
     try:
         summary = run_api_day_workflow(
             settings=settings,
             run_date=_parse_run_date(workflow_date),
             facility_id=facility,
+            raw_retention=retention_mode,
+            keep_native=keep_native,
         )
     except (FileNotFoundError, ValueError, WaitesApiError) as exc:
         _fail(str(exc))
@@ -534,6 +643,15 @@ def _parse_run_date(raw_date: str) -> date:
         return date.fromisoformat(raw_date)
     except ValueError as exc:
         raise typer.BadParameter("date must be in YYYY-MM-DD format") from exc
+
+
+def _parse_optional_run_date(raw_date: str | None, label: str) -> date | None:
+    if raw_date is None:
+        return None
+    try:
+        return date.fromisoformat(raw_date)
+    except ValueError as exc:
+        raise typer.BadParameter(f"{label} must be in YYYY-MM-DD format") from exc
 
 
 def _fail(message: str) -> None:

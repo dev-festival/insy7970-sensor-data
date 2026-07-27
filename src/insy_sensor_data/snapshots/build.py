@@ -6,9 +6,13 @@ from pathlib import Path
 from statistics import stdev
 from typing import Any, Iterable
 
-from insy_sensor_data.artifacts import read_json, write_csv_rows, write_json
+from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
-from insy_sensor_data.observations import load_waites_snapshot_inputs
+from insy_sensor_data.observations import (
+    record_waites_ingestion_ledger,
+    store_sensor_daily_snapshots,
+    load_waites_snapshot_inputs,
+)
 from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.waites.validate import ensure_waites_raw_valid
 
@@ -77,17 +81,38 @@ def build_sensor_snapshot(
 
     snapshot_path = output_dir / "sensor_snapshot.csv"
     metadata_path = output_dir / "metadata.json"
+    built_at = _utc_now()
     write_csv_rows(snapshot_path, rows, SNAPSHOT_FIELDS)
+    snapshot_store = store_sensor_daily_snapshots(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        rows=rows,
+        fieldnames=SNAPSHOT_FIELDS,
+        snapshot_csv_path=snapshot_path,
+        built_at=built_at,
+    )
+    ledger = _record_snapshot_ledger(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        raw_dir=raw_dir,
+        inputs=inputs,
+        snapshot_row_count=len(rows),
+        built_at=built_at,
+    )
     metadata = {
         "source": source,
         "input_mode": input_mode,
         "date": run_date.isoformat(),
-        "built_at": _utc_now(),
+        "built_at": built_at,
         "input_dir": raw_dir.as_posix() if input_mode == "raw" else None,
         "store_load": inputs.get("load"),
         "outputs": {
             "sensor_snapshot": snapshot_path.as_posix(),
             "metadata": metadata_path.as_posix(),
+            "sensor_daily_snapshots": snapshot_store,
+            "ingestion_ledger": ledger,
         },
         "record_count": len(rows),
         "validation": inputs["validation"],
@@ -117,6 +142,8 @@ def build_sensor_snapshot(
         "record_count": len(rows),
         "validation_status": inputs["validation"]["status"],
         "validation_warning_count": inputs["validation"]["warning_count"],
+        "snapshot_store": snapshot_store,
+        "ingestion_ledger": ledger,
     }
 
 
@@ -132,14 +159,51 @@ def list_snapshot_dates(settings: AppSettings) -> list[str]:
 
 
 def load_snapshot(settings: AppSettings, run_date: date) -> dict[str, Any]:
-    from insy_sensor_data.artifacts import read_csv_rows
-
     storage = get_storage_paths(settings.data_dir)
     snapshot_dir = storage.snapshot_dir(run_date.isoformat())
     return {
         "date": run_date.isoformat(),
         "metadata": read_json(snapshot_dir / "metadata.json"),
         "rows": read_csv_rows(snapshot_dir / "sensor_snapshot.csv"),
+    }
+
+
+def store_existing_sensor_snapshot(
+    settings: AppSettings,
+    run_date: date,
+    source: str = "mock",
+) -> dict[str, Any]:
+    if source not in {"mock", "api"}:
+        raise ValueError("source must be one of: api, mock")
+
+    storage = get_storage_paths(settings.data_dir)
+    snapshot_dir = storage.snapshot_dir(run_date.isoformat())
+    snapshot_path = snapshot_dir / "sensor_snapshot.csv"
+    metadata_path = snapshot_dir / "metadata.json"
+    metadata = read_json(metadata_path)
+    if metadata.get("source") != source:
+        raise ValueError(
+            f"Snapshot source {metadata.get('source')!r} does not match requested source {source!r}."
+        )
+
+    rows = read_csv_rows(snapshot_path)
+    built_at = str(metadata.get("built_at") or _utc_now())
+    snapshot_store = store_sensor_daily_snapshots(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        rows=rows,
+        fieldnames=SNAPSHOT_FIELDS,
+        snapshot_csv_path=snapshot_path,
+        built_at=built_at,
+    )
+    return {
+        "source": source,
+        "date": run_date.isoformat(),
+        "snapshot_path": snapshot_path.as_posix(),
+        "metadata_path": metadata_path.as_posix(),
+        "record_count": len(rows),
+        "snapshot_store": snapshot_store,
     }
 
 
@@ -195,17 +259,14 @@ def _load_snapshot_inputs(
 ) -> dict[str, Any]:
     if input_mode == "sqlite":
         inputs = load_waites_snapshot_inputs(settings=settings, run_date=run_date, source=source)
-        inputs["validation"] = {
-            "status": "loaded_from_sqlite",
-            "error_count": 0,
-            "warning_count": None,
-            "path": None,
-        }
+        inputs["validation"] = _sqlite_validation_report(inputs.get("load"))
         return inputs
 
     storage = get_storage_paths(settings.data_dir)
     raw_dir = storage.raw_waites_run_dir(run_date.isoformat())
-    validation_report = ensure_waites_raw_valid(settings=settings, run_date=run_date, source=source)
+    validation_report = _with_validation_path_alias(
+        ensure_waites_raw_valid(settings=settings, run_date=run_date, source=source)
+    )
     return {
         "load": None,
         "equipment": read_json(raw_dir / "equipment.json")["list"],
@@ -213,13 +274,64 @@ def _load_snapshot_inputs(
         "rms": read_json(raw_dir / "readings-rms.json")["list"],
         "impact": read_json(raw_dir / "readings-impact-vue.json")["list"],
         "temperature": read_json(raw_dir / "readings-temperature.json")["list"],
-        "validation": {
-            "status": validation_report["status"],
-            "error_count": validation_report["error_count"],
-            "warning_count": validation_report["warning_count"],
-            "path": validation_report["validation_path"],
-        },
+        "validation": validation_report,
     }
+
+
+def _record_snapshot_ledger(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+    raw_dir: Path,
+    inputs: dict[str, Any],
+    snapshot_row_count: int,
+    built_at: str,
+) -> dict[str, Any]:
+    manifest_path = _manifest_path(raw_dir, inputs)
+    manifest = read_json(manifest_path)
+    facility_id = int(manifest.get("facility_id") or settings.waites_facility_id)
+    return record_waites_ingestion_ledger(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        facility_id=facility_id,
+        manifest_path=manifest_path,
+        validation_report=inputs["validation"],
+        snapshot_row_count=snapshot_row_count,
+        snapshot_store_status="stored",
+        raw_retention_mode="keep",
+        raw_retention_status="kept",
+        native_retention_status="kept" if inputs.get("load") else "not_loaded",
+        snapshot_built_at=built_at,
+    )
+
+
+def _manifest_path(raw_dir: Path, inputs: dict[str, Any]) -> Path:
+    load = inputs.get("load") if isinstance(inputs.get("load"), dict) else {}
+    if load and load.get("manifest_path"):
+        return Path(str(load["manifest_path"]))
+    return raw_dir / "manifest.json"
+
+
+def _sqlite_validation_report(load_metadata: Any) -> dict[str, Any]:
+    if isinstance(load_metadata, dict) and load_metadata.get("manifest_path"):
+        validation_path = Path(str(load_metadata["manifest_path"])).with_name("validation.json")
+        if validation_path.exists():
+            return _with_validation_path_alias(read_json(validation_path))
+    return {
+        "status": "loaded_from_sqlite",
+        "error_count": 0,
+        "warning_count": 0,
+        "validated_at": None,
+        "validation_path": None,
+        "path": None,
+    }
+
+
+def _with_validation_path_alias(report: dict[str, Any]) -> dict[str, Any]:
+    output = dict(report)
+    output.setdefault("path", output.get("validation_path"))
+    return output
 
 
 def _all_installation_ids(

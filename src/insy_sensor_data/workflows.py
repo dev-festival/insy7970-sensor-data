@@ -4,8 +4,14 @@ from datetime import date, timedelta
 from typing import Any
 
 from insy_sensor_data.config import AppSettings
-from insy_sensor_data.observations import load_waites_observations
-from insy_sensor_data.raw_lifecycle import verify_raw_waites
+from insy_sensor_data.observations import (
+    VALID_RAW_RETENTION_MODES,
+    load_waites_observations,
+    purge_waites_native_observations,
+    update_ingestion_retention,
+    verify_sensor_daily_snapshot,
+)
+from insy_sensor_data.raw_lifecycle import compress_raw_waites, release_raw_waites, verify_raw_waites
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
@@ -17,7 +23,10 @@ def run_mock_day_workflow(
     run_date: date,
     facility_id: int = 679,
     snapshot_input: str = "sqlite",
+    raw_retention: str = "keep",
+    keep_native: bool = False,
 ) -> dict[str, Any]:
+    retention_mode = _validate_raw_retention(raw_retention)
     fetch_summary = fetch_waites(
         settings=settings,
         run_date=run_date,
@@ -32,6 +41,14 @@ def run_mock_day_workflow(
         source="mock",
         input_mode=snapshot_input,
     )
+    retention_summary = _apply_retention(
+        settings=settings,
+        run_date=run_date,
+        source="mock",
+        snapshot_summary=snapshot_summary,
+        raw_retention=retention_mode,
+        keep_native=keep_native,
+    )
 
     summary = {
         "workflow": "mock-day",
@@ -39,10 +56,13 @@ def run_mock_day_workflow(
         "date": run_date.isoformat(),
         "facility_id": facility_id,
         "snapshot_input": snapshot_input,
+        "raw_retention": retention_mode,
+        "keep_native": keep_native,
         "fetch": fetch_summary,
         "validation": validation_summary(validation_report),
         "load": load_summary,
         "snapshot": snapshot_summary,
+        "retention": retention_summary,
         "next_steps": [
             "Run a multi-day workflow when you want trend outputs.",
             (
@@ -57,6 +77,8 @@ def run_mock_day_workflow(
         _load_step(load_summary),
         _snapshot_step(snapshot_summary),
     ]
+    if retention_summary["raw_retention_mode"] != "keep":
+        summary["steps"].append(_retention_step(retention_summary))
     return summary
 
 
@@ -67,9 +89,12 @@ def run_mock_trend_workflow(
     facility_id: int = 679,
     trend_input: str = "snapshots",
     snapshot_input: str = "sqlite",
+    raw_retention: str = "keep",
+    keep_native: bool = False,
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
+    retention_mode = _validate_raw_retention(raw_retention)
 
     days: list[dict[str, Any]] = []
     for run_date in _date_range(start_date, end_date):
@@ -78,6 +103,8 @@ def run_mock_trend_workflow(
             run_date=run_date,
             facility_id=facility_id,
             snapshot_input=snapshot_input,
+            raw_retention=retention_mode,
+            keep_native=keep_native,
         )
         days.append(day)
 
@@ -97,6 +124,8 @@ def run_mock_trend_workflow(
         "facility_id": facility_id,
         "snapshot_input": snapshot_input,
         "trend_input": trend_input,
+        "raw_retention": retention_mode,
+        "keep_native": keep_native,
         "days": days,
         "trend": trend_summary,
         "next_steps": [
@@ -116,7 +145,10 @@ def run_api_day_workflow(
     run_date: date,
     facility_id: int = 679,
     snapshot_input: str = "sqlite",
+    raw_retention: str = "release",
+    keep_native: bool = False,
 ) -> dict[str, Any]:
+    retention_mode = _validate_raw_retention(raw_retention)
     fetch_summary = fetch_waites(
         settings=settings,
         run_date=run_date,
@@ -132,6 +164,14 @@ def run_api_day_workflow(
         source="api",
         input_mode=snapshot_input,
     )
+    retention_summary = _apply_retention(
+        settings=settings,
+        run_date=run_date,
+        source="api",
+        snapshot_summary=snapshot_summary,
+        raw_retention=retention_mode,
+        keep_native=keep_native,
+    )
 
     summary = {
         "workflow": "api-day",
@@ -139,14 +179,17 @@ def run_api_day_workflow(
         "date": run_date.isoformat(),
         "facility_id": facility_id,
         "snapshot_input": snapshot_input,
+        "raw_retention": retention_mode,
+        "keep_native": keep_native,
         "fetch": fetch_summary,
         "validation": validation_summary(validation_report),
         "verify": verify_summary,
         "load": load_summary,
         "snapshot": snapshot_summary,
+        "retention": retention_summary,
         "next_steps": [
-            "Review validation warnings before using live data for decisions.",
-            f"uv run sensor-data raw verify --source waites --date {run_date.isoformat()}",
+            "Review validation warnings and the ingestion ledger before using live data for decisions.",
+            f"uv run sensor-data trend build --source api --input sqlite --start-date {run_date.isoformat()} --end-date {run_date.isoformat()}",
         ],
     }
     summary["steps"] = [
@@ -156,6 +199,8 @@ def run_api_day_workflow(
         _load_step(load_summary),
         _snapshot_step(snapshot_summary),
     ]
+    if retention_summary["raw_retention_mode"] != "keep":
+        summary["steps"].append(_retention_step(retention_summary))
     return summary
 
 
@@ -245,6 +290,22 @@ def _snapshot_step(snapshot_summary: dict[str, Any]) -> dict[str, Any]:
             f"Input: {snapshot_summary.get('input_mode')}",
             f"Sensors: {snapshot_summary.get('record_count')}",
             f"Snapshot: {snapshot_summary.get('snapshot_path')}",
+            f"SQLite snapshot rows: {(snapshot_summary.get('snapshot_store') or {}).get('row_count')}",
+        ],
+    }
+
+
+def _retention_step(retention_summary: dict[str, Any]) -> dict[str, Any]:
+    native = retention_summary.get("native") or {}
+    raw = retention_summary.get("raw") or {}
+    return {
+        "title": "Applied retention policy",
+        "details": [
+            f"Mode: {retention_summary.get('raw_retention_mode')}",
+            f"Raw status: {retention_summary.get('raw_retention_status')}",
+            f"Native status: {retention_summary.get('native_retention_status')}",
+            f"Raw files changed: {raw.get('released_count', raw.get('compressed_count', 0))}",
+            f"Native rows deleted: {native.get('rows_deleted', 0)}",
         ],
     }
 
@@ -299,6 +360,116 @@ def _mock_trend_steps(
 
 def _sensor_counts(days: list[dict[str, Any]]) -> str:
     return ", ".join(str(day["snapshot"].get("record_count")) for day in days)
+
+
+def _apply_retention(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+    snapshot_summary: dict[str, Any],
+    raw_retention: str,
+    keep_native: bool,
+) -> dict[str, Any]:
+    retention_mode = _validate_raw_retention(raw_retention)
+    snapshot_verification = verify_sensor_daily_snapshot(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        expected_row_count=int(snapshot_summary.get("record_count") or 0),
+    )
+    if snapshot_verification["error_count"]:
+        raise ValueError(
+            "Daily snapshot persistence could not be verified; refusing retention action."
+        )
+
+    if retention_mode == "keep":
+        ledger_update = update_ingestion_retention(
+            settings=settings,
+            run_date=run_date,
+            source=source,
+            raw_retention_mode="keep",
+            raw_retention_status="kept",
+            native_retention_status="kept",
+        )
+        return {
+            "source": source,
+            "date": run_date.isoformat(),
+            "raw_retention_mode": retention_mode,
+            "raw_retention_status": "kept",
+            "native_retention_status": "kept",
+            "snapshot_verification": snapshot_verification,
+            "ledger": ledger_update,
+        }
+
+    if retention_mode == "compress":
+        raw_summary = compress_raw_waites(settings=settings, run_date=run_date)
+        ledger_update = update_ingestion_retention(
+            settings=settings,
+            run_date=run_date,
+            source=source,
+            raw_retention_mode="compress",
+            raw_retention_status="compressed",
+            native_retention_status="kept",
+        )
+        return {
+            "source": source,
+            "date": run_date.isoformat(),
+            "raw_retention_mode": retention_mode,
+            "raw_retention_status": "compressed",
+            "native_retention_status": "kept",
+            "snapshot_verification": snapshot_verification,
+            "raw": raw_summary,
+            "ledger": ledger_update,
+        }
+
+    raw_summary = release_raw_waites(settings=settings, run_date=run_date)
+    if keep_native:
+        native_summary = {
+            "source": source,
+            "date": run_date.isoformat(),
+            "dry_run": False,
+            "rows_deleted": 0,
+            "purged_dates": [],
+            "reason": "keep_native",
+        }
+        native_status = "kept"
+    else:
+        native_summary = purge_waites_native_observations(
+            settings=settings,
+            source=source,
+            run_date=run_date,
+            dry_run=False,
+            confirm_delete=True,
+        )
+        native_status = "purged"
+
+    ledger_update = update_ingestion_retention(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        raw_retention_mode="release",
+        raw_retention_status="released",
+        native_retention_status=native_status,
+    )
+    return {
+        "source": source,
+        "date": run_date.isoformat(),
+        "raw_retention_mode": retention_mode,
+        "raw_retention_status": "released",
+        "native_retention_status": native_status,
+        "snapshot_verification": snapshot_verification,
+        "raw": raw_summary,
+        "native": native_summary,
+        "ledger": ledger_update,
+    }
+
+
+def _validate_raw_retention(raw_retention: str) -> str:
+    retention_mode = raw_retention.strip().lower()
+    if retention_mode not in VALID_RAW_RETENTION_MODES:
+        allowed = ", ".join(sorted(VALID_RAW_RETENTION_MODES))
+        raise ValueError(f"raw_retention must be one of: {allowed}")
+    return retention_mode
 
 
 def _date_range(start_date: date, end_date: date) -> list[date]:

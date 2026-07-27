@@ -216,7 +216,16 @@ Loads a validated raw Waites run into SQLite:
 data/processed/observations.sqlite
 ```
 
-The load preserves native timestamps for RMS, temperature, ImpactVue, equipment, installation points, and action items. It records source date, source mode, facility, manifest SHA-256, load time, schema version, endpoint row counts, and daily metric rollup counts.
+The load preserves native timestamps for RMS, temperature, ImpactVue, equipment, installation points, and action items in date-scoped staging tables. It also upserts compact reference tables keyed by source and equipment/sensor ID:
+
+```text
+waites_equipment_reference
+waites_installation_point_reference
+```
+
+Those reference tables are the one-row-per-equipment and one-row-per-sensor view. The date-scoped `waites_equipment` and `waites_installation_points` rows exist only so a snapshot can replay the exact pull for that date when inspection retention is enabled.
+
+The load records source date, source mode, facility, manifest SHA-256, load time, schema version, endpoint row counts, and daily metric rollup counts.
 
 The command is idempotent by source date. By default, rerunning it replaces the existing rows for that date:
 
@@ -225,6 +234,16 @@ uv run sensor-data store load-waites --source mock --date 2025-07-09 --replace
 ```
 
 Use `--no-replace` when you want the command to fail if the date is already loaded.
+
+### Purge Native Waites Observations
+
+```powershell
+uv run sensor-data store purge-native --source mock --date 2025-07-09 --dry-run
+uv run sensor-data store purge-native --source api --date 2026-07-19 --confirm-delete
+uv run sensor-data store purge-native --source api --start-date 2026-07-13 --end-date 2026-07-15 --confirm-delete
+```
+
+Deletes date-scoped SQLite staging rows only after the matching ingestion ledger and SQLite daily snapshot rows exist and validate. It removes the selected date/range from `waites_equipment`, `waites_installation_points`, RMS, temperature, ImpactVue, action items, and derived rollups. It keeps the one-row reference tables, daily snapshot table, ledger, snapshot CSV, metadata, manifest, and validation report.
 
 ### Build Sensor Snapshot
 
@@ -242,6 +261,16 @@ data/processed/snapshots/date=2025-07-09/metadata.json
 
 Snapshot builds validate the matching raw run first. The snapshot metadata records the validation status and report path.
 
+Every snapshot build also writes the same daily rows into SQLite:
+
+```text
+data/processed/observations.sqlite
+  sensor_daily_snapshots
+  waites_ingestion_ledger
+```
+
+The ledger records endpoint row counts, validation status, manifest hash, raw artifact metadata, snapshot row count, and retention status.
+
 To build from the SQLite observation store instead:
 
 ```powershell
@@ -249,6 +278,12 @@ uv run sensor-data snapshot build --source mock --date 2025-07-09 --input sqlite
 ```
 
 Load the date first with `store load-waites`.
+
+To backfill the SQLite daily snapshot table from an existing CSV snapshot:
+
+```powershell
+uv run sensor-data snapshot store --source mock --date 2025-07-09
+```
 
 ### Build Trends
 
@@ -267,13 +302,13 @@ data/processed/trends/start=2025-07-09_end=2025-07-11/metadata.json
 
 Trend builds only consume snapshots whose metadata source matches the requested `--source`. This prevents mock and API snapshots from being mixed silently.
 
-To build trend outputs directly from SQLite observation loads:
+To build trend outputs from the SQLite daily snapshot store:
 
 ```powershell
 uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11 --input sqlite
 ```
 
-Missing SQLite loads in the range are reported as skipped dates.
+Missing SQLite daily snapshots in the range are reported as skipped dates. This path does not require raw endpoint JSON or timestamp-native SQLite observation rows.
 
 ### Run Human-Readable Workflows
 
@@ -299,7 +334,20 @@ It can also build trends directly from SQLite observation loads:
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11 --input sqlite
 ```
 
-`api-day` is the friendly live canary wrapper. It fetches live Waites data, validates the raw shape, verifies checksums, loads SQLite observations, and builds an API-source snapshot. It requires `WAITES_ACCESS_TOKEN`.
+`api-day` is the friendly live canary wrapper. It fetches live Waites data, validates the raw shape, verifies checksums, loads SQLite observations, builds an API-source snapshot, stores the daily rows in SQLite, and applies the retention policy. It requires `WAITES_ACCESS_TOKEN`.
+
+Raw retention modes are available on day and trend workflows:
+
+```powershell
+uv run sensor-data workflow mock-day --date 2025-07-09 --raw-retention keep
+uv run sensor-data workflow mock-day --date 2025-07-09 --raw-retention release
+uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-retention release
+uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-retention keep --keep-native
+```
+
+`keep` preserves raw endpoint files, timestamp-native SQLite rows, and date-scoped source metadata copies for inspection. `compress` gzips endpoint payloads and keeps SQLite staging rows. `release` deletes endpoint payloads and purges date-scoped SQLite staging rows after snapshot and ledger persistence are verified. Live `api-day` defaults to `release`; mock workflows default to `keep`.
+
+In release mode, `waites_installation_point_reference` remains one row per sensor while `waites_installation_points` is cleared for that source date.
 
 Each workflow supports `--json` when a script wants the combined structured result:
 
@@ -385,14 +433,32 @@ uv run sensor-data cluster features --source mock --date 2025-07-09 --json
 
 ## Raw Retention Guidance
 
-Keep live raw JSON long enough to validate, troubleshoot, and reprocess the daily facts. Compress validated raw runs early, especially live API pulls. Treat `data/processed/observations.sqlite`, snapshots, trends, clusters, drift, and Maximo joins as the longer-lived working set.
+The default live operating layer is now the daily snapshot CSV plus the SQLite `sensor_daily_snapshots` table and `waites_ingestion_ledger`. Keep live raw JSON only long enough to validate, troubleshoot, and persist the daily facts.
 
-Deletion should stay deliberate:
+For normal live canaries:
+
+```powershell
+uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-retention release
+```
+
+For inspection/replay:
+
+```powershell
+uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-retention keep --keep-native
+```
+
+For lower-level manual cleanup, keep deletion scoped and deliberate:
 
 - run `raw verify`;
-- run `raw prune` as dry-run;
-- review candidate dates;
-- rerun with `--delete --confirm-delete` only when the processed outputs or SQLite observations are sufficient.
+- build or store the daily snapshot;
+- run `store purge-native --dry-run`;
+- rerun with `--confirm-delete` only when the ledger and snapshot rows are present.
+
+If older release-mode dates left date-scoped installation/equipment rows behind, clean them with:
+
+```powershell
+uv run sensor-data store purge-native --source api --start-date 2026-07-23 --end-date 2026-07-25 --confirm-delete
+```
 
 Example multi-day mock workflow:
 
