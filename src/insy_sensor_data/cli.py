@@ -15,6 +15,7 @@ from insy_sensor_data.clustering.model import (
     build_cluster_run,
     compare_cluster_drift,
 )
+from insy_sensor_data.clustering.window import align_cluster_drift, build_cluster_window
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
 from insy_sensor_data.observations import (
@@ -34,7 +35,9 @@ from insy_sensor_data.waites.validate import validate_waites_raw, validation_sum
 from insy_sensor_data.workflows import (
     format_workflow_summary,
     run_api_day_workflow,
+    run_api_range_workflow,
     run_mock_day_workflow,
+    run_mock_range_workflow,
     run_mock_trend_workflow,
 )
 
@@ -511,6 +514,96 @@ def workflow_mock_trend(
     _emit_workflow_summary(summary, json_output)
 
 
+@workflow_app.command("mock-range")
+def workflow_mock_range(
+    start_date: Annotated[
+        str,
+        typer.Option("--start-date", help="Range start date in YYYY-MM-DD format."),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Option("--end-date", help="Range end date in YYYY-MM-DD format."),
+    ],
+    facility: Annotated[
+        int,
+        typer.Option("--facility", help="Waites facility ID."),
+    ] = 679,
+    input_mode: Annotated[
+        str,
+        typer.Option("--input", help="Trend input mode: snapshots or sqlite."),
+    ] = "sqlite",
+    dimension: Annotated[
+        str,
+        typer.Option("--dimension", "--axis", help="Primary clustering dimension: x, y, z, or temperature."),
+    ] = "x",
+    dimensions: Annotated[
+        str | None,
+        typer.Option("--dimensions", help="Comma-separated clustering dimensions, e.g. x,y,z,temperature."),
+    ] = None,
+    k: Annotated[
+        int,
+        typer.Option("--k", help="Number of KMeans clusters for cluster windows."),
+    ] = 4,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the combined workflow summary as JSON."),
+    ] = False,
+    raw_retention: Annotated[
+        str,
+        typer.Option("--raw-retention", help="Raw retention mode after each snapshot success: keep, compress, or release."),
+    ] = "keep",
+    keep_native: Annotated[
+        bool,
+        typer.Option("--keep-native", help="With release mode, keep timestamp-native SQLite rows for inspection."),
+    ] = False,
+    skip_fetch: Annotated[
+        bool,
+        typer.Option("--skip-fetch", help="Reuse existing snapshots or raw evidence without fetching."),
+    ] = False,
+    skip_cluster: Annotated[
+        bool,
+        typer.Option("--skip-cluster", help="Build snapshots/trends without cluster windows."),
+    ] = False,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume/--no-resume", help="Reuse valid existing artifacts by default."),
+    ] = True,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Rebuild valid existing artifacts deliberately."),
+    ] = False,
+    max_days: Annotated[
+        int,
+        typer.Option("--max-days", help="Refuse ranges larger than this many dates."),
+    ] = 31,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Run the friendly mock operating-window workflow."""
+    trend_input = _validate_input_mode(input_mode, VALID_TREND_INPUT_MODES, "trend input")
+    retention_mode = _validate_input_mode(raw_retention, VALID_RAW_RETENTION_MODES, "raw retention")
+    cluster_dimensions = _parse_dimensions(dimension, dimensions)
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = run_mock_range_workflow(
+            settings=settings,
+            start_date=_parse_run_date(start_date),
+            end_date=_parse_run_date(end_date),
+            facility_id=facility,
+            trend_input=trend_input,
+            raw_retention=retention_mode,
+            keep_native=keep_native,
+            dimensions=cluster_dimensions,
+            k=k,
+            skip_fetch=skip_fetch,
+            skip_cluster=skip_cluster,
+            force=force or not resume,
+            max_days=max_days,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_workflow_summary(summary, json_output)
+
+
 @workflow_app.command("api-day")
 def workflow_api_day(
     workflow_date: Annotated[
@@ -545,6 +638,96 @@ def workflow_api_day(
             facility_id=facility,
             raw_retention=retention_mode,
             keep_native=keep_native,
+        )
+    except (FileNotFoundError, ValueError, WaitesApiError) as exc:
+        _fail(str(exc))
+    _emit_workflow_summary(summary, json_output)
+
+
+@workflow_app.command("api-range")
+def workflow_api_range(
+    start_date: Annotated[
+        str,
+        typer.Option("--start-date", help="Range start date in YYYY-MM-DD format."),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Option("--end-date", help="Range end date in YYYY-MM-DD format."),
+    ],
+    facility: Annotated[
+        int,
+        typer.Option("--facility", help="Waites facility ID."),
+    ] = 679,
+    input_mode: Annotated[
+        str,
+        typer.Option("--input", help="Trend input mode: snapshots or sqlite."),
+    ] = "sqlite",
+    dimension: Annotated[
+        str,
+        typer.Option("--dimension", "--axis", help="Primary clustering dimension: x, y, z, or temperature."),
+    ] = "x",
+    dimensions: Annotated[
+        str | None,
+        typer.Option("--dimensions", help="Comma-separated clustering dimensions, e.g. x,y,z,temperature."),
+    ] = None,
+    k: Annotated[
+        int,
+        typer.Option("--k", help="Number of KMeans clusters for cluster windows."),
+    ] = 4,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the combined workflow summary as JSON."),
+    ] = False,
+    raw_retention: Annotated[
+        str,
+        typer.Option("--raw-retention", help="Raw retention mode after each snapshot success: release, compress, or keep."),
+    ] = "release",
+    keep_native: Annotated[
+        bool,
+        typer.Option("--keep-native", help="With release mode, keep timestamp-native SQLite rows for inspection."),
+    ] = False,
+    skip_fetch: Annotated[
+        bool,
+        typer.Option("--skip-fetch", help="Reuse existing snapshots or raw evidence without fetching."),
+    ] = False,
+    skip_cluster: Annotated[
+        bool,
+        typer.Option("--skip-cluster", help="Build snapshots/trends without cluster windows."),
+    ] = False,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume/--no-resume", help="Reuse valid existing artifacts by default."),
+    ] = True,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Rebuild valid existing artifacts deliberately."),
+    ] = False,
+    max_days: Annotated[
+        int,
+        typer.Option("--max-days", help="Refuse ranges larger than this many dates."),
+    ] = 31,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Run the friendly live Waites operating-window workflow."""
+    trend_input = _validate_input_mode(input_mode, VALID_TREND_INPUT_MODES, "trend input")
+    retention_mode = _validate_input_mode(raw_retention, VALID_RAW_RETENTION_MODES, "raw retention")
+    cluster_dimensions = _parse_dimensions(dimension, dimensions)
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = run_api_range_workflow(
+            settings=settings,
+            start_date=_parse_run_date(start_date),
+            end_date=_parse_run_date(end_date),
+            facility_id=facility,
+            trend_input=trend_input,
+            raw_retention=retention_mode,
+            keep_native=keep_native,
+            dimensions=cluster_dimensions,
+            k=k,
+            skip_fetch=skip_fetch,
+            skip_cluster=skip_cluster,
+            force=force or not resume,
+            max_days=max_days,
         )
     except (FileNotFoundError, ValueError, WaitesApiError) as exc:
         _fail(str(exc))
@@ -713,6 +896,117 @@ def cluster_drift(
     _emit_cluster_drift_summary(summary, json_output)
 
 
+@cluster_app.command("align-drift")
+def cluster_align_drift(
+    from_date: Annotated[
+        str,
+        typer.Option("--from-date", help="Earlier cluster date in YYYY-MM-DD format."),
+    ],
+    to_date: Annotated[
+        str,
+        typer.Option("--to-date", help="Later cluster date in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    dimension: Annotated[
+        str,
+        typer.Option("--dimension", "--axis", help="Clustering dimension: x, y, z, or temperature."),
+    ] = "x",
+    k: Annotated[
+        int,
+        typer.Option("--k", help="Cluster count used by both cluster runs."),
+    ] = 4,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Rebuild existing aligned drift artifacts."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the aligned drift summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Compare cluster drift after centroid-aligning labels between dates."""
+    source_mode = _validate_source(source)
+    cluster_dimension = _validate_input_mode(dimension, VALID_CLUSTER_DIMENSIONS, "dimension")
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = align_cluster_drift(
+            settings=settings,
+            from_date=_parse_run_date(from_date),
+            to_date=_parse_run_date(to_date),
+            source=source_mode,
+            dimension=cluster_dimension,
+            k=k,
+            force=force,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_aligned_drift_summary(summary, json_output)
+
+
+@cluster_app.command("window")
+def cluster_window(
+    start_date: Annotated[
+        str,
+        typer.Option("--start-date", help="Window start date in YYYY-MM-DD format."),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Option("--end-date", help="Window end date in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    dimension: Annotated[
+        str,
+        typer.Option("--dimension", "--axis", help="Clustering dimension: x, y, z, or temperature."),
+    ] = "x",
+    k: Annotated[
+        int,
+        typer.Option("--k", help="Number of KMeans clusters."),
+    ] = 4,
+    random_seed: Annotated[
+        int,
+        typer.Option("--random-seed", help="Deterministic KMeans initialization seed."),
+    ] = DEFAULT_RANDOM_SEED,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume/--no-resume", help="Reuse valid existing artifacts by default."),
+    ] = True,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Rebuild valid existing artifacts deliberately."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the cluster window summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Run or reuse per-date clusters and build centroid-aligned window interpretation."""
+    source_mode = _validate_source(source)
+    cluster_dimension = _validate_input_mode(dimension, VALID_CLUSTER_DIMENSIONS, "dimension")
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = build_cluster_window(
+            settings=settings,
+            start_date=_parse_run_date(start_date),
+            end_date=_parse_run_date(end_date),
+            source=source_mode,
+            dimension=cluster_dimension,
+            k=k,
+            random_seed=random_seed,
+            force=force or not resume,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_cluster_window_summary(summary, json_output)
+
+
 def _validate_source(source: str) -> str:
     source_mode = source.strip().lower()
     if source_mode not in VALID_SOURCE_MODES:
@@ -755,6 +1049,18 @@ def _parse_optional_run_date(raw_date: str | None, label: str) -> date | None:
 def _fail(message: str) -> None:
     typer.echo(f"Error: {message}", err=True)
     raise typer.Exit(code=1)
+
+
+def _parse_dimensions(dimension: str, dimensions: str | None) -> list[str]:
+    raw_values = dimensions.split(",") if dimensions else [dimension]
+    parsed = [
+        _validate_input_mode(raw_value.strip(), VALID_CLUSTER_DIMENSIONS, "dimension")
+        for raw_value in raw_values
+        if raw_value.strip()
+    ]
+    if not parsed:
+        raise typer.BadParameter("at least one dimension is required")
+    return parsed
 
 
 def _emit_workflow_summary(summary: dict[str, object], json_output: bool) -> None:
@@ -838,3 +1144,52 @@ def _emit_cluster_drift_summary(summary: dict[str, object], json_output: bool) -
     typer.echo(f"Changed ratio: {summary.get('changed_ratio')}")
     typer.echo(f"Assignment drift: {summary['cluster_drift_path']}")
     typer.echo(f"Centroid drift: {summary['centroid_drift_path']}")
+
+
+def _emit_aligned_drift_summary(summary: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(summary, sort_keys=True))
+        return
+
+    typer.echo(
+        f"Aligned cluster drift: {summary['from_date']} to {summary['to_date']} "
+        f"({summary['source']}, {summary['dimension']}, k={summary['k']})"
+    )
+    typer.echo("")
+    typer.echo(f"Output: {summary['drift_dir']}")
+    typer.echo(f"Matched sensors: {summary['matched_sensor_count']}")
+    typer.echo(f"Raw label changes: {summary['raw_label_changed_count']}")
+    typer.echo(f"Aligned changes: {summary['aligned_changed_count']}")
+    typer.echo(f"Aligned changed ratio: {summary.get('aligned_changed_ratio')}")
+    typer.echo(f"Interpretation: {summary.get('interpretation')}")
+    typer.echo(f"Aligned sensor drift: {summary['aligned_cluster_drift_path']}")
+    typer.echo(f"Centroid alignment: {summary['centroid_alignment_path']}")
+
+
+def _emit_cluster_window_summary(summary: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(summary, sort_keys=True))
+        return
+
+    typer.echo(
+        f"Cluster window: {summary['start_date']} to {summary['end_date']} "
+        f"({summary['source']}, {summary['dimension']}, k={summary['k']})"
+    )
+    typer.echo("")
+    typer.echo(f"Output: {summary['cluster_window_dir']}")
+    typer.echo(f"Dates: {summary['date_count']}")
+    typer.echo(f"Adjacent drift pairs: {summary['pair_count']}")
+    typer.echo(f"Warnings: {summary['warning_count']}")
+    typer.echo(f"Window summary: {summary['window_summary_path']}")
+    typer.echo(f"Quality summary: {summary['quality_summary_path']}")
+    typer.echo(f"Aligned drift summary: {summary['aligned_drift_summary_path']}")
+    for run in summary.get("date_runs", []):
+        typer.echo(
+            f"{run['date']}: {run['quality_level']} "
+            f"(rows={run['row_count']}, silhouette={run.get('silhouette_score')})"
+        )
+    for pair in summary.get("aligned_pairs", []):
+        typer.echo(
+            f"{pair['from_date']} -> {pair['to_date']}: "
+            f"raw={pair['raw_label_changed_count']}, aligned={pair['aligned_changed_count']}"
+        )

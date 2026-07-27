@@ -7,8 +7,10 @@ import json
 
 from typer.testing import CliRunner
 
+from insy_sensor_data.artifacts import write_csv_rows, write_json
 from insy_sensor_data.cli import app
 from insy_sensor_data.clustering.model import build_cluster_run, compare_cluster_drift
+from insy_sensor_data.clustering.window import align_cluster_drift, build_cluster_window
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.waites.fetch import fetch_waites
@@ -113,6 +115,62 @@ def test_compare_cluster_drift_writes_assignment_and_centroid_outputs(tmp_path: 
     assert metrics["matched_sensor_count"] == 9
 
 
+def test_align_cluster_drift_handles_centroid_label_permutation(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    from_date = date(2025, 7, 9)
+    to_date = date(2025, 7, 10)
+    _write_permuted_cluster_artifacts(settings, from_date, to_date)
+
+    summary = align_cluster_drift(
+        settings=settings,
+        from_date=from_date,
+        to_date=to_date,
+        source="mock",
+        dimension="x",
+        k=2,
+    )
+
+    assert summary["matched_sensor_count"] == 2
+    assert summary["raw_label_changed_count"] == 2
+    assert summary["aligned_changed_count"] == 0
+    assert summary["warnings"][0]["code"] == "label_alignment_adjusted_drift"
+
+    alignment_rows = _csv_rows(Path(summary["centroid_alignment_path"]))
+    assert {row["from_cluster"]: row["to_cluster"] for row in alignment_rows} == {"0": "1", "1": "0"}
+
+    drift_rows = _csv_rows(Path(summary["aligned_cluster_drift_path"]))
+    assert {row["aligned_changed"] for row in drift_rows} == {"false"}
+
+
+def test_build_cluster_window_writes_quality_and_aligned_drift_outputs(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    start_date = date(2025, 7, 9)
+    end_date = date(2025, 7, 10)
+    for run_date in [start_date, end_date]:
+        _prepare_snapshot(settings, run_date)
+
+    summary = build_cluster_window(
+        settings=settings,
+        start_date=start_date,
+        end_date=end_date,
+        source="mock",
+        dimension="x",
+        k=3,
+    )
+
+    assert summary["date_count"] == 2
+    assert summary["pair_count"] == 1
+    assert summary["warning_count"] >= 2
+    assert Path(summary["window_summary_path"]).exists()
+    assert Path(summary["quality_summary_path"]).exists()
+    assert Path(summary["aligned_drift_summary_path"]).exists()
+    assert Path(summary["centroid_alignment_path"]).exists()
+
+    quality_rows = _csv_rows(Path(summary["quality_summary_path"]))
+    assert quality_rows[0]["quality_level"] == "contract_test_only"
+    assert "contract" in quality_rows[0]["interpretation"].lower()
+
+
 def test_cli_cluster_run_and_drift_write_json_summaries(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"
@@ -193,6 +251,68 @@ def test_cli_cluster_run_and_drift_write_json_summaries(tmp_path: Path) -> None:
     assert Path(drift_payload["cluster_drift_path"]).exists()
 
 
+def test_cli_cluster_window_and_align_drift_write_json_summaries(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+    settings = AppSettings.from_env(env_file=env_file)
+    for run_date in [date(2025, 7, 9), date(2025, 7, 10)]:
+        _prepare_snapshot(settings, run_date)
+
+    window_result = runner.invoke(
+        app,
+        [
+            "cluster",
+            "window",
+            "--source",
+            "mock",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-10",
+            "--dimension",
+            "x",
+            "--k",
+            "3",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert window_result.exit_code == 0
+    window_payload = json.loads(window_result.stdout)
+    assert window_payload["date_count"] == 2
+    assert window_payload["pair_count"] == 1
+    assert Path(window_payload["quality_summary_path"]).exists()
+
+    align_result = runner.invoke(
+        app,
+        [
+            "cluster",
+            "align-drift",
+            "--source",
+            "mock",
+            "--from-date",
+            "2025-07-09",
+            "--to-date",
+            "2025-07-10",
+            "--dimension",
+            "x",
+            "--k",
+            "3",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert align_result.exit_code == 0
+    align_payload = json.loads(align_result.stdout)
+    assert align_payload["matched_sensor_count"] == 9
+    assert Path(align_payload["centroid_alignment_path"]).exists()
+
+
 def _prepare_snapshot(settings: AppSettings, run_date: date) -> None:
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
     build_sensor_snapshot(settings=settings, run_date=run_date)
@@ -201,3 +321,117 @@ def _prepare_snapshot(settings: AppSettings, run_date: date) -> None:
 def _csv_rows(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as csv_file:
         return list(csv.DictReader(csv_file))
+
+
+def _write_permuted_cluster_artifacts(settings: AppSettings, from_date: date, to_date: date) -> None:
+    cluster_root = settings.data_dir / "processed" / "clusters"
+    from_dir = cluster_root / "date=2025-07-09_source=mock_dimension=x_k=2"
+    to_dir = cluster_root / "date=2025-07-10_source=mock_dimension=x_k=2"
+    from_dir.mkdir(parents=True, exist_ok=True)
+    to_dir.mkdir(parents=True, exist_ok=True)
+
+    sensor_fields = [
+        "installation_point_id",
+        "installation_point_name",
+        "equipment_id",
+        "equipment_name",
+        "sensor_id",
+        "facility_id",
+        "customer_asset_id",
+        "installation_customer_asset_id",
+        "equipment_customer_asset_id",
+        "cluster",
+        "distance_to_centroid",
+        "rms_vel_mean_x",
+    ]
+    write_csv_rows(
+        from_dir / "sensor_clusters.csv",
+        [
+            _cluster_sensor_row("201300", "0", 1.0),
+            _cluster_sensor_row("201301", "1", 9.0),
+        ],
+        sensor_fields,
+    )
+    write_csv_rows(
+        to_dir / "sensor_clusters.csv",
+        [
+            _cluster_sensor_row("201300", "1", 1.1),
+            _cluster_sensor_row("201301", "0", 8.9),
+        ],
+        sensor_fields,
+    )
+
+    summary_fields = [
+        "cluster",
+        "sensor_count",
+        "sensor_fraction",
+        "within_cluster_sse",
+        "mean_rms_vel_mean_x",
+        "centroid_scaled_rms_vel_mean_x",
+    ]
+    write_csv_rows(
+        from_dir / "cluster_summary.csv",
+        [_cluster_summary_row("0", 1.0), _cluster_summary_row("1", 9.0)],
+        summary_fields,
+    )
+    write_csv_rows(
+        to_dir / "cluster_summary.csv",
+        [_cluster_summary_row("0", 9.1), _cluster_summary_row("1", 1.1)],
+        summary_fields,
+    )
+    write_csv_rows(from_dir / "pca_coordinates.csv", [], ["installation_point_id"])
+    write_csv_rows(to_dir / "pca_coordinates.csv", [], ["installation_point_id"])
+    for run_date, output_dir in [(from_date, from_dir), (to_date, to_dir)]:
+        write_json(
+            output_dir / "metrics.json",
+            {
+                "schema_version": 1,
+                "source": "mock",
+                "date": run_date.isoformat(),
+                "dimension": "x",
+                "k": 2,
+                "random_seed": 42,
+                "row_count": 2,
+                "feature_count": 1,
+                "cluster_counts": {"0": 1, "1": 1},
+                "kmeans": {"inertia": 0.0},
+                "metrics": {
+                    "silhouette_score": {"available": False, "value": None},
+                    "calinski_harabasz_score": {"available": False, "value": None},
+                },
+                "outputs": {
+                    "sensor_clusters": (output_dir / "sensor_clusters.csv").as_posix(),
+                    "cluster_summary": (output_dir / "cluster_summary.csv").as_posix(),
+                    "pca_coordinates": (output_dir / "pca_coordinates.csv").as_posix(),
+                    "metrics": (output_dir / "metrics.json").as_posix(),
+                },
+            },
+        )
+
+
+def _cluster_sensor_row(installation_point_id: str, cluster: str, value: float) -> dict[str, object]:
+    return {
+        "installation_point_id": installation_point_id,
+        "installation_point_name": f"Sensor {installation_point_id}",
+        "equipment_id": "55576",
+        "equipment_name": "Equipment",
+        "sensor_id": installation_point_id,
+        "facility_id": "679",
+        "customer_asset_id": "ASSET",
+        "installation_customer_asset_id": "ASSET",
+        "equipment_customer_asset_id": "ASSET",
+        "cluster": cluster,
+        "distance_to_centroid": 0.0,
+        "rms_vel_mean_x": value,
+    }
+
+
+def _cluster_summary_row(cluster: str, centroid: float) -> dict[str, object]:
+    return {
+        "cluster": cluster,
+        "sensor_count": 1,
+        "sensor_fraction": 0.5,
+        "within_cluster_sse": 0.0,
+        "mean_rms_vel_mean_x": centroid,
+        "centroid_scaled_rms_vel_mean_x": centroid,
+    }

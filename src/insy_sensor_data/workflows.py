@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from insy_sensor_data.artifacts import read_json
+from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import (
     VALID_RAW_RETENTION_MODES,
@@ -14,6 +16,7 @@ from insy_sensor_data.observations import (
 from insy_sensor_data.raw_lifecycle import compress_raw_waites, release_raw_waites, verify_raw_waites
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import build_trends
+from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.validate import validate_waites_raw, validation_summary
 
@@ -140,6 +143,41 @@ def run_mock_trend_workflow(
     return summary
 
 
+def run_mock_range_workflow(
+    settings: AppSettings,
+    start_date: date,
+    end_date: date,
+    facility_id: int = 679,
+    trend_input: str = "sqlite",
+    snapshot_input: str = "sqlite",
+    raw_retention: str = "keep",
+    keep_native: bool = False,
+    dimensions: list[str] | None = None,
+    k: int = 4,
+    skip_fetch: bool = False,
+    skip_cluster: bool = False,
+    force: bool = False,
+    max_days: int | None = 31,
+) -> dict[str, Any]:
+    return _run_range_workflow(
+        settings=settings,
+        source="mock",
+        start_date=start_date,
+        end_date=end_date,
+        facility_id=facility_id,
+        trend_input=trend_input,
+        snapshot_input=snapshot_input,
+        raw_retention=raw_retention,
+        keep_native=keep_native,
+        dimensions=dimensions or ["x"],
+        k=k,
+        skip_fetch=skip_fetch,
+        skip_cluster=skip_cluster,
+        force=force,
+        max_days=max_days,
+    )
+
+
 def run_api_day_workflow(
     settings: AppSettings,
     run_date: date,
@@ -204,6 +242,139 @@ def run_api_day_workflow(
     return summary
 
 
+def run_api_range_workflow(
+    settings: AppSettings,
+    start_date: date,
+    end_date: date,
+    facility_id: int = 679,
+    trend_input: str = "sqlite",
+    snapshot_input: str = "sqlite",
+    raw_retention: str = "release",
+    keep_native: bool = False,
+    dimensions: list[str] | None = None,
+    k: int = 4,
+    skip_fetch: bool = False,
+    skip_cluster: bool = False,
+    force: bool = False,
+    max_days: int | None = 31,
+) -> dict[str, Any]:
+    return _run_range_workflow(
+        settings=settings,
+        source="api",
+        start_date=start_date,
+        end_date=end_date,
+        facility_id=facility_id,
+        trend_input=trend_input,
+        snapshot_input=snapshot_input,
+        raw_retention=raw_retention,
+        keep_native=keep_native,
+        dimensions=dimensions or ["x"],
+        k=k,
+        skip_fetch=skip_fetch,
+        skip_cluster=skip_cluster,
+        force=force,
+        max_days=max_days,
+    )
+
+
+def _run_range_workflow(
+    settings: AppSettings,
+    source: str,
+    start_date: date,
+    end_date: date,
+    facility_id: int,
+    trend_input: str,
+    snapshot_input: str,
+    raw_retention: str,
+    keep_native: bool,
+    dimensions: list[str],
+    k: int,
+    skip_fetch: bool,
+    skip_cluster: bool,
+    force: bool,
+    max_days: int | None,
+) -> dict[str, Any]:
+    if source not in {"mock", "api"}:
+        raise ValueError("source must be one of: api, mock")
+    if end_date < start_date:
+        raise ValueError("end_date must be on or after start_date")
+    dates = _date_range(start_date, end_date)
+    if max_days is not None and len(dates) > max_days:
+        raise ValueError(
+            f"range has {len(dates)} dates, which exceeds --max-days {max_days}; "
+            "raise --max-days or choose a smaller range"
+        )
+    retention_mode = _validate_raw_retention(raw_retention)
+
+    days = [
+        _run_range_day(
+            settings=settings,
+            source=source,
+            run_date=run_date,
+            facility_id=facility_id,
+            snapshot_input=snapshot_input,
+            raw_retention=retention_mode,
+            keep_native=keep_native,
+            skip_fetch=skip_fetch,
+            force=force,
+        )
+        for run_date in dates
+    ]
+    trend_summary = build_trends(
+        settings=settings,
+        start_date=start_date,
+        end_date=end_date,
+        source=source,
+        input_mode=trend_input,
+    )
+
+    cluster_windows: list[dict[str, Any]] = []
+    if not skip_cluster:
+        for dimension in dimensions:
+            cluster_windows.append(
+                build_cluster_window(
+                    settings=settings,
+                    start_date=start_date,
+                    end_date=end_date,
+                    source=source,
+                    dimension=dimension,
+                    k=k,
+                    force=force,
+                )
+            )
+
+    summary = {
+        "workflow": f"{source}-range",
+        "source": source,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "facility_id": facility_id,
+        "snapshot_input": snapshot_input,
+        "trend_input": trend_input,
+        "raw_retention": retention_mode,
+        "keep_native": keep_native,
+        "dimensions": dimensions,
+        "k": k,
+        "skip_fetch": skip_fetch,
+        "skip_cluster": skip_cluster,
+        "force": force,
+        "max_days": max_days,
+        "days": days,
+        "trend": trend_summary,
+        "cluster_windows": cluster_windows,
+        "next_steps": [
+            "Inspect cluster window quality summaries before using drift operationally.",
+            (
+                "uv run sensor-data cluster window "
+                f"--source {source} --start-date {start_date.isoformat()} "
+                f"--end-date {end_date.isoformat()} --dimension {dimensions[0]} --k {k}"
+            ),
+        ],
+    }
+    summary["steps"] = _range_steps(summary)
+    return summary
+
+
 def format_workflow_summary(summary: dict[str, Any]) -> str:
     lines = [_workflow_title(summary), ""]
     steps = summary.get("steps", [])
@@ -231,6 +402,10 @@ def _workflow_title(summary: dict[str, Any]) -> str:
         return f"Mock trend workflow: {summary['start_date']} to {summary['end_date']}"
     if workflow == "api-day":
         return f"API day workflow: {summary['date']}"
+    if workflow == "mock-range":
+        return f"Mock range workflow: {summary['start_date']} to {summary['end_date']}"
+    if workflow == "api-range":
+        return f"API range workflow: {summary['start_date']} to {summary['end_date']}"
     return "Workflow"
 
 
@@ -362,6 +537,195 @@ def _sensor_counts(days: list[dict[str, Any]]) -> str:
     return ", ".join(str(day["snapshot"].get("record_count")) for day in days)
 
 
+def _range_steps(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    days = summary.get("days", [])
+    trend = summary.get("trend", {})
+    cluster_windows = summary.get("cluster_windows", [])
+    status_counts: dict[str, int] = {}
+    for day in days:
+        status = str(day.get("status", "unknown"))
+        status_counts[status] = status_counts.get(status, 0) + 1
+    steps = [
+        {
+            "title": "Prepared daily snapshots",
+            "details": [
+                f"Dates: {len(days)}",
+                f"Statuses: {_format_counts(status_counts)}",
+                f"Sensors per date: {_sensor_counts(days)}",
+            ],
+        },
+        {
+            "title": "Built trend outputs",
+            "details": [
+                f"Input: {summary.get('trend_input')}",
+                f"Sensor trend rows: {trend.get('sensor_record_count')}",
+                f"Equipment trend rows: {trend.get('equipment_record_count')}",
+                f"Sensor trends: {trend.get('sensor_trends_path')}",
+            ],
+        },
+    ]
+    if summary.get("skip_cluster"):
+        steps.append({"title": "Skipped clustering", "details": ["Reason: --skip-cluster"]})
+    else:
+        steps.append(
+            {
+                "title": "Built cluster window interpretation",
+                "details": [
+                    f"Dimensions: {', '.join(summary.get('dimensions', []))}",
+                    f"Windows: {len(cluster_windows)}",
+                    f"Warnings: {sum(int(window.get('warning_count') or 0) for window in cluster_windows)}",
+                ],
+            }
+        )
+    return steps
+
+
+def _run_range_day(
+    settings: AppSettings,
+    source: str,
+    run_date: date,
+    facility_id: int,
+    snapshot_input: str,
+    raw_retention: str,
+    keep_native: bool,
+    skip_fetch: bool,
+    force: bool,
+) -> dict[str, Any]:
+    reusable_snapshot = None if force else _reusable_snapshot(settings, run_date, source)
+    if reusable_snapshot is not None:
+        return {
+            "workflow": f"{source}-range-day",
+            "source": source,
+            "date": run_date.isoformat(),
+            "facility_id": facility_id,
+            "status": "skipped_existing",
+            "snapshot_input": reusable_snapshot.get("input_mode"),
+            "raw_retention": raw_retention,
+            "keep_native": keep_native,
+            "snapshot": reusable_snapshot,
+            "steps": [
+                {
+                    "title": "Reused daily snapshot",
+                    "details": [
+                        f"Sensors: {reusable_snapshot.get('record_count')}",
+                        f"Snapshot: {reusable_snapshot.get('snapshot_path')}",
+                    ],
+                }
+            ],
+        }
+
+    if skip_fetch:
+        day = _run_existing_raw_day_workflow(
+            settings=settings,
+            source=source,
+            run_date=run_date,
+            facility_id=facility_id,
+            snapshot_input=snapshot_input,
+            raw_retention=raw_retention,
+            keep_native=keep_native,
+        )
+    elif source == "mock":
+        day = run_mock_day_workflow(
+            settings=settings,
+            run_date=run_date,
+            facility_id=facility_id,
+            snapshot_input=snapshot_input,
+            raw_retention=raw_retention,
+            keep_native=keep_native,
+        )
+    else:
+        day = run_api_day_workflow(
+            settings=settings,
+            run_date=run_date,
+            facility_id=facility_id,
+            snapshot_input=snapshot_input,
+            raw_retention=raw_retention,
+            keep_native=keep_native,
+        )
+    return {**day, "status": "completed"}
+
+
+def _run_existing_raw_day_workflow(
+    settings: AppSettings,
+    source: str,
+    run_date: date,
+    facility_id: int,
+    snapshot_input: str,
+    raw_retention: str,
+    keep_native: bool,
+) -> dict[str, Any]:
+    validation_report = validate_waites_raw(settings=settings, run_date=run_date, source=source)
+    verify_summary = verify_raw_waites(settings=settings, run_date=run_date)
+    load_summary = load_waites_observations(settings=settings, run_date=run_date, source=source)
+    snapshot_summary = build_sensor_snapshot(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        input_mode=snapshot_input,
+    )
+    retention_summary = _apply_retention(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        snapshot_summary=snapshot_summary,
+        raw_retention=raw_retention,
+        keep_native=keep_native,
+    )
+    summary = {
+        "workflow": f"{source}-day-existing-raw",
+        "source": source,
+        "date": run_date.isoformat(),
+        "facility_id": facility_id,
+        "snapshot_input": snapshot_input,
+        "raw_retention": raw_retention,
+        "keep_native": keep_native,
+        "validation": validation_summary(validation_report),
+        "verify": verify_summary,
+        "load": load_summary,
+        "snapshot": snapshot_summary,
+        "retention": retention_summary,
+    }
+    summary["steps"] = [
+        _validation_step(summary["validation"]),
+        _verify_step(verify_summary),
+        _load_step(load_summary),
+        _snapshot_step(snapshot_summary),
+    ]
+    if retention_summary["raw_retention_mode"] != "keep":
+        summary["steps"].append(_retention_step(retention_summary))
+    return summary
+
+
+def _reusable_snapshot(settings: AppSettings, run_date: date, source: str) -> dict[str, Any] | None:
+    storage = get_storage_paths(settings.data_dir)
+    snapshot_dir = storage.snapshot_dir(run_date.isoformat())
+    snapshot_path = snapshot_dir / "sensor_snapshot.csv"
+    metadata_path = snapshot_dir / "metadata.json"
+    if not snapshot_path.exists() or not metadata_path.exists():
+        return None
+    metadata = read_json(metadata_path)
+    if metadata.get("source") != source:
+        return None
+    expected_count = int(metadata.get("record_count") or 0)
+    verification = verify_sensor_daily_snapshot(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        expected_row_count=expected_count,
+    )
+    if verification["error_count"]:
+        return None
+    return {
+        "source": source,
+        "date": run_date.isoformat(),
+        "input_mode": metadata.get("input_mode"),
+        "snapshot_path": snapshot_path.as_posix(),
+        "metadata_path": metadata_path.as_posix(),
+        "record_count": expected_count,
+        "snapshot_store": verification,
+    }
+
+
 def _apply_retention(
     settings: AppSettings,
     run_date: date,
@@ -475,3 +839,7 @@ def _validate_raw_retention(raw_retention: str) -> str:
 def _date_range(start_date: date, end_date: date) -> list[date]:
     days = (end_date - start_date).days
     return [start_date + timedelta(days=offset) for offset in range(days + 1)]
+
+
+def _format_counts(counts: dict[str, int]) -> str:
+    return ", ".join(f"{key}={counts[key]}" for key in sorted(counts)) if counts else "none"

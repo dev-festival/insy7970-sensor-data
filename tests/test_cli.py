@@ -555,6 +555,68 @@ def test_cli_workflow_mock_trend_writes_sqlite_backed_outputs(tmp_path: Path) ->
     assert (trend_dir / "equipment_trends.csv").exists()
 
 
+def test_cli_workflow_mock_range_writes_cluster_window_and_resumes(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-range",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-10",
+            "--dimension",
+            "x",
+            "--k",
+            "3",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["workflow"] == "mock-range"
+    assert [day["status"] for day in payload["days"]] == ["completed", "completed"]
+    assert payload["cluster_windows"][0]["pair_count"] == 1
+    assert "small_sample_contract_only" in json.dumps(payload["cluster_windows"][0]["warnings"])
+
+    second_result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-range",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-10",
+            "--dimension",
+            "x",
+            "--k",
+            "3",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert second_result.exit_code == 0
+    second_payload = json.loads(second_result.stdout)
+    assert [day["status"] for day in second_payload["days"]] == [
+        "skipped_existing",
+        "skipped_existing",
+    ]
+    assert second_payload["cluster_windows"][0]["date_runs"][0]["status"] == "skipped_existing"
+    window_dir = data_dir / "processed" / "cluster_windows" / "start=2025-07-09_end=2025-07-10_source=mock_dimension=x_k=3"
+    assert (window_dir / "quality_summary.csv").exists()
+    assert (window_dir / "aligned_drift_summary.csv").exists()
+
+
 def test_cli_workflow_api_day_requires_token(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"

@@ -315,7 +315,9 @@ Missing SQLite daily snapshots in the range are reported as skipped dates. This 
 ```powershell
 uv run sensor-data workflow mock-day --date 2025-07-09
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
+uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
 uv run sensor-data workflow api-day --date 2026-07-19 --facility 679
+uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --dimension x --k 4
 ```
 
 Workflow commands run the normal multi-step paths and print a compact, human-readable summary. They are the comfortable operator surface. The lower-level commands above remain the composable JSON surface.
@@ -335,6 +337,27 @@ uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-0
 ```
 
 `api-day` is the friendly live canary wrapper. It fetches live Waites data, validates the raw shape, verifies checksums, loads SQLite observations, builds an API-source snapshot, stores the daily rows in SQLite, and applies the retention policy. It requires `WAITES_ACCESS_TOKEN`.
+
+`mock-range` and `api-range` are operating-window workflows. They process each date independently, reuse valid daily snapshots by default, build trend outputs, and optionally build cluster-window interpretation artifacts:
+
+```powershell
+uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
+uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --dimension x --k 4
+```
+
+Useful range options:
+
+```powershell
+--dimensions x,y,z,temperature
+--skip-fetch
+--skip-cluster
+--resume
+--force
+--max-days 31
+--json
+```
+
+`--resume` is the default. Existing valid snapshot, feature, cluster, and drift artifacts are reused. Use `--force` when you deliberately want to rebuild.
 
 Raw retention modes are available on day and trend workflows:
 
@@ -488,7 +511,45 @@ data/processed/drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_dimension=DIMEN
   metrics.json
 ```
 
-`cluster_drift.csv` compares per-sensor assignments and marks whether the cluster changed. `centroid_drift.csv` compares same-label scaled centroid distances. This is a first drift artifact for inspection; later sprints can add label alignment and richer interpretation.
+`cluster_drift.csv` compares per-sensor assignments and marks whether the raw cluster label changed. `centroid_drift.csv` compares same-label scaled centroid distances. Raw KMeans labels are deterministic here, but they are not semantic group names, so use aligned drift before treating changed-cluster counts as an operating signal.
+
+### Align Cluster Drift
+
+```powershell
+uv run sensor-data cluster align-drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
+```
+
+Maps clusters from the first date to nearest compatible centroids on the second date, then recalculates per-sensor drift using the aligned labels.
+
+Additional outputs are written beside the raw drift artifacts:
+
+```text
+data/processed/drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
+  aligned_cluster_drift.csv
+  centroid_alignment.csv
+  aligned_metrics.json
+```
+
+`centroid_alignment.csv` records the cluster mapping, centroid distance, source/target cluster sizes, and a simple mapping confidence. `aligned_cluster_drift.csv` keeps both `raw_label_changed` and `aligned_changed` so label movement and likely behavior movement can be inspected separately.
+
+### Build Cluster Windows
+
+```powershell
+uv run sensor-data cluster window --source mock --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
+```
+
+Runs or reuses per-date cluster artifacts across a date range and compares adjacent dates with centroid-aligned drift. Outputs are written under:
+
+```text
+data/processed/cluster_windows/start=YYYY-MM-DD_end=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
+  window_summary.csv
+  quality_summary.csv
+  aligned_drift_summary.csv
+  centroid_alignment.csv
+  metrics.json
+```
+
+`quality_summary.csv` includes row counts, feature counts, inertia, silhouette, Calinski-Harabasz, warnings, and interpretation text. Small mock runs such as 9 rows with `k=4` are marked as contract tests, not cluster-quality evidence.
 
 ## Raw Retention Guidance
 
@@ -529,6 +590,8 @@ uv run sensor-data cluster features --source mock --date 2025-07-11
 uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k 4
 uv run sensor-data cluster run --source mock --date 2025-07-10 --dimension x --k 4
 uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
+uv run sensor-data cluster align-drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
+uv run sensor-data cluster window --source mock --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
 ```
 
 Equivalent lower-level JSON command sequence:

@@ -169,6 +169,16 @@ data/
       from=YYYY-MM-DD_to=YYYY-MM-DD_source=VALUE_dimension=VALUE_k=N/
         cluster_drift.csv
         centroid_drift.csv
+        aligned_cluster_drift.csv
+        centroid_alignment.csv
+        aligned_metrics.json
+        metrics.json
+    cluster_windows/
+      start=YYYY-MM-DD_end=YYYY-MM-DD_source=VALUE_dimension=VALUE_k=N/
+        window_summary.csv
+        quality_summary.csv
+        aligned_drift_summary.csv
+        centroid_alignment.csv
         metrics.json
 ```
 

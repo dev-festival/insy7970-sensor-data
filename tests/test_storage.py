@@ -14,4 +14,5 @@ def test_storage_paths_create_expected_base_directories(tmp_path: Path) -> None:
     assert paths.trends_dir in created
     assert paths.clusters_dir in created
     assert paths.drift_dir in created
+    assert paths.cluster_windows_dir in created
     assert all(path.exists() and path.is_dir() for path in created)
