@@ -89,6 +89,8 @@ FastAPI should:
 - Read artifacts through storage/query functions rather than constructing file paths in route handlers.
 - Treat missing data as a normal state with clear 404 or 422 responses, not unhandled 500s.
 
+Future dashboard drilldowns should treat timestamp-level source readings as on-demand detail. The durable local layer should stay daily snapshots, trends, clusters, drift, reports, and ledger records; if a user clicks a suspicious daily point, the service can make a narrow live source request for that exact sensor/date/measurement/dimension and discard the detail unless explicitly retained.
+
 Initial endpoint shape:
 
 ```text
@@ -136,6 +138,7 @@ data/
       date=YYYY-MM-DD/
         sensor_snapshot.csv
         metadata.json
+    observations.sqlite
     trends/
       start=YYYY-MM-DD_end=YYYY-MM-DD/
         sensor_trends.csv
@@ -168,7 +171,7 @@ Raw files should be as close to the external response as possible. Processed fil
 
 Validation reports are the gate between raw evidence and processed outputs. They should describe source shape, record counts, warnings, and hard failures without transforming the raw files themselves.
 
-Raw endpoint artifacts may be stored as plain `.json` or gzip `.json.gz`; the logical artifact identity remains the original endpoint JSON filename. Manifests should record artifact state, byte counts, SHA-256 checksums, compressed byte counts, and compressed checksums. Pruning raw evidence must remain an explicit CLI action with dry-run default behavior.
+Raw endpoint artifacts may be stored as plain `.json` or gzip `.json.gz`; the logical artifact identity remains the original endpoint JSON filename. Manifests should record artifact state, byte counts, SHA-256 checksums, compressed byte counts, and compressed checksums. For live operating workflows, raw endpoint payloads are short-lived proof. Once validation, ingestion ledger records, snapshot CSVs, and SQLite daily snapshot rows exist for a date, the default pipeline may release raw payload files and timestamp-native observation rows unless the operator explicitly requests inspection retention.
 
 ## Core Architecture
 
@@ -299,15 +302,17 @@ Expected bridge work between `0.2.0` and `0.3.0`:
 - `0.2.6`: human-readable workflow wrappers over the JSON leaf commands.
 - `0.2.7`: evidence reports with samples, min/avg/max charts, and expected-versus-observed checks.
 - `0.2.8`: clustering feature matrix contract and readiness checks.
+- `0.2.9`: SQLite daily snapshot store, ingestion ledger, and raw/native release policy.
 
 The rule for this bridge is: mock data owns behavior, live data validates assumptions, and human-facing evidence earns trust before more advanced modeling is added. Normal tests should remain offline, deterministic, and fixture-backed. Live tests or smoke checks should be opt-in and should never require secrets, plant network access, or large real datasets for the default development workflow.
 
-Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof and reprocessing source: preserve them first, checksum them, compress them, and prune them only through explicit CLI commands. The long-term working layer should be validated native observations in SQLite plus processed daily snapshots, trends, clusters, drift, and maintenance context. Do not over-aggregate native timestamps away; RMS, temperature, and ImpactVue may have different cadences and should remain timestamp-native before daily rollups are derived.
+Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof: preserve them first, checksum them, validate them, summarize them into an ingestion ledger, and then release or pack them according to the workflow retention mode. The long-term working layer should be daily snapshots in CSV and SQLite, plus trends, features, clusters, drift, reports, and maintenance context. Timestamp-native SQLite observations are useful for inspection and replay, but they should not be required for the default clustering path after daily snapshots have been persisted.
 
 Expected post-clustering hardening before `0.4.0`:
 
 - `0.3.1`: pipeline memory and windowing for date-chunked operating ranges.
 - `0.3.2`: artifact packing and retention for raw and processed outputs after clustering artifacts exist.
+- `0.4.x`: on-demand live source drilldown from dashboard points without restoring raw detail as default local storage.
 
 The rule for this phase is: pull narrow, persist immediately, process from SQLite or compact per-date artifacts, and pack only after the working artifacts needed for clustering, drift, and reports are present. Range commands should never require loading a full operating window of raw endpoint JSON into memory.
 
