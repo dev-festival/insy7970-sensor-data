@@ -150,7 +150,7 @@ uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 
 Start the local service:
 
 ```powershell
-uv run sensor-data serve --source mock
+uv run sensor-data serve --source mock --host 127.0.0.1 --port 8000
 ```
 
 Then open:
