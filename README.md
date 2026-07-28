@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.4.0` adds a read-only API and static web review surface on top of durable daily snapshots, trends, clusters, and centroid-aligned cluster-window interpretation:
+Sprint `0.4.1` adds a clearer navigation and parameter model on top of the read-only API and static web review surface:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -53,7 +53,10 @@ Sprint `0.4.0` adds a read-only API and static web review surface on top of dura
 - workflow raw-retention modes: `keep`, `compress`, and `release`
 - date-scoped staging purge after snapshot and ledger persistence are verified
 - compact Waites reference tables with one row per equipment and one row per sensor
-- browser controls for source, date range, dimension, `k`, equipment, and sensor filters
+- global browser context for source and date range
+- equipment and sensor navigation with explicit all-equipment and all-sensor states
+- view-local controls for metric, dimension, and `k`
+- URL-backed browser state for local refresh/share workflows
 - Plotly-based snapshot, trend, cluster, and drift views over API responses
 
 Maximo integration begins in later sprints.
@@ -168,7 +171,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing processed artifacts in sprint `0.4.0`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser.
+The web and API are read-only over existing processed artifacts in sprint `0.4.1`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser.
 
 ## Source API
 

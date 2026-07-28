@@ -85,10 +85,22 @@ def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
     }
 
 
-def list_equipment_view(settings: AppSettings, source: str | None = None) -> dict[str, Any]:
+def list_equipment_view(
+    settings: AppSettings,
+    source: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict[str, Any]:
     source_mode = _optional_source(source)
+    if start_date is not None and end_date is not None and end_date < start_date:
+        raise ValueError("end_date must be on or after start_date")
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for snapshot_date in list_snapshot_dates(settings):
+        parsed_snapshot_date = date.fromisoformat(snapshot_date)
+        if start_date is not None and parsed_snapshot_date < start_date:
+            continue
+        if end_date is not None and parsed_snapshot_date > end_date:
+            continue
         payload = load_snapshot(settings, date.fromisoformat(snapshot_date))
         snapshot_source = str(payload["metadata"].get("source") or "")
         if source_mode is not None and snapshot_source != source_mode:
@@ -129,6 +141,7 @@ def list_equipment_view(settings: AppSettings, source: str | None = None) -> dic
                 "customer_asset_id": equipment["customer_asset_id"],
                 "sensor_count": len(installation_ids),
                 "installation_point_ids": installation_ids,
+                "dates": dates,
                 "first_date": dates[0] if dates else None,
                 "last_date": dates[-1] if dates else None,
                 "date_count": len(dates),
@@ -136,6 +149,8 @@ def list_equipment_view(settings: AppSettings, source: str | None = None) -> dic
         )
     return {
         "source": source_mode,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
         "count": len(rows),
         "rows": sorted(rows, key=lambda row: (_sort_key(row["equipment_id"]), row["source"])),
     }

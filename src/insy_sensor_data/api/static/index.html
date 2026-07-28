@@ -18,14 +18,10 @@
         <p id="health-status" class="health-status">Checking service health...</p>
       </header>
 
-      <section class="controls" aria-label="Review controls">
+      <section class="global-context" aria-label="Global context">
         <label>
           <span>Source</span>
           <select id="source-select"></select>
-        </label>
-        <label>
-          <span>Date</span>
-          <select id="date-select"></select>
         </label>
         <label>
           <span>Start</span>
@@ -35,46 +31,71 @@
           <span>End</span>
           <select id="end-date-select"></select>
         </label>
-        <label>
-          <span>Dimension</span>
-          <select id="dimension-select"></select>
-        </label>
-        <label>
-          <span>k</span>
-          <select id="k-select"></select>
-        </label>
-        <label class="wide-control">
-          <span>Equipment</span>
-          <select id="equipment-select"></select>
-        </label>
-        <label>
-          <span>Sensor</span>
-          <input id="sensor-input" type="search" inputmode="numeric" autocomplete="off">
-        </label>
         <button id="refresh-button" type="button">Refresh</button>
       </section>
 
-      <nav class="tabs" aria-label="Views">
-        <button class="tab is-active" type="button" data-view="snapshot">Snapshot</button>
-        <button class="tab" type="button" data-view="trend">Trend</button>
-        <button class="tab" type="button" data-view="cluster">Cluster</button>
-        <button class="tab" type="button" data-view="drift">Drift</button>
-      </nav>
+      <div class="review-layout">
+        <aside class="navigator" aria-label="Equipment and sensor navigation">
+          <div class="navigator-header">
+            <label>
+              <span>Equipment Search</span>
+              <input id="equipment-search" type="search" autocomplete="off">
+            </label>
+            <button id="all-equipment-button" class="scope-button is-active" type="button">All Equipment</button>
+          </div>
+          <div id="equipment-list" class="equipment-list" role="list"></div>
+          <div class="sensor-panel">
+            <div class="sensor-panel-header">
+              <span>Sensor Scope</span>
+              <button id="all-sensors-button" class="scope-button is-active" type="button">All Sensors</button>
+            </div>
+            <div id="sensor-list" class="sensor-list" role="list"></div>
+          </div>
+        </aside>
 
-      <p id="status-line" class="status-line">Loading artifacts...</p>
+        <section class="review-main" aria-label="Review workspace">
+          <nav class="tabs" aria-label="Views">
+            <button class="tab is-active" type="button" data-view="snapshot">Snapshot</button>
+            <button class="tab" type="button" data-view="trend">Trend</button>
+            <button class="tab" type="button" data-view="cluster">Cluster</button>
+            <button class="tab" type="button" data-view="drift">Drift</button>
+          </nav>
 
-      <section id="summary-grid" class="summary-grid" aria-label="Summary"></section>
+          <section class="view-controls" aria-label="View controls">
+            <label id="date-control">
+              <span>Date</span>
+              <select id="date-select"></select>
+            </label>
+            <label id="metric-control">
+              <span>Metric</span>
+              <select id="metric-select"></select>
+            </label>
+            <label id="dimension-control">
+              <span>Dimension</span>
+              <select id="dimension-select"></select>
+            </label>
+            <label id="k-control">
+              <span>k</span>
+              <select id="k-select"></select>
+            </label>
+          </section>
 
-      <section class="workspace">
-        <div id="plot" class="plot" role="img" aria-label="Current view chart"></div>
-      </section>
+          <p id="status-line" class="status-line">Loading artifacts...</p>
 
-      <section class="table-shell" aria-label="Data table">
-        <table>
-          <thead id="data-table-head"></thead>
-          <tbody id="data-table-body"></tbody>
-        </table>
-      </section>
+          <section id="summary-grid" class="summary-grid" aria-label="Summary"></section>
+
+          <section class="workspace">
+            <div id="plot" class="plot" role="img" aria-label="Current view chart"></div>
+          </section>
+
+          <section class="table-shell" aria-label="Data table">
+            <table>
+              <thead id="data-table-head"></thead>
+              <tbody id="data-table-body"></tbody>
+            </table>
+          </section>
+        </section>
+      </div>
     </main>
   </body>
 </html>

@@ -33,6 +33,11 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "INSY Sensor Data" in response.text
     assert 'id="source-select"' in response.text
+    assert 'class="global-context"' in response.text
+    assert 'id="equipment-search"' in response.text
+    assert 'id="equipment-list"' in response.text
+    assert 'id="sensor-list"' in response.text
+    assert 'id="metric-select"' in response.text
     assert 'data-view="cluster"' in response.text
     assert "plotly" in response.text.lower()
 
@@ -137,6 +142,29 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     equipment = equipment_response.json()
     assert equipment["count"] >= 1
     assert equipment["rows"][0]["sensor_count"] >= 1
+    assert "dates" in equipment["rows"][0]
+
+    ranged_response = client.get(
+        "/api/equipment?source=mock&start_date=2025-07-10&end_date=2025-07-10"
+    )
+    assert ranged_response.status_code == 200
+    ranged = ranged_response.json()
+    assert ranged["start_date"] == "2025-07-10"
+    assert ranged["end_date"] == "2025-07-10"
+    assert all(row["dates"] == ["2025-07-10"] for row in ranged["rows"])
+
+
+def test_equipment_endpoint_validates_date_range(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+
+    bad_date = client.get("/api/equipment?source=mock&start_date=bad")
+    assert bad_date.status_code == 422
+
+    reversed_range = client.get(
+        "/api/equipment?source=mock&start_date=2025-07-11&end_date=2025-07-09"
+    )
+    assert reversed_range.status_code == 422
 
 
 def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: Path) -> None:

@@ -23,9 +23,19 @@ def read_artifacts(request: Request) -> dict[str, Any]:
 
 
 @router.get("/equipment")
-def read_equipment(request: Request, source: str | None = None) -> dict[str, Any]:
+def read_equipment(
+    request: Request,
+    source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
     try:
-        return list_equipment_view(request.app.state.settings, source=source)
+        return list_equipment_view(
+            request.app.state.settings,
+            source=source,
+            start_date=date.fromisoformat(start_date) if start_date else None,
+            end_date=date.fromisoformat(end_date) if end_date else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
