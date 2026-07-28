@@ -17,7 +17,9 @@
 }
 
 body {
+  height: 100vh;
   margin: 0;
+  overflow: hidden;
 }
 
 button,
@@ -31,11 +33,13 @@ button {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
+  overflow: hidden;
 }
 
 .topbar {
@@ -134,10 +138,12 @@ input {
 }
 
 .review-layout {
+  height: 100%;
   min-height: 0;
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
   gap: 12px;
+  overflow: hidden;
 }
 
 .navigator,
@@ -146,6 +152,7 @@ input {
 }
 
 .navigator {
+  height: 100%;
   min-height: 0;
   display: grid;
   grid-template-rows: auto auto minmax(180px, 1fr);
@@ -154,6 +161,7 @@ input {
   border-radius: 6px;
   background: var(--panel);
   padding: 10px;
+  overflow: hidden;
 }
 
 .navigator-header {
@@ -327,9 +335,16 @@ input {
 }
 
 .review-main {
+  height: 100%;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 10px;
+  overflow: auto;
+}
+
+.review-main.is-snapshot {
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .tabs {
@@ -355,10 +370,35 @@ input {
   color: var(--ink);
 }
 
-.snapshot-review {
-  min-height: 0;
+.view-pinned {
+  min-width: 0;
   display: grid;
   gap: 10px;
+}
+
+.view-pinned.is-snapshot {
+  grid-template-columns: minmax(420px, 1fr) minmax(300px, 450px);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.view-pinned.is-snapshot .view-controls {
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  align-items: end;
+  padding: 7px 10px;
+}
+
+.view-pinned.is-snapshot select {
+  min-height: 32px;
+  padding: 5px 8px;
+}
+
+.snapshot-review {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .snapshot-context,
@@ -372,9 +412,15 @@ input {
 .snapshot-context {
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) minmax(360px, 2fr);
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  padding: 12px 14px;
+  padding: 9px 12px;
+}
+
+.view-pinned.is-snapshot .snapshot-context {
+  grid-template-columns: minmax(170px, 0.8fr) minmax(340px, 1.7fr);
+  gap: 8px;
+  padding: 7px 10px;
 }
 
 .snapshot-title {
@@ -383,13 +429,21 @@ input {
   gap: 4px;
 }
 
+.view-pinned.is-snapshot .snapshot-title {
+  gap: 2px;
+}
+
 .snapshot-title h2,
 .snapshot-panel-heading h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 650;
   line-height: 1.2;
+}
+
+.view-pinned.is-snapshot .snapshot-title h2 {
+  font-size: 0.9rem;
 }
 
 .snapshot-title p,
@@ -399,19 +453,33 @@ input {
   font-size: 0.84rem;
 }
 
+.view-pinned.is-snapshot .snapshot-title p {
+  font-size: 0.8rem;
+}
+
 .snapshot-context-stats {
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(90px, 1fr));
-  gap: 8px;
+  gap: 6px;
+}
+
+.view-pinned.is-snapshot .snapshot-context-stats {
+  grid-template-columns: repeat(4, minmax(70px, 1fr));
+  gap: 4px;
 }
 
 .snapshot-stat {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 2px;
   border-left: 1px solid #e6ebf1;
-  padding-left: 10px;
+  padding-left: 9px;
+}
+
+.view-pinned.is-snapshot .snapshot-stat {
+  gap: 0;
+  padding-left: 7px;
 }
 
 .snapshot-stat span {
@@ -419,6 +487,10 @@ input {
   font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
+}
+
+.view-pinned.is-snapshot .snapshot-stat span {
+  font-size: 0.66rem;
 }
 
 .snapshot-stat strong {
@@ -431,10 +503,29 @@ input {
   white-space: nowrap;
 }
 
+.view-pinned.is-snapshot .snapshot-stat strong {
+  font-size: 0.88rem;
+}
+
+.snapshot-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.snapshot-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 10px;
+}
+
 .snapshot-panel {
   display: grid;
+  min-height: 0;
   gap: 8px;
-  padding: 10px;
+  padding: 9px;
 }
 
 .snapshot-panel-heading {
@@ -444,11 +535,17 @@ input {
   gap: 12px;
   align-items: baseline;
   border-bottom: 1px solid #edf1f4;
-  padding-bottom: 7px;
+  padding-bottom: 6px;
+}
+
+.snapshot-chart-panel {
+  grid-template-rows: auto auto;
+  min-height: 324px;
 }
 
 .snapshot-chart {
   width: 100%;
+  min-height: 260px;
   height: 260px;
   display: grid;
   place-items: center;
@@ -456,8 +553,64 @@ input {
   color: var(--muted);
 }
 
+.snapshot-details {
+  display: grid;
+  gap: 8px;
+}
+
+.snapshot-detail {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.snapshot-detail summary {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  list-style: none;
+  cursor: pointer;
+}
+
+.snapshot-detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.snapshot-detail summary::before {
+  content: "+";
+  color: var(--muted);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.snapshot-detail[open] summary::before {
+  content: "-";
+}
+
+.snapshot-detail summary:hover,
+.snapshot-detail summary:focus-visible {
+  background: #f7f9fb;
+}
+
+.snapshot-detail-title {
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.snapshot-detail[open] summary {
+  border-bottom: 1px solid #edf1f4;
+}
+
 .snapshot-table-shell {
-  max-height: 230px;
+  max-height: 260px;
   overflow: auto;
 }
 
@@ -659,11 +812,32 @@ tbody tr:hover {
   .snapshot-context {
     grid-template-columns: 1fr;
   }
+
+  .view-pinned.is-snapshot {
+    grid-template-columns: 1fr;
+  }
+
+  .view-pinned.is-snapshot .snapshot-context {
+    grid-template-columns: 1fr;
+  }
+
+  .snapshot-chart-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 780px) {
+  body {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+  }
+
   .app-shell {
+    height: auto;
+    min-height: 100vh;
     padding: 10px;
+    overflow: visible;
   }
 
   .topbar,
@@ -684,6 +858,21 @@ tbody tr:hover {
     max-height: 420px;
   }
 
+  .review-layout,
+  .review-main {
+    height: auto;
+    overflow: visible;
+  }
+
+  .snapshot-review {
+    height: auto;
+    overflow: visible;
+  }
+
+  .snapshot-scroll {
+    overflow: visible;
+  }
+
   .tabs {
     overflow-x: auto;
   }
@@ -694,6 +883,15 @@ tbody tr:hover {
 
   .snapshot-context-stats {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .snapshot-chart-panel {
+    min-height: 304px;
+  }
+
+  .snapshot-chart {
+    min-height: 240px;
+    height: 240px;
   }
 
   .plot {

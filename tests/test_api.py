@@ -41,9 +41,15 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert 'id="scope-status"' in response.text
     assert 'id="metric-select"' in response.text
     assert 'id="snapshot-review"' in response.text
+    assert 'id="view-pinned"' in response.text
     assert 'id="snapshot-context"' in response.text
+    assert 'id="snapshot-scroll"' in response.text
+    assert response.text.index('id="snapshot-context"') < response.text.index('class="view-controls"')
+    assert 'class="snapshot-chart-grid"' in response.text
     assert 'id="snapshot-trend-chart"' in response.text
     assert 'id="snapshot-cluster-chart"' in response.text
+    assert 'id="snapshot-events-detail"' in response.text
+    assert 'id="snapshot-measurements-detail"' in response.text
     assert 'data-view="cluster"' in response.text
     assert "/static/charts.js" in response.text
     assert "plotly" not in response.text.lower()

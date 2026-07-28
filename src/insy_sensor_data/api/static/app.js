@@ -1,4 +1,5 @@
-const DEFAULT_DIMENSIONS = ["x", "y", "z", "temperature"];
+const AXIS_DIMENSIONS = ["x", "y", "z"];
+const DEFAULT_DIMENSIONS = [...AXIS_DIMENSIONS, "temperature"];
 const DEFAULT_FEATURE_SPACES = ["x_accel", "y_vel", "z_vel", "temperature"];
 const DEFAULT_METRIC = "rms_vel";
 const DEFAULT_K = "5";
@@ -63,24 +64,29 @@ const elements = {
   kControl: document.querySelector("#k-control"),
   statusLine: document.querySelector("#status-line"),
   snapshotReview: document.querySelector("#snapshot-review"),
+  snapshotScroll: document.querySelector("#snapshot-scroll"),
   snapshotContext: document.querySelector("#snapshot-context"),
   snapshotTrendStatus: document.querySelector("#snapshot-trend-status"),
   snapshotTrendChart: document.querySelector("#snapshot-trend-chart"),
   snapshotClusterStatus: document.querySelector("#snapshot-cluster-status"),
   snapshotClusterChart: document.querySelector("#snapshot-cluster-chart"),
+  snapshotEventsDetail: document.querySelector("#snapshot-events-detail"),
   snapshotEventsStatus: document.querySelector("#snapshot-events-status"),
   snapshotEventsHead: document.querySelector("#snapshot-events-head"),
   snapshotEventsBody: document.querySelector("#snapshot-events-body"),
+  snapshotMeasurementsDetail: document.querySelector("#snapshot-measurements-detail"),
   snapshotMeasurementsStatus: document.querySelector("#snapshot-measurements-status"),
   snapshotMeasurementsHead: document.querySelector("#snapshot-measurements-head"),
   snapshotMeasurementsBody: document.querySelector("#snapshot-measurements-body"),
   summaryGrid: document.querySelector("#summary-grid"),
+  reviewMain: document.querySelector(".review-main"),
   workspace: document.querySelector("#workspace"),
   plot: document.querySelector("#plot"),
   tableShell: document.querySelector("#table-shell"),
   tableHead: document.querySelector("#data-table-head"),
   tableBody: document.querySelector("#data-table-body"),
   tabs: Array.from(document.querySelectorAll(".tab")),
+  viewPinned: document.querySelector("#view-pinned"),
 };
 
 async function init() {
@@ -181,15 +187,17 @@ function bindEvents() {
   });
 
   window.addEventListener("resize", debounce(() => {
-    if (!window.SensorCharts) {
-      return;
-    }
-    [
-      elements.plot,
-      elements.snapshotTrendChart,
-      elements.snapshotClusterChart,
-    ].forEach((element) => window.SensorCharts.redraw(element));
+    redrawCharts();
   }, 150));
+
+  [
+    elements.snapshotEventsDetail,
+    elements.snapshotMeasurementsDetail,
+  ].forEach((detail) => {
+    detail?.addEventListener("toggle", () => {
+      window.requestAnimationFrame(redrawSnapshotCharts);
+    });
+  });
 }
 
 async function loadArtifacts() {
@@ -239,7 +247,7 @@ function normalizeState() {
     state.date = rangeDates[rangeDates.length - 1] || state.endDate || state.startDate;
   }
 
-  const dimensions = availableDimensions();
+  const dimensions = ["snapshot", "trend"].includes(state.view) ? AXIS_DIMENSIONS : availableDimensions();
   if (!dimensions.includes(state.dimension)) {
     state.dimension = dimensions[0] || "x";
   }
@@ -297,13 +305,14 @@ function updateControlsFromState() {
     state.metric,
   );
   const modelView = clusterModelView();
+  const dimensionOptions = modelView ? availableFeatureSpaces() : selectableDimensions();
   const dimensionLabel = elements.dimensionControl.querySelector("span");
   if (dimensionLabel) {
     dimensionLabel.textContent = modelView ? "Feature Space" : "Dimension";
   }
   setOptions(
     elements.dimensionSelect,
-    modelView ? availableFeatureSpaces() : availableDimensions(),
+    dimensionOptions,
     (value) => modelView ? featureSpaceLabel(value) : value,
     modelView ? state.featureSpace : state.dimension,
   );
@@ -488,6 +497,9 @@ function compactEquipmentLabel(label = "") {
 async function renderActiveView() {
   if (!state.artifacts) {
     return;
+  }
+  if (normalizeViewParameters()) {
+    updateUrlFromState(true);
   }
   updateControlsFromState();
   clearView();
@@ -906,6 +918,7 @@ function setScope(scope) {
   updateUrlFromState();
   updateControlsFromState();
   renderNavigator();
+  resetSnapshotPane();
   renderActiveView();
 }
 
@@ -1012,6 +1025,21 @@ function datesInRange() {
 
 function availableDimensions() {
   return (state.artifacts?.dimensions?.length ? state.artifacts.dimensions : DEFAULT_DIMENSIONS).slice().sort();
+}
+
+function selectableDimensions() {
+  if (["snapshot", "trend"].includes(state.view)) {
+    return AXIS_DIMENSIONS;
+  }
+  return availableDimensions();
+}
+
+function normalizeViewParameters() {
+  if (["snapshot", "trend"].includes(state.view) && !AXIS_DIMENSIONS.includes(state.dimension)) {
+    state.dimension = "x";
+    return true;
+  }
+  return false;
 }
 
 function availableFeatureSpaces() {
@@ -1362,6 +1390,41 @@ function plotInto(element, traces, layout) {
   window.SensorCharts.render(element, traces, layout || {});
 }
 
+function redrawCharts() {
+  if (!window.SensorCharts) {
+    return;
+  }
+  [
+    elements.plot,
+    elements.snapshotTrendChart,
+    elements.snapshotClusterChart,
+  ].forEach((element) => window.SensorCharts.redraw(element));
+}
+
+function redrawSnapshotCharts() {
+  if (!window.SensorCharts) {
+    return;
+  }
+  [
+    elements.snapshotTrendChart,
+    elements.snapshotClusterChart,
+  ].forEach((element) => window.SensorCharts.redraw(element));
+}
+
+function resetSnapshotPane() {
+  if (elements.snapshotScroll) {
+    elements.snapshotScroll.scrollTop = 0;
+  }
+  [
+    elements.snapshotEventsDetail,
+    elements.snapshotMeasurementsDetail,
+  ].forEach((detail) => {
+    if (detail) {
+      detail.open = false;
+    }
+  });
+}
+
 function clearView() {
   setStatus("Loading...");
   showSnapshotSurface(state.view === "snapshot");
@@ -1388,6 +1451,10 @@ function clearView() {
 }
 
 function showSnapshotSurface(showSnapshot) {
+  elements.reviewMain.classList.toggle("is-snapshot", showSnapshot);
+  elements.viewPinned.classList.toggle("is-snapshot", showSnapshot);
+  elements.snapshotContext.hidden = !showSnapshot;
+  elements.statusLine.hidden = showSnapshot;
   elements.snapshotReview.hidden = !showSnapshot;
   elements.summaryGrid.hidden = showSnapshot;
   elements.workspace.hidden = showSnapshot;

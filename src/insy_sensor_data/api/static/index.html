@@ -55,71 +55,79 @@
             <button class="tab" type="button" data-view="drift">Drift</button>
           </nav>
 
-          <section class="view-controls" aria-label="View controls">
-            <label id="date-control">
-              <span>Date</span>
-              <select id="date-select"></select>
-            </label>
-            <label id="metric-control">
-              <span>Metric</span>
-              <select id="metric-select"></select>
-            </label>
-            <label id="dimension-control">
-              <span>Dimension</span>
-              <select id="dimension-select"></select>
-            </label>
-            <label id="k-control">
-              <span>k</span>
-              <select id="k-select"></select>
-            </label>
-          </section>
+          <div id="view-pinned" class="view-pinned">
+            <header id="snapshot-context" class="snapshot-context" hidden></header>
+
+            <section class="view-controls" aria-label="View controls">
+              <label id="date-control">
+                <span>Date</span>
+                <select id="date-select"></select>
+              </label>
+              <label id="metric-control">
+                <span>Metric</span>
+                <select id="metric-select"></select>
+              </label>
+              <label id="dimension-control">
+                <span>Dimension</span>
+                <select id="dimension-select"></select>
+              </label>
+              <label id="k-control">
+                <span>k</span>
+                <select id="k-select"></select>
+              </label>
+            </section>
+          </div>
 
           <p id="status-line" class="status-line">Loading artifacts...</p>
 
           <section id="snapshot-review" class="snapshot-review" aria-label="Snapshot review" hidden>
-            <header id="snapshot-context" class="snapshot-context"></header>
+            <div id="snapshot-scroll" class="snapshot-scroll">
+              <div class="snapshot-chart-grid" aria-label="Snapshot charts">
+                <section class="snapshot-panel snapshot-chart-panel" aria-label="Trend context">
+                  <div class="snapshot-panel-heading">
+                    <h2>Trend Context</h2>
+                    <p id="snapshot-trend-status"></p>
+                  </div>
+                  <div id="snapshot-trend-chart" class="snapshot-chart" role="img" aria-label="Snapshot trend chart"></div>
+                </section>
 
-            <section class="snapshot-panel" aria-label="Trend context">
-              <div class="snapshot-panel-heading">
-                <h2>Trend Context</h2>
-                <p id="snapshot-trend-status"></p>
+                <section class="snapshot-panel snapshot-chart-panel" aria-label="Cluster context">
+                  <div class="snapshot-panel-heading">
+                    <h2>Cluster Context</h2>
+                    <p id="snapshot-cluster-status"></p>
+                  </div>
+                  <div id="snapshot-cluster-chart" class="snapshot-chart" role="img" aria-label="Snapshot cluster chart"></div>
+                </section>
               </div>
-              <div id="snapshot-trend-chart" class="snapshot-chart" role="img" aria-label="Snapshot trend chart"></div>
-            </section>
 
-            <section class="snapshot-panel" aria-label="Cluster context">
-              <div class="snapshot-panel-heading">
-                <h2>Cluster Context</h2>
-                <p id="snapshot-cluster-status"></p>
-              </div>
-              <div id="snapshot-cluster-chart" class="snapshot-chart" role="img" aria-label="Snapshot cluster chart"></div>
-            </section>
+              <div class="snapshot-details" aria-label="Snapshot detail tables">
+                <details id="snapshot-events-detail" class="snapshot-detail">
+                  <summary>
+                    <span class="snapshot-detail-title">Events</span>
+                    <span id="snapshot-events-status"></span>
+                  </summary>
+                  <div class="snapshot-table-shell">
+                    <table>
+                      <thead id="snapshot-events-head"></thead>
+                      <tbody id="snapshot-events-body"></tbody>
+                    </table>
+                  </div>
+                </details>
 
-            <section class="snapshot-panel" aria-label="Events">
-              <div class="snapshot-panel-heading">
-                <h2>Events</h2>
-                <p id="snapshot-events-status"></p>
+                <details id="snapshot-measurements-detail" class="snapshot-detail">
+                  <summary>
+                    <span class="snapshot-detail-title">Measurements</span>
+                    <span id="snapshot-measurements-status"></span>
+                  </summary>
+                  <div class="snapshot-table-shell">
+                    <table>
+                      <thead id="snapshot-measurements-head"></thead>
+                      <tbody id="snapshot-measurements-body"></tbody>
+                    </table>
+                  </div>
+                </details>
               </div>
-              <div class="snapshot-table-shell">
-                <table>
-                  <thead id="snapshot-events-head"></thead>
-                  <tbody id="snapshot-events-body"></tbody>
-                </table>
-              </div>
-            </section>
-
-            <section class="snapshot-panel" aria-label="Measurements">
-              <div class="snapshot-panel-heading">
-                <h2>Measurements</h2>
-                <p id="snapshot-measurements-status"></p>
-              </div>
-              <div class="snapshot-table-shell">
-                <table>
-                  <thead id="snapshot-measurements-head"></thead>
-                  <tbody id="snapshot-measurements-body"></tbody>
-                </table>
-              </div>
-            </section>
+            </div>
           </section>
 
           <section id="summary-grid" class="summary-grid" aria-label="Summary"></section>

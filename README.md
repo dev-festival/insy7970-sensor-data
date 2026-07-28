@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.4.4` adds on-demand SQLite trend reads over the registered-model review workspace:
+Sprint `0.4.5` polishes the Snapshot review workspace over the SQLite trend and registered-model layers:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -63,6 +63,7 @@ Sprint `0.4.4` adds on-demand SQLite trend reads over the registered-model revie
 - global browser context for source and date range
 - named asset-tree, equipment, and sensor navigation with explicit scope state
 - selected-scope Snapshot review with context, trends, cluster context, events, and measurements
+- Snapshot review panes with independent scroll, pinned metadata, side-by-side charts, and collapsible detail tables
 - view-local controls for metric, dimension, and `k`
 - URL-backed browser state for local refresh/share workflows
 - first-party SVG snapshot, trend, cluster, and drift charts over API responses
@@ -188,7 +189,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing daily snapshots, optional trend artifacts, and registered SQLite cluster models in sprint `0.4.4`. Build snapshots first; the Trend tab reads from `sensor_daily_snapshots` on request and falls back to trend artifacts only when SQLite daily rows are unavailable. Run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser.
+The web and API are read-only over existing daily snapshots, optional trend artifacts, and registered SQLite cluster models in sprint `0.4.5`. Build snapshots first; the Trend tab reads from `sensor_daily_snapshots` on request and falls back to trend artifacts only when SQLite daily rows are unavailable. Run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser.
 
 ## Source API
 
