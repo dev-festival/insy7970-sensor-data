@@ -93,7 +93,7 @@ FastAPI should:
 - Read artifacts through storage/query functions rather than constructing file paths in route handlers.
 - Treat missing data as a normal state with clear 404 or 422 responses, not unhandled 500s.
 
-Future dashboard drilldowns should treat timestamp-level source readings as on-demand detail. The durable local layer should stay daily snapshots, trends, clusters, drift, reports, and ledger records; if a user clicks a suspicious daily point, the service can make a narrow live source request for that exact sensor/date/measurement/dimension and discard the detail unless explicitly retained.
+Future dashboard drilldowns should treat timestamp-level source readings as on-demand detail. The durable local layer should stay daily snapshots, SQLite-backed trend views, registered cluster models, drift outputs, reports, and ledger records; if a user clicks a suspicious daily point, the service can make a narrow live source request for that exact sensor/date/measurement/dimension and discard the detail unless explicitly retained.
 
 Initial endpoint shape:
 
@@ -321,13 +321,15 @@ Expected bridge work between `0.2.0` and `0.3.0`:
 
 The rule for this bridge is: mock data owns behavior, live data validates assumptions, and human-facing evidence earns trust before more advanced modeling is added. Normal tests should remain offline, deterministic, and fixture-backed. Live tests or smoke checks should be opt-in and should never require secrets, plant network access, or large real datasets for the default development workflow.
 
-Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof: preserve them first, checksum them, validate them, summarize them into an ingestion ledger, and then release or pack them according to the workflow retention mode. The long-term working layer should be daily snapshots in CSV and SQLite, compact source reference tables, plus trends, features, clusters, drift, reports, and maintenance context. Timestamp-native SQLite observations and date-scoped source metadata copies are useful for inspection and replay, but they should not be required for the default clustering path after daily snapshots have been persisted.
+Raw evidence is not the long-term working set. Treat live JSON payloads like short-lived proof: preserve them first, checksum them, validate them, summarize them into an ingestion ledger, and then release or pack them according to the workflow retention mode. The long-term working layer should be daily snapshots in CSV and SQLite, compact source reference tables, SQLite trend queries over daily facts, registered cluster models, drift outputs, reports, and maintenance context. Timestamp-native SQLite observations and date-scoped source metadata copies are useful for inspection and replay, but they should not be required for the default clustering path after daily snapshots have been persisted.
 
 Expected post-clustering hardening before `0.4.0`:
 
 - `0.3.0`: deterministic dimension-specific clustering, PCA coordinates, metrics, and first drift artifacts.
 - `0.3.1`: operating-window orchestration, cluster quality summaries, and centroid-aligned drift interpretation.
 - `0.3.2`: deferred artifact packing and retention for raw and processed outputs after artifact volume justifies loader complexity.
+- `0.4.3`: offline cluster model registry and SQLite-backed cluster/drift reads.
+- `0.4.4`: on-demand SQLite trend queries over daily snapshots.
 - `0.4.x`: on-demand live source drilldown from dashboard points without restoring raw detail as default local storage.
 
 The rule for this phase is: pull narrow, persist immediately, process from SQLite or compact per-date artifacts, and interpret cluster movement before presenting drift as an operational signal. Range commands should never require loading a full operating window of raw endpoint JSON into memory. Packing should wait until processed artifacts are large enough or old enough to justify loader complexity.

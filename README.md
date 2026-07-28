@@ -172,7 +172,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing processed artifacts in sprint `0.4.1a`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser.
+The web and API are read-only over existing processed artifacts in sprint `0.4.1a`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser. Upcoming specs move cluster/drift reads toward a prebuilt SQLite model registry and move routine trend reads toward on-demand SQLite queries over daily snapshot facts.
 
 ## Source API
 

@@ -26,8 +26,10 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.4.0](0.4.0-api-and-static-web.md) | API and web hardening | Dashboard polish, richer service responses, and browser workflow hardening |
 | [0.4.1](0.4.1-navigation-and-parameter-model.md) | Navigation and parameter model | Global context, equipment/sensor navigation, and view-local controls |
 | [0.4.1a](0.4.1a-equipment-tree-and-selection.md) | Equipment tree and selection | Named asset-tree navigation with explicit all, asset tree, equipment, and sensor scope semantics |
+| [0.4.1b](0.4.1b-snapshot-review-workspace.md) | Snapshot review workspace | Selected equipment/sensor snapshot page with trends, cluster context, events, and measurements |
 | [0.4.2](0.4.2-chart-rendering-and-ui-polish.md) | Chart rendering and UI polish | Stable chart layout, metric controls, and dependency-light rendering decisions |
-| [0.4.3](0.4.3-on-demand-cluster-builds.md) | On-demand cluster builds | Explicit build/reuse flow for parameterized cluster and cluster-window artifacts |
+| [0.4.3](0.4.3-offline-cluster-model-registry.md) | Offline cluster model registry | Prebuilt cluster model grids and drift results persisted to SQLite for app reads |
+| [0.4.4](0.4.4-on-demand-sqlite-trends.md) | On-demand SQLite trends | Trend API responses computed from SQLite daily snapshots instead of required artifacts |
 | [0.4.x](0.4.x-on-demand-source-drilldown.md) | On-demand source drilldown | Temporary live source detail for selected dashboard points without permanent raw storage |
 | [0.5.0](0.5.0-maximo-integration.md) | Maximo integration | Asset maintenance records aligned to Waites equipment by asset number |
 
