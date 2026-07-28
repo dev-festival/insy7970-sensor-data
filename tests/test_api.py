@@ -35,8 +35,8 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert 'id="source-select"' in response.text
     assert 'class="global-context"' in response.text
     assert 'id="equipment-search"' in response.text
-    assert 'id="equipment-list"' in response.text
-    assert 'id="sensor-list"' in response.text
+    assert 'id="equipment-tree"' in response.text
+    assert 'id="scope-status"' in response.text
     assert 'id="metric-select"' in response.text
     assert 'data-view="cluster"' in response.text
     assert "plotly" in response.text.lower()
@@ -57,7 +57,8 @@ def test_waites_raw_runs_endpoint_lists_available_manifests(tmp_path: Path) -> N
     payload = response.json()
     assert payload["count"] == 1
     assert payload["runs"][0]["date"] == "2025-07-09"
-    assert payload["runs"][0]["endpoint_count"] == 6
+    assert payload["runs"][0]["endpoint_count"] == 7
+    assert payload["runs"][0]["record_counts"]["asset-tree"] == 2
     assert payload["runs"][0]["record_counts"]["readings-rms"] == 21
 
 
@@ -144,6 +145,16 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     assert equipment["rows"][0]["sensor_count"] >= 1
     assert "dates" in equipment["rows"][0]
 
+    tree_response = client.get("/api/equipment-tree?source=mock")
+    assert tree_response.status_code == 200
+    tree = tree_response.json()
+    assert tree["asset_tree_count"] >= 1
+    assert tree["equipment_count"] >= 1
+    assert tree["sensor_count"] >= 1
+    blanking_line = next(row for row in tree["asset_trees"] if row["asset_tree_id"] == "12440")
+    assert blanking_line["asset_tree_name"] == "Blanking Line"
+    assert blanking_line["equipment"][0]["sensors"][0]["installation_point_id"]
+
     ranged_response = client.get(
         "/api/equipment?source=mock&start_date=2025-07-10&end_date=2025-07-10"
     )
@@ -153,6 +164,15 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     assert ranged["end_date"] == "2025-07-10"
     assert all(row["dates"] == ["2025-07-10"] for row in ranged["rows"])
 
+    ranged_tree_response = client.get(
+        "/api/equipment-tree?source=mock&start_date=2025-07-10&end_date=2025-07-10"
+    )
+    assert ranged_tree_response.status_code == 200
+    ranged_tree = ranged_tree_response.json()
+    assert ranged_tree["start_date"] == "2025-07-10"
+    assert ranged_tree["end_date"] == "2025-07-10"
+    assert all(row["active_dates"] == ["2025-07-10"] for row in ranged_tree["asset_trees"])
+
 
 def test_equipment_endpoint_validates_date_range(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
@@ -160,6 +180,9 @@ def test_equipment_endpoint_validates_date_range(tmp_path: Path) -> None:
 
     bad_date = client.get("/api/equipment?source=mock&start_date=bad")
     assert bad_date.status_code == 422
+
+    bad_tree_date = client.get("/api/equipment-tree?source=mock&start_date=bad")
+    assert bad_tree_date.status_code == 422
 
     reversed_range = client.get(
         "/api/equipment?source=mock&start_date=2025-07-11&end_date=2025-07-09"

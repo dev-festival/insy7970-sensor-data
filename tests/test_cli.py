@@ -67,9 +67,11 @@ def test_cli_waites_fetch_writes_mock_artifacts(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["endpoint_count"] == 6
+    assert payload["endpoint_count"] == 7
+    assert payload["record_counts"]["asset-tree"] == 2
     assert payload["record_counts"]["equipment"] == 6
     assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "manifest.json").exists()
+    assert (data_dir / "processed" / "waites" / "reference" / "asset_tree.csv").exists()
     assert (data_dir / "processed" / "waites" / "reference" / "equipment.csv").exists()
 
 
@@ -254,7 +256,7 @@ def test_cli_raw_lifecycle_commands(tmp_path: Path) -> None:
         ],
     )
     assert compress_result.exit_code == 0
-    assert json.loads(compress_result.stdout)["compressed_count"] == 6
+    assert json.loads(compress_result.stdout)["compressed_count"] == 7
     assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "equipment.json.gz").exists()
 
     prune_result = runner.invoke(
@@ -440,7 +442,7 @@ def test_cli_workflow_mock_day_json_outputs_combined_summary(tmp_path: Path) -> 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["workflow"] == "mock-day"
-    assert payload["fetch"]["endpoint_count"] == 6
+    assert payload["fetch"]["endpoint_count"] == 7
     assert payload["load"]["row_counts"]["rms"] == 21
     assert payload["snapshot"]["record_count"] == 9
     assert [step["title"] for step in payload["steps"]] == [
@@ -483,6 +485,7 @@ def test_cli_workflow_mock_day_release_keeps_snapshot_only_operating_path(tmp_pa
     assert _sqlite_count(data_dir, "waites_rms_observations") == 0
     assert _sqlite_count(data_dir, "waites_installation_points") == 0
     assert _sqlite_count(data_dir, "sensor_daily_snapshots") == 9
+    assert _sqlite_count(data_dir, "waites_asset_tree_reference") == 3
     assert _sqlite_count(data_dir, "waites_installation_point_reference") == 8
 
     trend_result = runner.invoke(

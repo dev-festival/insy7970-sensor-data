@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 import re
+import sqlite3
 
 from insy_sensor_data.artifacts import read_csv_rows, read_json
 from insy_sensor_data.clustering.features import DIMENSIONS
@@ -153,6 +154,118 @@ def list_equipment_view(
         "end_date": end_date.isoformat() if end_date else None,
         "count": len(rows),
         "rows": sorted(rows, key=lambda row: (_sort_key(row["equipment_id"]), row["source"])),
+    }
+
+
+def list_equipment_tree_view(
+    settings: AppSettings,
+    source: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict[str, Any]:
+    source_mode = _optional_source(source)
+    if start_date is not None and end_date is not None and end_date < start_date:
+        raise ValueError("end_date must be on or after start_date")
+
+    references = _load_reference_indexes(settings, source_mode)
+    active_equipment = _active_equipment_from_snapshots(
+        settings,
+        source_mode=source_mode,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    tree_map: dict[str, dict[str, Any]] = {}
+    equipment_count = 0
+    sensor_count = 0
+
+    for equipment_id, active in active_equipment.items():
+        equipment_ref = references["equipment"].get(equipment_id, {})
+        asset_tree_id = _text_id(equipment_ref.get("asset_tree_id")) or "unknown"
+        asset_tree_ref = references["asset_trees"].get(asset_tree_id, {})
+        tree = tree_map.setdefault(
+            asset_tree_id,
+            {
+                "asset_tree_id": asset_tree_id,
+                "asset_tree_name": _asset_tree_name(asset_tree_id, asset_tree_ref),
+                "parent_asset_tree_id": _none_if_empty(
+                    _text_id(asset_tree_ref.get("parent_asset_tree_id"))
+                ),
+                "facility_id": _none_if_empty(_text_id(asset_tree_ref.get("facility_id"))),
+                "asset_tree_path": _clean_text(asset_tree_ref.get("asset_tree_path"))
+                or _asset_tree_name(asset_tree_id, asset_tree_ref),
+                "dates": set(),
+                "equipment": [],
+            },
+        )
+
+        equipment_dates = sorted(active["dates"])
+        tree["dates"].update(equipment_dates)
+        sensors = []
+        for installation_point_id, sensor_active in sorted(
+            active["sensors"].items(),
+            key=lambda item: _sort_key(item[0]),
+        ):
+            sensor_ref = references["installation_points"].get(installation_point_id, {})
+            sensor_dates = sorted(sensor_active["dates"])
+            sensors.append(
+                {
+                    "installation_point_id": installation_point_id,
+                    "installation_point_name": _clean_text(sensor_active.get("installation_point_name"))
+                    or _clean_text(sensor_ref.get("name"))
+                    or f"Sensor {installation_point_id}",
+                    "sensor_id": _text_id(sensor_active.get("sensor_id"))
+                    or _text_id(sensor_ref.get("sensor_id")),
+                    "customer_asset_id": _clean_text(sensor_active.get("customer_asset_id"))
+                    or _clean_text(sensor_ref.get("customer_asset_id")),
+                    "active_dates": sensor_dates,
+                    "first_date": sensor_dates[0] if sensor_dates else None,
+                    "last_date": sensor_dates[-1] if sensor_dates else None,
+                    "date_count": len(sensor_dates),
+                }
+            )
+        sensor_count += len(sensors)
+        equipment_count += 1
+        tree["equipment"].append(
+            {
+                "equipment_id": equipment_id,
+                "equipment_name": _clean_text(active.get("equipment_name"))
+                or _clean_text(equipment_ref.get("name"))
+                or f"Equipment {equipment_id}",
+                "customer_asset_id": _clean_text(active.get("customer_asset_id"))
+                or _clean_text(equipment_ref.get("customer_asset_id")),
+                "asset_tree_id": asset_tree_id,
+                "active_dates": equipment_dates,
+                "first_date": equipment_dates[0] if equipment_dates else None,
+                "last_date": equipment_dates[-1] if equipment_dates else None,
+                "date_count": len(equipment_dates),
+                "sensor_count": len(sensors),
+                "sensors": sensors,
+            }
+        )
+
+    asset_trees = []
+    for tree in tree_map.values():
+        dates = sorted(tree.pop("dates"))
+        tree["equipment"].sort(key=lambda row: (_sort_key(row["equipment_id"]), row["equipment_name"]))
+        tree["equipment_count"] = len(tree["equipment"])
+        tree["sensor_count"] = sum(len(row["sensors"]) for row in tree["equipment"])
+        tree["active_dates"] = dates
+        tree["first_date"] = dates[0] if dates else None
+        tree["last_date"] = dates[-1] if dates else None
+        tree["date_count"] = len(dates)
+        asset_trees.append(tree)
+
+    return {
+        "source": source_mode,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
+        "asset_tree_count": len(asset_trees),
+        "equipment_count": equipment_count,
+        "sensor_count": sensor_count,
+        "asset_trees": sorted(
+            asset_trees,
+            key=lambda row: (_sort_key(row["asset_tree_id"]), row["asset_tree_name"]),
+        ),
     }
 
 
@@ -489,6 +602,203 @@ def _filter_rows(
         for row in rows
         if all(str(row.get(key) or "") == value for key, value in active.items())
     ]
+
+
+def _active_equipment_from_snapshots(
+    settings: AppSettings,
+    source_mode: str | None,
+    start_date: date | None,
+    end_date: date | None,
+) -> dict[str, dict[str, Any]]:
+    active: dict[str, dict[str, Any]] = {}
+    for snapshot_date in list_snapshot_dates(settings):
+        parsed_snapshot_date = date.fromisoformat(snapshot_date)
+        if start_date is not None and parsed_snapshot_date < start_date:
+            continue
+        if end_date is not None and parsed_snapshot_date > end_date:
+            continue
+
+        payload = load_snapshot(settings, parsed_snapshot_date)
+        snapshot_source = str(payload["metadata"].get("source") or "")
+        if source_mode is not None and snapshot_source != source_mode:
+            continue
+
+        for row in payload["rows"]:
+            equipment_id = _text_id(row.get("equipment_id"))
+            equipment = active.setdefault(
+                equipment_id,
+                {
+                    "equipment_id": equipment_id,
+                    "equipment_name": "",
+                    "customer_asset_id": "",
+                    "dates": set(),
+                    "sensors": {},
+                },
+            )
+            equipment["dates"].add(snapshot_date)
+            if not equipment["equipment_name"] and row.get("equipment_name"):
+                equipment["equipment_name"] = row.get("equipment_name")
+            if not equipment["customer_asset_id"] and row.get("customer_asset_id"):
+                equipment["customer_asset_id"] = row.get("customer_asset_id")
+
+            installation_point_id = _text_id(row.get("installation_point_id"))
+            if not installation_point_id:
+                continue
+            sensor = equipment["sensors"].setdefault(
+                installation_point_id,
+                {
+                    "installation_point_id": installation_point_id,
+                    "installation_point_name": "",
+                    "sensor_id": "",
+                    "customer_asset_id": "",
+                    "dates": set(),
+                },
+            )
+            sensor["dates"].add(snapshot_date)
+            if not sensor["installation_point_name"] and row.get("installation_point_name"):
+                sensor["installation_point_name"] = row.get("installation_point_name")
+            if not sensor["sensor_id"] and row.get("sensor_id"):
+                sensor["sensor_id"] = row.get("sensor_id")
+            if not sensor["customer_asset_id"] and row.get("customer_asset_id"):
+                sensor["customer_asset_id"] = row.get("customer_asset_id")
+    return active
+
+
+def _load_reference_indexes(
+    settings: AppSettings,
+    source_mode: str | None,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    return {
+        "asset_trees": _merged_reference_index(
+            _csv_reference_rows(settings, "asset_tree.csv"),
+            _sqlite_reference_rows(
+                settings,
+                "waites_asset_tree_reference",
+                [
+                    "asset_tree_id",
+                    "name",
+                    "parent_asset_tree_id",
+                    "facility_id",
+                    "asset_tree_path",
+                ],
+                source_mode,
+            ),
+            "asset_tree_id",
+        ),
+        "equipment": _merged_reference_index(
+            _csv_reference_rows(settings, "equipment.csv"),
+            _sqlite_reference_rows(
+                settings,
+                "waites_equipment_reference",
+                ["equipment_id", "asset_tree_id", "name", "facility_id", "customer_asset_id"],
+                source_mode,
+            ),
+            "equipment_id",
+        ),
+        "installation_points": _merged_reference_index(
+            _csv_reference_rows(settings, "installation_points.csv"),
+            _sqlite_reference_rows(
+                settings,
+                "waites_installation_point_reference",
+                [
+                    "installation_point_id",
+                    "name",
+                    "equipment_id",
+                    "sensor_id",
+                    "facility_id",
+                    "last_seen",
+                    "installation_date",
+                    "customer_asset_id",
+                ],
+                source_mode,
+            ),
+            "installation_point_id",
+        ),
+    }
+
+
+def _sqlite_reference_rows(
+    settings: AppSettings,
+    table: str,
+    fields: list[str],
+    source_mode: str | None,
+) -> list[dict[str, Any]]:
+    database_path = get_storage_paths(settings.data_dir).observations_db_path
+    if not database_path.exists():
+        return []
+    try:
+        with sqlite3.connect(database_path) as connection:
+            connection.row_factory = sqlite3.Row
+            table_exists = connection.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = ?
+                """,
+                (table,),
+            ).fetchone()
+            if table_exists is None:
+                return []
+
+            columns = ", ".join(fields)
+            if source_mode is None:
+                rows = connection.execute(f"SELECT {columns} FROM {table}").fetchall()
+            else:
+                rows = connection.execute(
+                    f"SELECT {columns} FROM {table} WHERE source = ?",
+                    (source_mode,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+    except sqlite3.Error:
+        return []
+
+
+def _csv_reference_rows(settings: AppSettings, filename: str) -> list[dict[str, Any]]:
+    path = get_storage_paths(settings.data_dir).waites_reference_dir() / filename
+    try:
+        return read_csv_rows(path)
+    except FileNotFoundError:
+        return []
+
+
+def _reference_index(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
+    return {
+        _text_id(row.get(key)): row
+        for row in rows
+        if _text_id(row.get(key))
+    }
+
+
+def _merged_reference_index(
+    fallback_rows: list[dict[str, Any]],
+    preferred_rows: list[dict[str, Any]],
+    key: str,
+) -> dict[str, dict[str, Any]]:
+    index = _reference_index(fallback_rows, key)
+    index.update(_reference_index(preferred_rows, key))
+    return index
+
+
+def _asset_tree_name(asset_tree_id: str, asset_tree_ref: dict[str, Any]) -> str:
+    if asset_tree_id == "unknown":
+        return _clean_text(asset_tree_ref.get("name")) or "Unknown Asset Tree"
+    return _clean_text(asset_tree_ref.get("name")) or f"Asset Tree {asset_tree_id}"
+
+
+def _none_if_empty(value: str) -> str | None:
+    return value or None
+
+
+def _clean_text(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return str(value).strip()
+
+
+def _text_id(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return str(value).strip()
 
 
 def _filters(**values: str | None) -> dict[str, str | None]:

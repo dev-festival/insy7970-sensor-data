@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from insy_sensor_data.artifact_views import (
     discover_artifacts,
+    list_equipment_tree_view,
     list_equipment_view,
     load_cluster_view,
     load_cluster_window_view,
@@ -31,6 +32,24 @@ def read_equipment(
 ) -> dict[str, Any]:
     try:
         return list_equipment_view(
+            request.app.state.settings,
+            source=source,
+            start_date=date.fromisoformat(start_date) if start_date else None,
+            end_date=date.fromisoformat(end_date) if end_date else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/equipment-tree")
+def read_equipment_tree(
+    request: Request,
+    source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    try:
+        return list_equipment_tree_view(
             request.app.state.settings,
             source=source,
             start_date=date.fromisoformat(start_date) if start_date else None,

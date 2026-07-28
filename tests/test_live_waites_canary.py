@@ -35,5 +35,5 @@ def test_live_waites_canary_fetches_raw_evidence(tmp_path: Path) -> None:
     )
 
     assert summary["source"] == "api"
-    assert summary["endpoint_count"] == 6
+    assert summary["endpoint_count"] == 7
     assert Path(summary["manifest_path"]).exists()

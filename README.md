@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.4.1` adds a clearer navigation and parameter model on top of the read-only API and static web review surface:
+Sprint `0.4.1a` adds named asset-tree equipment navigation on top of the read-only API and static web review surface:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -21,7 +21,7 @@ Sprint `0.4.1` adds a clearer navigation and parameter model on top of the read-
 - daily sensor snapshots under `data/processed/snapshots/`
 - trend-ready outputs under `data/processed/trends/`
 - snapshot and trend visibility through FastAPI
-- artifact discovery, equipment lookup, cluster, drift, and cluster-window visibility through FastAPI
+- artifact discovery, equipment lookup, equipment tree, cluster, drift, and cluster-window visibility through FastAPI
 - controlled mock trend dates for `2025-07-09` through `2025-07-11`
 - opt-in live Waites raw evidence capture with secret-safe manifests
 - raw Waites validation reports under `data/raw/waites/date=YYYY-MM-DD/validation.json`
@@ -52,9 +52,9 @@ Sprint `0.4.1` adds a clearer navigation and parameter model on top of the read-
 - Waites ingestion ledger with endpoint counts, validation status, checksums, and retention status
 - workflow raw-retention modes: `keep`, `compress`, and `release`
 - date-scoped staging purge after snapshot and ledger persistence are verified
-- compact Waites reference tables with one row per equipment and one row per sensor
+- compact Waites reference tables with one row per asset tree, equipment, and sensor
 - global browser context for source and date range
-- equipment and sensor navigation with explicit all-equipment and all-sensor states
+- named asset-tree, equipment, and sensor navigation with explicit scope state
 - view-local controls for metric, dimension, and `k`
 - URL-backed browser state for local refresh/share workflows
 - Plotly-based snapshot, trend, cluster, and drift views over API responses
@@ -164,6 +164,7 @@ Then open:
 - `http://127.0.0.1:8000/api/artifacts`
 - `http://127.0.0.1:8000/api/waites/raw-runs`
 - `http://127.0.0.1:8000/api/equipment?source=mock`
+- `http://127.0.0.1:8000/api/equipment-tree?source=mock`
 - `http://127.0.0.1:8000/api/snapshots/2025-07-09?source=mock`
 - `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11`
 - `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4`
@@ -171,7 +172,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing processed artifacts in sprint `0.4.1`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser.
+The web and API are read-only over existing processed artifacts in sprint `0.4.1a`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser.
 
 ## Source API
 
@@ -207,7 +208,7 @@ Live Waites canary ingestion writes the same raw paths:
 data/raw/waites/date=YYYY-MM-DD/
 ```
 
-Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_equipment_reference` and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations.
+Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations.
 
 The mock trend dates are intentionally small and controlled:
 

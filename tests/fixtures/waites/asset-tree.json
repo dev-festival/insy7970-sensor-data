@@ -1,0 +1,21 @@
+{
+  "list": [
+    {
+      "asset_tree_id": 12440,
+      "name": "Blanking Line",
+      "facility_id": 679,
+      "children": [
+        {
+          "asset_tree_id": 7526,
+          "name": "IPDL Area",
+          "facility_id": 679
+        }
+      ]
+    },
+    {
+      "asset_tree_id": 3759,
+      "name": "Die Cast Hydraulic Systems",
+      "facility_id": 679
+    }
+  ]
+}

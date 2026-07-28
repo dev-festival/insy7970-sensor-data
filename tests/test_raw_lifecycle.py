@@ -42,7 +42,7 @@ def test_compress_raw_waites_updates_manifest_and_readers(tmp_path: Path) -> Non
     summary = compress_raw_waites(settings=settings, run_date=run_date)
 
     raw_dir = tmp_path / "data" / "raw" / "waites" / "date=2025-07-09"
-    assert summary["compressed_count"] == 6
+    assert summary["compressed_count"] == 7
     assert not (raw_dir / "equipment.json").exists()
     assert (raw_dir / "equipment.json.gz").exists()
 
@@ -84,7 +84,7 @@ def test_release_raw_waites_deletes_payloads_but_keeps_manifest_verifiable(tmp_p
     summary = release_raw_waites(settings=settings, run_date=run_date)
 
     raw_dir = tmp_path / "data" / "raw" / "waites" / "date=2025-07-09"
-    assert summary["released_count"] == 6
+    assert summary["released_count"] == 7
     assert not (raw_dir / "equipment.json").exists()
     assert not (raw_dir / "equipment.json.gz").exists()
     assert (raw_dir / "manifest.json").exists()

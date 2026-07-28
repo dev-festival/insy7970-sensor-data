@@ -11,11 +11,15 @@ import sqlite3
 from insy_sensor_data.artifacts import read_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import get_storage_paths
+from insy_sensor_data.waites.asset_tree import (
+    asset_tree_records_from_payload,
+    normalize_asset_tree_records,
+)
 from insy_sensor_data.waites.client import ENDPOINT_FILENAMES
 from insy_sensor_data.waites.validate import ensure_waites_raw_valid
 
 
-OBSERVATION_SCHEMA_VERSION = 3
+OBSERVATION_SCHEMA_VERSION = 4
 VALID_OBSERVATION_SOURCES = {"mock", "api"}
 VALID_RAW_RETENTION_MODES = {"release", "compress", "keep"}
 
@@ -141,6 +145,19 @@ def initialize_observation_store(connection: sqlite3.Connection) -> None:
             last_loaded_at TEXT NOT NULL,
             last_source_date TEXT NOT NULL,
             PRIMARY KEY (source, equipment_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS waites_asset_tree_reference (
+            source TEXT NOT NULL,
+            asset_tree_id INTEGER NOT NULL,
+            name TEXT,
+            parent_asset_tree_id INTEGER,
+            facility_id INTEGER,
+            asset_tree_path TEXT,
+            first_loaded_at TEXT NOT NULL,
+            last_loaded_at TEXT NOT NULL,
+            last_source_date TEXT NOT NULL,
+            PRIMARY KEY (source, asset_tree_id)
         );
 
         CREATE TABLE IF NOT EXISTS waites_installation_point_reference (
@@ -278,6 +295,9 @@ def initialize_observation_store(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_waites_equipment_reference_asset
             ON waites_equipment_reference (source, customer_asset_id);
 
+        CREATE INDEX IF NOT EXISTS idx_waites_asset_tree_reference_parent
+            ON waites_asset_tree_reference (source, parent_asset_tree_id);
+
         CREATE INDEX IF NOT EXISTS idx_waites_installation_reference_equipment
             ON waites_installation_point_reference (source, equipment_id);
 
@@ -343,6 +363,7 @@ def load_waites_observations(
     facility_id = _as_int(manifest.get("facility_id")) or settings.waites_facility_id
 
     payloads = {
+        "asset-tree": asset_tree_records_from_payload(read_json(raw_dir / "asset-tree.json")),
         "equipment": read_json(raw_dir / "equipment.json")["list"],
         "installation-points": read_json(raw_dir / "installation-points.json")["list"],
         "readings-rms": read_json(raw_dir / "readings-rms.json")["list"],
@@ -917,6 +938,10 @@ def _insert_waites_payloads(
     loaded_at: str,
     payloads: dict[str, list[dict[str, Any]]],
 ) -> dict[str, int]:
+    asset_tree_rows = [
+        _asset_tree_reference_row(source, source_date, loaded_at, row)
+        for row in normalize_asset_tree_records(payloads.get("asset-tree", []))
+    ]
     equipment_rows = [_equipment_row(source_date, row) for row in payloads["equipment"]]
     equipment_reference_rows = [
         _equipment_reference_row(source, source_date, loaded_at, row)
@@ -944,6 +969,30 @@ def _insert_waites_payloads(
         _action_item_row(source_date, row, index) for index, row in enumerate(payloads["action-items"])
     ]
 
+    connection.executemany(
+        """
+        INSERT INTO waites_asset_tree_reference (
+            source,
+            asset_tree_id,
+            name,
+            parent_asset_tree_id,
+            facility_id,
+            asset_tree_path,
+            first_loaded_at,
+            last_loaded_at,
+            last_source_date
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, asset_tree_id) DO UPDATE SET
+            name = excluded.name,
+            parent_asset_tree_id = excluded.parent_asset_tree_id,
+            facility_id = excluded.facility_id,
+            asset_tree_path = excluded.asset_tree_path,
+            last_loaded_at = excluded.last_loaded_at,
+            last_source_date = excluded.last_source_date
+        """,
+        asset_tree_rows,
+    )
     connection.executemany(
         """
         INSERT OR REPLACE INTO waites_equipment (
@@ -1098,6 +1147,7 @@ def _insert_waites_payloads(
     )
 
     return {
+        "asset_trees": len(asset_tree_rows),
         "equipment": len(equipment_rows),
         "installation_points": len(installation_rows),
         "rms": len(rms_rows),
@@ -1550,6 +1600,25 @@ def _native_purge_candidate(
         if ledger is not None
         else None,
     }
+
+
+def _asset_tree_reference_row(
+    source: str,
+    source_date: str,
+    loaded_at: str,
+    row: dict[str, Any],
+) -> tuple[Any, ...]:
+    return (
+        source,
+        _as_int(row.get("asset_tree_id")),
+        _as_text(row.get("name")),
+        _as_int(row.get("parent_asset_tree_id")),
+        _as_int(row.get("facility_id")),
+        _as_text(row.get("asset_tree_path")),
+        loaded_at,
+        loaded_at,
+        source_date,
+    )
 
 
 def _equipment_row(source_date: str, row: dict[str, Any]) -> tuple[Any, ...]:

@@ -7,6 +7,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 WAITES_DIR = FIXTURE_DIR / "waites"
 
 WAITES_REQUIRED_FIELDS = {
+    "asset-tree.json": {"asset_tree_id", "name", "facility_id"},
     "equipment.json": {"equipment_id", "asset_tree_id", "name", "facility_id", "customer_asset_id"},
     "installation-points.json": {
         "installation_point_id",
@@ -55,6 +56,7 @@ def test_waites_fixtures_include_required_fields() -> None:
 
 
 def test_waites_fixtures_include_contract_awkwardness() -> None:
+    asset_tree = _load_waites("asset-tree.json")["list"]
     equipment = _load_waites("equipment.json")["list"]
     installation_points = _load_waites("installation-points.json")["list"]
     rms = _load_waites("readings-rms.json")["list"]
@@ -62,11 +64,20 @@ def test_waites_fixtures_include_contract_awkwardness() -> None:
     temperature = _load_waites("readings-temperature.json")["list"]
     action_items = _load_waites("action-items.json")["list"]
 
+    asset_tree_ids = {
+        record["asset_tree_id"]
+        for record in asset_tree
+    } | {
+        child["asset_tree_id"]
+        for record in asset_tree
+        for child in record.get("children", [])
+    }
     equipment_ids = {record["equipment_id"] for record in equipment}
     installation_ids = {record["installation_point_id"] for record in installation_points}
     rms_ids = {record["installation_point_id"] for record in rms}
     temp_ids = {record["installation_point_id"] for record in temperature}
 
+    assert {12440, 7526, 3759} <= asset_tree_ids
     assert any(record["customer_asset_id"] == "" for record in equipment)
     assert any(record["name"] != record["name"].strip() for record in equipment)
     assert any(record["sensor_id"] is None for record in installation_points)

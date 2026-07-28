@@ -10,6 +10,7 @@ import json
 from insy_sensor_data.artifacts import read_json, resolve_artifact_path, write_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import get_storage_paths
+from insy_sensor_data.waites.asset_tree import asset_tree_records_from_payload
 from insy_sensor_data.waites.client import ENDPOINT_FILENAMES
 
 
@@ -17,6 +18,7 @@ VALIDATION_REPORT_FILENAME = "validation.json"
 NULL_WARNING_THRESHOLD = 0.80
 
 REQUIRED_FIELDS = {
+    "asset-tree": {"asset_tree_id", "name", "facility_id"},
     "equipment": {"equipment_id", "asset_tree_id", "name", "facility_id", "customer_asset_id"},
     "installation-points": {
         "installation_point_id",
@@ -49,6 +51,25 @@ REQUIRED_FIELDS = {
 }
 
 KNOWN_OPTIONAL_FIELDS = {
+    "asset-tree": {
+        "assetTreeId",
+        "assetTreeName",
+        "asset_tree_name",
+        "asset_tree_path",
+        "breadcrumb",
+        "child_nodes",
+        "children",
+        "id",
+        "items",
+        "label",
+        "nodes",
+        "parentAssetTreeId",
+        "parentId",
+        "parent_asset_tree_id",
+        "parent_id",
+        "path",
+        "title",
+    },
     "equipment": set(),
     "installation-points": {
         "alerts",
@@ -264,9 +285,18 @@ def _validate_endpoint(
     if not isinstance(payload, dict):
         return summary
 
-    records = payload.get("list")
-    if not isinstance(records, list):
-        _add_issue(report, "error", endpoint, "bad_envelope", "Expected endpoint JSON object with list array.")
+    records = (
+        asset_tree_records_from_payload(payload)
+        if endpoint == "asset-tree"
+        else payload.get("list")
+    )
+    if not isinstance(records, list) or not records:
+        message = (
+            "Expected endpoint JSON object with list array or asset tree data."
+            if endpoint == "asset-tree"
+            else "Expected endpoint JSON object with list array."
+        )
+        _add_issue(report, "error", endpoint, "bad_envelope", message)
         return summary
 
     summary["record_count"] = len(records)

@@ -30,8 +30,9 @@ def test_load_waites_observations_creates_schema_and_records_counts(tmp_path: Pa
 
     assert observation_db_path(settings).exists()
     assert summary["source"] == "mock"
-    assert summary["schema_version"] == 3
+    assert summary["schema_version"] == 4
     assert summary["row_counts"] == {
+        "asset_trees": 3,
         "equipment": 6,
         "installation_points": 8,
         "rms": 21,
@@ -42,6 +43,7 @@ def test_load_waites_observations_creates_schema_and_records_counts(tmp_path: Pa
     assert len(summary["manifest_sha256"]) == 64
     assert _table_count(settings, "waites_rms_observations") == 21
     assert _table_count(settings, "waites_loads") == 1
+    assert _table_count(settings, "waites_asset_tree_reference") == 3
     assert _table_count(settings, "waites_equipment_reference") == 6
     assert _table_count(settings, "waites_installation_point_reference") == 8
 
@@ -118,6 +120,7 @@ def test_reference_tables_stay_one_row_per_sensor_across_load_dates(tmp_path: Pa
 
     assert _table_count(settings, "waites_installation_points") == 24
     assert _table_count(settings, "waites_installation_point_reference") == 8
+    assert _table_count(settings, "waites_asset_tree_reference") == 3
     assert _table_count(settings, "waites_equipment") == 18
     assert _table_count(settings, "waites_equipment_reference") == 6
     with connect_observation_store(settings) as connection:
@@ -196,6 +199,7 @@ def test_build_trends_reads_sqlite_observations(tmp_path: Path) -> None:
     assert _table_count(settings, "waites_rms_observations") == 0
     assert _table_count(settings, "waites_installation_points") == 0
     assert _table_count(settings, "sensor_daily_snapshots") == 27
+    assert _table_count(settings, "waites_asset_tree_reference") == 3
     assert _table_count(settings, "waites_installation_point_reference") == 8
 
 
@@ -243,6 +247,7 @@ def test_native_purge_requires_snapshot_and_keeps_ledger(tmp_path: Path) -> None
     assert _table_count(settings, "waites_impact_observations") == 0
     assert _table_count(settings, "waites_action_items") == 0
     assert _table_count(settings, "sensor_daily_snapshots") == 9
+    assert _table_count(settings, "waites_asset_tree_reference") == 3
     assert _table_count(settings, "waites_equipment_reference") == 6
     assert _table_count(settings, "waites_installation_point_reference") == 8
     assert load_ingestion_ledger(settings=settings, run_date=run_date)["native_retention_status"] == "purged"

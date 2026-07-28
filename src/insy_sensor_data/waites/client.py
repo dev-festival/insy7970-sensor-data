@@ -13,6 +13,7 @@ import time as timer
 _TRUSTSTORE_INJECTED = False
 
 ENDPOINT_FILENAMES = {
+    "asset-tree": "asset-tree.json",
     "equipment": "equipment.json",
     "installation-points": "installation-points.json",
     "readings-rms": "readings-rms.json",
@@ -28,6 +29,7 @@ READING_ENDPOINTS = {
 }
 
 ENDPOINT_PATHS = {
+    "asset-tree": "asset-tree",
     "equipment": "equipment",
     "installation-points": "installation-points",
     "readings-rms": "readings/rms",
@@ -121,6 +123,8 @@ class WaitesApiClient:
                 elapsed_ms=elapsed_ms,
             ) from exc
 
+        if isinstance(payload, list):
+            payload = {"list": payload}
         if not isinstance(payload, dict):
             raise WaitesApiError(
                 request.endpoint,
@@ -139,6 +143,7 @@ class WaitesApiClient:
 
 def build_waites_requests(run_date: date, facility_id: int) -> list[WaitesRequest]:
     return [
+        WaitesRequest("asset-tree", ENDPOINT_FILENAMES["asset-tree"], _facility_params(facility_id)),
         WaitesRequest("equipment", ENDPOINT_FILENAMES["equipment"], _facility_params(facility_id)),
         WaitesRequest(
             "installation-points",

@@ -17,9 +17,10 @@ Recommended layout:
 ```text
 tests/
   fixtures/
-    waites/
-      equipment.json
-      installation-points.json
+      waites/
+        asset-tree.json
+        equipment.json
+        installation-points.json
       readings-rms.json
       readings-impact-vue.json
       readings-temperature.json
@@ -37,8 +38,9 @@ Mock ingestion should write the same paths planned for real ingestion:
 ```text
 data/
   raw/
-    waites/
-      date=YYYY-MM-DD/
+      waites/
+        date=YYYY-MM-DD/
+        asset-tree.json
         equipment.json
         installation-points.json
         readings-rms.json
@@ -59,6 +61,7 @@ data/
   processed/
     waites/
       reference/
+        asset_tree.csv
         equipment.csv
         installation_points.csv
         metadata.json
@@ -80,7 +83,36 @@ The older reference code expects `equipment`, `installation-points`, and `action
 
 If the live API response differs, update this contract and the ingestion boundary before changing downstream processing.
 
-Sprint `0.2.3` live validation confirmed that the Waites endpoints currently used by this project return a top-level object with `list` for raw capture.
+Sprint `0.2.3` live validation confirmed that the Waites endpoints originally used by this project return a top-level object with `list` for raw capture. Sprint `0.4.1a` adds `asset-tree` for named navigation and normalizes nested asset-tree children into flat reference rows.
+
+## Asset Tree Fixture
+
+Each asset tree record should include:
+
+```json
+{
+  "asset_tree_id": 12440,
+  "name": "Blanking Line",
+  "facility_id": 679,
+  "children": []
+}
+```
+
+Required fields:
+
+- `asset_tree_id`
+- `name`
+- `facility_id`
+
+Known optional live fields:
+
+- `children`
+- `parent_asset_tree_id`
+- `asset_tree_path`
+- `path`
+- `label`
+
+The processed `asset_tree.csv` flattens nested structures into `asset_tree_id`, `name`, `parent_asset_tree_id`, `facility_id`, and `asset_tree_path`.
 
 ## Equipment Fixture
 
@@ -460,6 +492,7 @@ For sprint `0.1.0`, target about this size:
 
 | Fixture | Target records |
 |---|---:|
+| asset-tree | 2-4 |
 | equipment | 4-6 |
 | installation-points | 6-10 |
 | readings-rms | 20-40 |

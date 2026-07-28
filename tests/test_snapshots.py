@@ -103,6 +103,11 @@ class _FakeWaitesClient:
 
 def _live_shaped_payloads() -> dict[str, dict[str, object]]:
     return {
+        "asset-tree": {
+            "asset_tree_id": 12440,
+            "name": "Body Line",
+            "facility_id": 679,
+        },
         "equipment": {
             "list": [
                 {

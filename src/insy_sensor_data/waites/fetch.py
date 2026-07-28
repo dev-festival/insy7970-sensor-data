@@ -9,6 +9,10 @@ import json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.raw_lifecycle import refresh_waites_manifest_artifacts
 from insy_sensor_data.storage import StoragePaths, get_storage_paths
+from insy_sensor_data.waites.asset_tree import (
+    asset_tree_records_from_payload,
+    normalize_asset_tree_records,
+)
 from insy_sensor_data.waites.client import (
     WaitesApiClient,
     WaitesApiError,
@@ -19,6 +23,7 @@ from insy_sensor_data.waites.fixtures import describe_mock_trend_date, load_wait
 
 
 REFERENCE_FIELDS = {
+    "asset-tree": ["asset_tree_id", "name", "parent_asset_tree_id", "facility_id", "asset_tree_path"],
     "equipment": ["equipment_id", "asset_tree_id", "name", "facility_id", "customer_asset_id"],
     "installation-points": [
         "installation_point_id",
@@ -134,7 +139,7 @@ def _fetch_live_endpoint(
         {
             "name": request.endpoint,
             "path": _path_string(output_path),
-            "record_count": len(response.payload["list"]),
+            "record_count": _record_count(request.endpoint, response.payload),
             "params": request.params,
             "status_code": response.status_code,
             "elapsed_ms": response.elapsed_ms,
@@ -179,6 +184,15 @@ def _validate_waites_envelope(
     status_code: int | None = None,
     elapsed_ms: int | None = None,
 ) -> None:
+    if endpoint == "asset-tree":
+        if asset_tree_records_from_payload(payload):
+            return
+        raise WaitesApiError(
+            endpoint,
+            "Waites API returned unsupported response shape for asset-tree: expected object with list or tree data.",
+            status_code=status_code,
+            elapsed_ms=elapsed_ms,
+        )
     if not isinstance(payload.get("list"), list):
         raise WaitesApiError(
             endpoint,
@@ -186,6 +200,12 @@ def _validate_waites_envelope(
             status_code=status_code,
             elapsed_ms=elapsed_ms,
         )
+
+
+def _record_count(endpoint: str, payload: dict[str, Any]) -> int:
+    if endpoint == "asset-tree":
+        return len(asset_tree_records_from_payload(payload))
+    return len(payload["list"])
 
 
 def write_waites_reference_tables(
@@ -196,9 +216,14 @@ def write_waites_reference_tables(
     reference_dir.mkdir(parents=True, exist_ok=True)
 
     equipment_path = reference_dir / "equipment.csv"
+    asset_tree_path = reference_dir / "asset_tree.csv"
     installation_points_path = reference_dir / "installation_points.csv"
     metadata_path = reference_dir / "metadata.json"
 
+    asset_tree_rows = normalize_asset_tree_records(
+        asset_tree_records_from_payload(envelopes.get("asset-tree", {}))
+    )
+    _write_csv(asset_tree_path, asset_tree_rows, REFERENCE_FIELDS["asset-tree"])
     _write_csv(equipment_path, envelopes["equipment"]["list"], REFERENCE_FIELDS["equipment"])
     _write_csv(
         installation_points_path,
@@ -210,6 +235,10 @@ def write_waites_reference_tables(
         {
             "source": "waites",
             "tables": {
+                "asset_tree": {
+                    "path": _path_string(asset_tree_path),
+                    "record_count": len(asset_tree_rows),
+                },
                 "equipment": {
                     "path": _path_string(equipment_path),
                     "record_count": len(envelopes["equipment"]["list"]),
@@ -223,6 +252,7 @@ def write_waites_reference_tables(
     )
 
     return {
+        "asset_tree": _path_string(asset_tree_path),
         "equipment": _path_string(equipment_path),
         "installation_points": _path_string(installation_points_path),
         "metadata": _path_string(metadata_path),

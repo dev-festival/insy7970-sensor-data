@@ -81,6 +81,7 @@ data/raw/waites/date=2025-07-09/
 Also writes small processed reference tables:
 
 ```text
+data/processed/waites/reference/asset_tree.csv
 data/processed/waites/reference/equipment.csv
 data/processed/waites/reference/installation_points.csv
 data/processed/waites/reference/metadata.json
@@ -220,10 +221,11 @@ The load preserves native timestamps for RMS, temperature, ImpactVue, equipment,
 
 ```text
 waites_equipment_reference
+waites_asset_tree_reference
 waites_installation_point_reference
 ```
 
-Those reference tables are the one-row-per-equipment and one-row-per-sensor view. The date-scoped `waites_equipment` and `waites_installation_points` rows exist only so a snapshot can replay the exact pull for that date when inspection retention is enabled.
+Those reference tables are the one-row-per-asset-tree, one-row-per-equipment, and one-row-per-sensor view. The date-scoped `waites_equipment` and `waites_installation_points` rows exist only so a snapshot can replay the exact pull for that date when inspection retention is enabled.
 
 The load records source date, source mode, facility, manifest SHA-256, load time, schema version, endpoint row counts, and daily metric rollup counts.
 

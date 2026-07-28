@@ -15,6 +15,7 @@ def test_build_waites_requests_uses_expected_endpoint_params() -> None:
     by_endpoint = {request.endpoint: request for request in requests}
 
     assert list(by_endpoint) == [
+        "asset-tree",
         "equipment",
         "installation-points",
         "readings-rms",
@@ -22,6 +23,7 @@ def test_build_waites_requests_uses_expected_endpoint_params() -> None:
         "readings-temperature",
         "action-items",
     ]
+    assert by_endpoint["asset-tree"].params == {"facility[]": 679}
     assert by_endpoint["equipment"].params == {"facility[]": 679}
     assert by_endpoint["readings-rms"].params["start_date"] == "2025-07-09T00:00:00Z"
     assert by_endpoint["readings-rms"].params["end_date"] == "2025-07-09T23:59:59Z"
@@ -42,10 +44,12 @@ def test_fetch_waites_mock_writes_raw_manifest_and_reference_tables(tmp_path: Pa
 
     raw_dir = tmp_path / "data" / "raw" / "waites" / "date=2025-07-09"
     assert raw_dir.exists()
-    assert summary["endpoint_count"] == 6
+    assert summary["endpoint_count"] == 7
+    assert summary["record_counts"]["asset-tree"] == 2
     assert summary["record_counts"]["installation-points"] == 8
 
     for filename in [
+        "asset-tree.json",
         "equipment.json",
         "installation-points.json",
         "readings-rms.json",
@@ -60,20 +64,24 @@ def test_fetch_waites_mock_writes_raw_manifest_and_reference_tables(tmp_path: Pa
     assert manifest["source"] == "mock"
     assert manifest["facility_id"] == 679
     assert manifest["date"] == "2025-07-09"
-    assert len(manifest["endpoints"]) == 6
+    assert len(manifest["endpoints"]) == 7
     rms_entry = next(endpoint for endpoint in manifest["endpoints"] if endpoint["name"] == "readings-rms")
     assert rms_entry["record_count"] == 21
     assert rms_entry["params"]["facility[]"] == 679
     assert rms_entry["params"]["start_date"] == "2025-07-09T00:00:00Z"
 
     reference_dir = tmp_path / "data" / "processed" / "waites" / "reference"
+    with (reference_dir / "asset_tree.csv").open(newline="", encoding="utf-8") as csv_file:
+        asset_tree_rows = list(csv.DictReader(csv_file))
     with (reference_dir / "equipment.csv").open(newline="", encoding="utf-8") as csv_file:
         equipment_rows = list(csv.DictReader(csv_file))
     with (reference_dir / "installation_points.csv").open(newline="", encoding="utf-8") as csv_file:
         installation_rows = list(csv.DictReader(csv_file))
 
+    assert {"asset_tree_id", "name", "parent_asset_tree_id"} <= set(asset_tree_rows[0])
     assert {"equipment_id", "customer_asset_id"} <= set(equipment_rows[0])
     assert {"installation_point_id", "sensor_id", "customer_asset_id"} <= set(installation_rows[0])
+    assert len(asset_tree_rows) == 3
     assert len(equipment_rows) == 6
     assert len(installation_rows) == 8
     assert (reference_dir / "metadata.json").exists()
@@ -132,14 +140,17 @@ def test_fetch_waites_api_writes_raw_manifest_and_reference_tables(tmp_path: Pat
     manifest_text = json.dumps(manifest)
 
     assert summary["source"] == "api"
-    assert summary["endpoint_count"] == 6
+    assert summary["endpoint_count"] == 7
+    assert summary["record_counts"]["asset-tree"] == 1
     assert summary["record_counts"]["equipment"] == 1
+    assert (raw_dir / "asset-tree.json").exists()
     assert (raw_dir / "equipment.json").exists()
     assert manifest["source"] == "api"
     assert manifest["endpoints"][0]["status_code"] == 200
     assert manifest["endpoints"][0]["elapsed_ms"] == 7
     assert "token-123" not in manifest_text
     assert "access-token" not in manifest_text
+    assert (tmp_path / "data" / "processed" / "waites" / "reference" / "asset_tree.csv").exists()
     assert (tmp_path / "data" / "processed" / "waites" / "reference" / "equipment.csv").exists()
 
 
@@ -201,6 +212,11 @@ class ErrorWaitesClient:
 
 def _api_payloads() -> dict[str, dict[str, object]]:
     return {
+        "asset-tree": {
+            "asset_tree_id": 12440,
+            "name": "Body Line",
+            "facility_id": 679,
+        },
         "equipment": {
             "list": [
                 {

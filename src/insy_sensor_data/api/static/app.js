@@ -1,31 +1,38 @@
 const DEFAULT_DIMENSIONS = ["x", "y", "z", "temperature"];
 const DEFAULT_METRIC = "rms_vel";
 const DEFAULT_K = "4";
+const VALID_SCOPE_TYPES = new Set(["all", "asset_tree", "equipment", "sensor"]);
 
 const METRICS = {
   rms_vel: { label: "RMS Velocity", prefix: "rms_vel", axis: true, unit: "in/s" },
-  rms_accel: { label: "RMS Acceleration", prefix: "rms_accel", axis: true, unit: "m/s²" },
+  rms_accel: { label: "RMS Acceleration", prefix: "rms_accel", axis: true, unit: "m/s2" },
   rms_pkpk: { label: "RMS Peak-to-Peak", prefix: "rms_pkpk", axis: true, unit: "source" },
   rms_cf: { label: "RMS Crest Factor", prefix: "rms_cf", axis: true, unit: "ratio" },
-  temp_sensor: { label: "Sensor Temperature", prefix: "temp_sensor", axis: false, unit: "°F" },
-  impact: { label: "Impact", prefix: "impact", axis: false, unit: "m/s²" },
+  temp_sensor: { label: "Sensor Temperature", prefix: "temp_sensor", axis: false, unit: "deg F" },
+  impact: { label: "Impact", prefix: "impact", axis: false, unit: "m/s2" },
 };
 
 const state = {
   artifacts: null,
-  equipment: [],
+  equipmentTree: [],
   health: null,
   source: "",
   startDate: "",
   endDate: "",
   date: "",
   view: "snapshot",
+  scopeType: "all",
+  assetTreeId: "",
   equipmentId: "",
   installationPointId: "",
+  sensorId: "",
   dimension: "x",
   metric: DEFAULT_METRIC,
   k: DEFAULT_K,
   equipmentSearch: "",
+  expandedAssetTrees: new Set(),
+  expandedEquipment: new Set(),
+  scopeNotice: "",
 };
 
 const elements = {
@@ -36,9 +43,8 @@ const elements = {
   refreshButton: document.querySelector("#refresh-button"),
   equipmentSearch: document.querySelector("#equipment-search"),
   allEquipmentButton: document.querySelector("#all-equipment-button"),
-  equipmentList: document.querySelector("#equipment-list"),
-  allSensorsButton: document.querySelector("#all-sensors-button"),
-  sensorList: document.querySelector("#sensor-list"),
+  scopeStatus: document.querySelector("#scope-status"),
+  equipmentTree: document.querySelector("#equipment-tree"),
   dateSelect: document.querySelector("#date-select"),
   metricSelect: document.querySelector("#metric-select"),
   dimensionSelect: document.querySelector("#dimension-select"),
@@ -83,11 +89,11 @@ function bindEvents() {
   });
 
   elements.sourceSelect.addEventListener("change", async () => {
-    updateState({ source: elements.sourceSelect.value, equipmentId: "", installationPointId: "" }, false);
+    updateState({ source: elements.sourceSelect.value }, false);
     normalizeState();
     updateUrlFromState();
     updateControlsFromState();
-    await loadEquipment();
+    await loadEquipmentTree();
     await renderActiveView();
   });
 
@@ -96,7 +102,7 @@ function bindEvents() {
     normalizeDateRange("start");
     updateUrlFromState();
     updateControlsFromState();
-    await loadEquipment();
+    await loadEquipmentTree();
     await renderActiveView();
   });
 
@@ -105,7 +111,7 @@ function bindEvents() {
     normalizeDateRange("end");
     updateUrlFromState();
     updateControlsFromState();
-    await loadEquipment();
+    await loadEquipmentTree();
     await renderActiveView();
   });
 
@@ -132,15 +138,7 @@ function bindEvents() {
   }, 150));
 
   elements.allEquipmentButton.addEventListener("click", () => {
-    updateState({ equipmentId: "", installationPointId: "" });
-    renderNavigator();
-    renderActiveView();
-  });
-
-  elements.allSensorsButton.addEventListener("click", () => {
-    updateState({ installationPointId: "" });
-    renderNavigator();
-    renderActiveView();
+    setScope({ scopeType: "all" });
   });
 
   elements.refreshButton.addEventListener("click", async () => {
@@ -152,7 +150,7 @@ function bindEvents() {
     readStateFromUrl();
     normalizeState();
     updateControlsFromState();
-    await loadEquipment();
+    await loadEquipmentTree();
     await renderActiveView();
   });
 }
@@ -162,11 +160,11 @@ async function loadArtifacts() {
   state.artifacts = await fetchJson("/api/artifacts");
   normalizeState();
   updateControlsFromState();
-  await loadEquipment();
+  await loadEquipmentTree();
   setStatus("Ready");
 }
 
-async function loadEquipment() {
+async function loadEquipmentTree() {
   const params = new URLSearchParams();
   params.set("source", state.source);
   if (state.startDate) {
@@ -175,16 +173,12 @@ async function loadEquipment() {
   if (state.endDate) {
     params.set("end_date", state.endDate);
   }
-  const payload = await fetchJson(`/api/equipment?${params}`);
-  state.equipment = payload.rows || [];
-  if (state.equipmentId && !state.equipment.some((row) => row.equipment_id === state.equipmentId)) {
-    state.equipmentId = "";
-    state.installationPointId = "";
-    updateUrlFromState();
-  }
-  if (state.installationPointId && !selectedSensorIds().includes(state.installationPointId)) {
-    state.installationPointId = "";
-    updateUrlFromState();
+  const payload = await fetchJson(`/api/equipment-tree?${params}`);
+  state.equipmentTree = payload.asset_trees || [];
+  const changed = normalizeScopeAgainstTree();
+  expandSelectedScope();
+  if (changed) {
+    updateUrlFromState(true);
   }
   renderNavigator();
 }
@@ -221,6 +215,9 @@ function normalizeState() {
   }
   if (!["snapshot", "trend", "cluster", "drift"].includes(state.view)) {
     state.view = "snapshot";
+  }
+  if (!VALID_SCOPE_TYPES.has(state.scopeType)) {
+    resetScope();
   }
   updateUrlFromState(true);
 }
@@ -283,56 +280,158 @@ function updateViewControls() {
 }
 
 function renderNavigator() {
-  const rows = filteredEquipment();
-  elements.allEquipmentButton.classList.toggle("is-active", !state.equipmentId);
-  elements.allSensorsButton.classList.toggle("is-active", !state.installationPointId);
+  const trees = filteredEquipmentTree();
+  elements.allEquipmentButton.classList.toggle("is-active", state.scopeType === "all");
+  elements.scopeStatus.textContent = state.scopeNotice || `Scope: ${scopeLabel()}`;
+  elements.equipmentTree.replaceChildren();
 
-  elements.equipmentList.replaceChildren();
-  if (!rows.length) {
-    elements.equipmentList.append(emptyBlock("No equipment in context"));
-  } else {
-    rows.forEach((row) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "equipment-row";
-      button.classList.toggle("is-active", row.equipment_id === state.equipmentId);
-      button.dataset.equipmentId = row.equipment_id;
-      button.innerHTML = `
-        <strong>${escapeHtml(row.equipment_id || "unknown")}</strong>
-        <span>${escapeHtml(row.equipment_name || row.customer_asset_id || "")}</span>
-        <small>${row.sensor_count} sensors | ${row.first_date || ""} to ${row.last_date || ""}</small>
-      `;
-      button.addEventListener("click", () => {
-        const nextEquipmentId = row.equipment_id === state.equipmentId ? "" : row.equipment_id;
-        updateState({ equipmentId: nextEquipmentId, installationPointId: "" });
-        renderNavigator();
-        renderActiveView();
-      });
-      elements.equipmentList.append(button);
-    });
+  if (!trees.length) {
+    elements.equipmentTree.append(emptyBlock("No equipment in context"));
+    return;
   }
 
-  elements.sensorList.replaceChildren();
-  const sensorIds = selectedSensorIds();
-  if (!state.equipmentId) {
-    elements.sensorList.append(emptyBlock("Select equipment"));
-  } else if (!sensorIds.length) {
-    elements.sensorList.append(emptyBlock("No sensors"));
-  } else {
-    sensorIds.forEach((sensorId) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "sensor-row";
-      button.classList.toggle("is-active", sensorId === state.installationPointId);
-      button.textContent = sensorId;
-      button.addEventListener("click", () => {
-        updateState({ installationPointId: sensorId === state.installationPointId ? "" : sensorId });
-        renderNavigator();
-        renderActiveView();
+  trees.forEach((assetTree) => {
+    const group = document.createElement("div");
+    group.className = "tree-group";
+    const assetExpanded = isAssetExpanded(assetTree);
+    group.append(
+      createTreeRow({
+        level: "asset",
+        active: state.scopeType === "asset_tree" && state.assetTreeId === assetTree.asset_tree_id,
+        expanded: assetExpanded,
+        hasChildren: Boolean(assetTree.equipment?.length),
+        label: assetTree.asset_tree_name || `Asset Tree ${assetTree.asset_tree_id}`,
+        title: [
+          assetTree.asset_tree_name,
+          assetTree.asset_tree_id ? `Asset Tree ${assetTree.asset_tree_id}` : "",
+          assetTree.asset_tree_path,
+        ].filter(Boolean).join(" | "),
+        detail: `${assetTree.equipment_count || 0} equipment | ${assetTree.sensor_count || 0} sensors`,
+        onToggle: () => toggleAsset(assetTree.asset_tree_id),
+        onSelect: () => setScope({
+          scopeType: "asset_tree",
+          assetTreeId: assetTree.asset_tree_id,
+        }),
+      }),
+    );
+
+    if (assetExpanded) {
+      (assetTree.equipment || []).forEach((equipment) => {
+        const equipmentExpanded = isEquipmentExpanded(assetTree, equipment);
+        group.append(
+          createTreeRow({
+            level: "equipment",
+            active: state.scopeType === "equipment" && state.equipmentId === equipment.equipment_id,
+            expanded: equipmentExpanded,
+            hasChildren: Boolean(equipment.sensors?.length),
+            label: compactEquipmentLabel(equipment.equipment_name) || `Equipment ${equipment.equipment_id}`,
+            title: [
+              equipment.equipment_name,
+              equipment.equipment_id ? `Equipment ${equipment.equipment_id}` : "",
+              equipment.customer_asset_id,
+              dateRangeLabel(equipment),
+            ].filter(Boolean).join(" | "),
+            detail: [
+              equipment.customer_asset_id,
+              `${equipment.sensor_count || 0} sensors`,
+            ].filter(Boolean).join(" | "),
+            onToggle: () => toggleEquipment(equipment.equipment_id),
+            onSelect: () => setScope({
+              scopeType: "equipment",
+              assetTreeId: assetTree.asset_tree_id,
+              equipmentId: equipment.equipment_id,
+            }),
+          }),
+        );
+
+        if (equipmentExpanded) {
+          (equipment.sensors || []).forEach((sensor) => {
+            group.append(
+              createTreeRow({
+                level: "sensor",
+                active: state.scopeType === "sensor"
+                  && state.installationPointId === sensor.installation_point_id,
+                expanded: false,
+                hasChildren: false,
+                label: sensor.installation_point_name
+                  || `Sensor ${sensor.installation_point_id}`,
+                title: [
+                  sensor.installation_point_name,
+                  sensor.installation_point_id ? `Installation Point ${sensor.installation_point_id}` : "",
+                  sensor.sensor_id ? `Sensor ${sensor.sensor_id}` : "",
+                  sensor.customer_asset_id,
+                  dateRangeLabel(sensor),
+                ].filter(Boolean).join(" | "),
+                onSelect: () => setScope({
+                  scopeType: "sensor",
+                  assetTreeId: assetTree.asset_tree_id,
+                  equipmentId: equipment.equipment_id,
+                  installationPointId: sensor.installation_point_id,
+                  sensorId: sensor.sensor_id || "",
+                }),
+              }),
+            );
+          });
+        }
       });
-      elements.sensorList.append(button);
-    });
+    }
+    elements.equipmentTree.append(group);
+  });
+}
+
+function createTreeRow(options) {
+  const row = document.createElement("div");
+  row.className = `tree-row is-${options.level}`;
+  row.classList.toggle("is-active", options.active);
+  row.setAttribute("role", "treeitem");
+  row.setAttribute("aria-selected", options.active ? "true" : "false");
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tree-toggle";
+  if (options.hasChildren) {
+    toggle.textContent = options.expanded ? "-" : "+";
+    toggle.setAttribute("aria-label", `${options.expanded ? "Collapse" : "Expand"} ${options.label}`);
+    toggle.addEventListener("click", options.onToggle);
+  } else {
+    toggle.textContent = "";
+    toggle.classList.add("is-placeholder");
+    toggle.tabIndex = -1;
+    toggle.setAttribute("aria-hidden", "true");
   }
+
+  const select = document.createElement("button");
+  select.type = "button";
+  select.className = "tree-select";
+  select.title = options.title || options.label || "";
+  select.addEventListener("click", options.onSelect);
+
+  const label = document.createElement("span");
+  label.className = "tree-label";
+  const strong = document.createElement("strong");
+  strong.textContent = options.label || "Unnamed";
+  label.append(strong);
+  if (options.secondary) {
+    const secondary = document.createElement("span");
+    secondary.textContent = options.secondary;
+    label.append(secondary);
+  }
+  if (options.detail) {
+    const detail = document.createElement("small");
+    detail.textContent = options.detail;
+    label.append(detail);
+  }
+  select.append(label);
+  row.append(toggle, select);
+  return row;
+}
+
+function compactEquipmentLabel(label = "") {
+  const parts = String(label).split(" - ");
+  if (parts.length > 1) {
+    return parts.slice(1).join(" - ").trim();
+  }
+  return label;
 }
 
 async function renderActiveView() {
@@ -361,14 +460,14 @@ async function renderSnapshot() {
   const payload = await fetchJson(`/api/snapshots/${state.date}?${params}`);
   const metric = selectedMetric();
   const yField = metricField(metric, "mean");
+  const rows = filterRowsForScope(payload.rows || []);
   setStatus(`Snapshot ${payload.source} ${payload.date}`);
   renderSummary([
-    { label: "Sensors", value: payload.filtered_row_count },
+    { label: "Sensors", value: rows.length },
     { label: "All Rows", value: payload.row_count },
     { label: "Metric", value: metric.label },
     { label: "Scope", value: scopeLabel() },
   ]);
-  const rows = payload.rows || [];
   const plotted = rows
     .filter((row) => numeric(row[yField]) !== null)
     .sort((left, right) => numeric(right[yField]) - numeric(left[yField]))
@@ -404,19 +503,21 @@ async function renderTrend() {
   const payload = await fetchJson(`/api/trends?${params}`);
   const metric = selectedMetric();
   const meanField = metricField(metric, "mean");
+  const sensorRows = filterRowsForScope(payload.sensor_rows || []);
+  const equipmentRows = filterRowsForScope(payload.equipment_rows || []);
   setStatus(`Trend ${payload.source} ${payload.start_date} to ${payload.end_date}`);
   renderSummary([
-    { label: "Sensor Rows", value: payload.filtered_sensor_row_count },
-    { label: "Equipment Rows", value: payload.filtered_equipment_row_count },
+    { label: "Sensor Rows", value: sensorRows.length },
+    { label: "Equipment Rows", value: equipmentRows.length },
     { label: "Metric", value: metric.label },
     { label: "Scope", value: scopeLabel() },
   ]);
-  const aggregates = aggregateTrendRows(payload.sensor_rows || [], meanField);
+  const aggregates = aggregateTrendRows(sensorRows, meanField);
   plotChart(
     [lineTrace(aggregates, meanField, metric.label, "#287271")].filter(Boolean),
     { title: `${metric.label} Trend`, xaxis: { title: "Date" }, yaxis: { title: metric.unit } },
   );
-  renderTable(payload.sensor_rows || [], [
+  renderTable(sensorRows, [
     "date",
     "installation_point_id",
     "equipment_id",
@@ -433,12 +534,13 @@ async function renderCluster() {
   const payload = await fetchJson(`/api/clusters?${params}`);
   const metrics = payload.metrics || {};
   const metricValues = metrics.metrics || {};
+  const clusterRows = scopeClusterRows(payload.rows || []);
   setStatus(`Cluster ${payload.source} ${payload.date} ${payload.dimension} k=${payload.k}`);
   renderSummary([
-    { label: "Sensors", value: payload.row_count },
-    { label: "Features", value: metrics.feature_count },
+    { label: "Sensors", value: clusterRows.length },
+    { label: "All Sensors", value: payload.row_count },
     { label: "Inertia", value: formatNumber(metrics.kmeans?.inertia) },
-    { label: "Silhouette", value: formatNumber(metricValues.silhouette_score?.value) },
+    { label: "Scope", value: scopeLabel() },
   ]);
   const grouped = groupBy(payload.pca_rows || [], "cluster");
   const traces = Object.entries(grouped).map(([cluster, rows]) => ({
@@ -455,7 +557,7 @@ async function renderCluster() {
   }));
   plotChart(traces, { title: "Cluster PCA", xaxis: { title: "PC1" }, yaxis: { title: "PC2" } });
   const featureColumns = (metrics.features || []).slice(0, 4);
-  renderTable(scopeClusterRows(payload.rows || []), [
+  renderTable(clusterRows, [
     "installation_point_id",
     "equipment_id",
     "equipment_name",
@@ -463,6 +565,9 @@ async function renderCluster() {
     "distance_to_centroid",
     ...featureColumns,
   ]);
+  if (metricValues.silhouette_score?.value !== undefined) {
+    setStatus(`Cluster ${payload.source} ${payload.date} | silhouette ${formatNumber(metricValues.silhouette_score.value)}`);
+  }
 }
 
 async function renderDrift() {
@@ -487,7 +592,7 @@ function renderClusterWindow(payload) {
     { label: "Dates", value: metrics.date_count },
     { label: "Pairs", value: metrics.pair_count },
     { label: "Warnings", value: metrics.warning_count },
-    { label: "Dimension", value: payload.dimension },
+    { label: "Scope", value: scopeLabel() },
   ]);
   const rows = payload.aligned_drift_rows || [];
   plotChart(
@@ -516,13 +621,14 @@ function renderClusterWindow(payload) {
 function renderDriftPair(payload) {
   const aligned = payload.aligned_metrics || {};
   setStatus(`Drift ${payload.source} ${payload.from_date} to ${payload.to_date}`);
+  const rawRows = payload.aligned_rows?.length ? payload.aligned_rows : payload.raw_rows || [];
+  const rows = filterRowsForScope(rawRows);
   renderSummary([
-    { label: "Matched", value: aligned.matched_sensor_count || payload.metrics.matched_sensor_count },
-    { label: "Aligned Changes", value: aligned.aligned_changed_count || "n/a" },
+    { label: "Matched", value: rows.length },
+    { label: "All Matched", value: aligned.matched_sensor_count || payload.metrics.matched_sensor_count },
     { label: "Raw Changes", value: payload.metrics.changed_sensor_count },
-    { label: "Dimension", value: payload.dimension },
+    { label: "Scope", value: scopeLabel() },
   ]);
-  const rows = payload.aligned_rows?.length ? payload.aligned_rows : payload.raw_rows || [];
   const clusterField = payload.aligned_rows?.length ? "aligned_changed" : "changed";
   const counts = countValues(rows, clusterField);
   plotChart(
@@ -555,7 +661,7 @@ function renderMissingState(error) {
     { label: "State", value: error.status === 404 ? "Missing artifact" : "Unavailable" },
     { label: "Source", value: state.source },
     { label: "Range", value: `${state.startDate} to ${state.endDate}` },
-    { label: "View", value: state.view },
+    { label: "Scope", value: scopeLabel() },
   ]);
   elements.plot.innerHTML = `
     <div class="missing-state">
@@ -581,10 +687,10 @@ function commandHint() {
 function scopedParams() {
   const params = new URLSearchParams();
   params.set("source", state.source);
-  if (state.equipmentId) {
+  if (state.scopeType === "equipment" && state.equipmentId) {
     params.set("equipment_id", state.equipmentId);
   }
-  if (state.installationPointId) {
+  if (state.scopeType === "sensor" && state.installationPointId) {
     params.set("installation_point_id", state.installationPointId);
   }
   return params;
@@ -627,16 +733,49 @@ function updateState(patch, updateUrl = true) {
   updateControlsFromState();
 }
 
+function setScope(scope) {
+  state.scopeNotice = "";
+  state.scopeType = scope.scopeType || "all";
+  state.assetTreeId = scope.assetTreeId || "";
+  state.equipmentId = scope.equipmentId || "";
+  state.installationPointId = scope.installationPointId || "";
+  state.sensorId = scope.sensorId || "";
+  if (state.scopeType === "all") {
+    resetScope();
+  }
+  normalizeScopeAgainstTree();
+  expandSelectedScope();
+  updateUrlFromState();
+  updateControlsFromState();
+  renderNavigator();
+  renderActiveView();
+}
+
+function resetScope() {
+  state.scopeType = "all";
+  state.assetTreeId = "";
+  state.equipmentId = "";
+  state.installationPointId = "";
+  state.sensorId = "";
+}
+
 function readStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
+  const scope = params.get("scope");
+  const legacyInstallationId = params.get("installation_point_id") || "";
+  const legacyEquipmentId = params.get("equipment_id") || "";
+  const scopeType = VALID_SCOPE_TYPES.has(scope) ? scope : legacyInstallationId ? "sensor" : legacyEquipmentId ? "equipment" : "all";
   Object.assign(state, {
     source: params.get("source") || state.source,
     startDate: params.get("start_date") || state.startDate,
     endDate: params.get("end_date") || state.endDate,
     date: params.get("date") || state.date,
     view: params.get("view") || state.view,
-    equipmentId: params.get("equipment_id") || "",
-    installationPointId: params.get("installation_point_id") || "",
+    scopeType,
+    assetTreeId: params.get("asset_tree_id") || "",
+    equipmentId: params.get("equipment_id") || legacyEquipmentId,
+    installationPointId: params.get("installation_point_id") || legacyInstallationId,
+    sensorId: params.get("sensor_id") || "",
     dimension: params.get("dimension") || state.dimension,
     metric: params.get("metric") || state.metric,
     k: params.get("k") || state.k,
@@ -650,11 +789,18 @@ function updateUrlFromState(replace = false) {
   params.set("end_date", state.endDate);
   params.set("date", state.date);
   params.set("view", state.view);
+  params.set("scope", state.scopeType);
+  if (state.assetTreeId) {
+    params.set("asset_tree_id", state.assetTreeId);
+  }
   if (state.equipmentId) {
     params.set("equipment_id", state.equipmentId);
   }
   if (state.installationPointId) {
     params.set("installation_point_id", state.installationPointId);
+  }
+  if (state.sensorId) {
+    params.set("sensor_id", state.sensorId);
   }
   params.set("dimension", state.dimension);
   params.set("metric", state.metric);
@@ -708,30 +854,248 @@ function availableKs() {
   return state.artifacts?.ks?.length ? state.artifacts.ks : [DEFAULT_K];
 }
 
-function filteredEquipment() {
+function filteredEquipmentTree() {
   const needle = state.equipmentSearch.trim().toLowerCase();
   if (!needle) {
-    return state.equipment;
+    return state.equipmentTree;
   }
-  return state.equipment.filter((row) => (
-    [
-      row.equipment_id,
-      row.equipment_name,
-      row.customer_asset_id,
-      ...(row.installation_point_ids || []),
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(needle)
+  return state.equipmentTree
+    .map((assetTree) => {
+      const assetMatches = textMatches(needle, [
+        assetTree.asset_tree_id,
+        assetTree.asset_tree_name,
+        assetTree.asset_tree_path,
+      ]);
+      const equipment = (assetTree.equipment || [])
+        .map((row) => {
+          const equipmentMatches = textMatches(needle, [
+            row.equipment_id,
+            row.equipment_name,
+            row.customer_asset_id,
+          ]);
+          const sensors = (row.sensors || []).filter((sensor) => textMatches(needle, [
+            sensor.installation_point_id,
+            sensor.installation_point_name,
+            sensor.sensor_id,
+            sensor.customer_asset_id,
+          ]));
+          if (assetMatches || equipmentMatches) {
+            return row;
+          }
+          return sensors.length ? { ...row, sensors, sensor_count: sensors.length } : null;
+        })
+        .filter(Boolean);
+      if (assetMatches || equipment.length) {
+        return {
+          ...assetTree,
+          equipment,
+          equipment_count: equipment.length,
+          sensor_count: equipment.reduce((sum, row) => sum + (row.sensors?.length || 0), 0),
+        };
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function textMatches(needle, values) {
+  return values
+    .filter((value) => value !== null && value !== undefined)
+    .join(" ")
+    .toLowerCase()
+    .includes(needle);
+}
+
+function normalizeScopeAgainstTree() {
+  if (state.scopeType === "all") {
+    resetScope();
+    return false;
+  }
+  const resolved = resolveScope();
+  if (!resolved) {
+    resetScope();
+    state.scopeNotice = "Selected scope is no longer in context; showing all equipment.";
+    return true;
+  }
+  const changed = [
+    ["assetTreeId", resolved.assetTreeId],
+    ["equipmentId", resolved.equipmentId],
+    ["installationPointId", resolved.installationPointId],
+    ["sensorId", resolved.sensorId],
+  ].some(([key, value]) => state[key] !== (value || ""));
+  state.assetTreeId = resolved.assetTreeId || "";
+  state.equipmentId = resolved.equipmentId || "";
+  state.installationPointId = resolved.installationPointId || "";
+  state.sensorId = resolved.sensorId || "";
+  return changed;
+}
+
+function resolveScope() {
+  if (state.scopeType === "asset_tree") {
+    const tree = findAssetTree(state.assetTreeId);
+    return tree ? { assetTreeId: tree.asset_tree_id } : null;
+  }
+  if (state.scopeType === "equipment") {
+    const found = findEquipment(state.equipmentId);
+    return found ? {
+      assetTreeId: found.assetTree.asset_tree_id,
+      equipmentId: found.equipment.equipment_id,
+    } : null;
+  }
+  if (state.scopeType === "sensor") {
+    const found = findSensor(state.installationPointId, state.sensorId);
+    return found ? {
+      assetTreeId: found.assetTree.asset_tree_id,
+      equipmentId: found.equipment.equipment_id,
+      installationPointId: found.sensor.installation_point_id,
+      sensorId: found.sensor.sensor_id || "",
+    } : null;
+  }
+  return null;
+}
+
+function findAssetTree(assetTreeId) {
+  return state.equipmentTree.find((tree) => tree.asset_tree_id === assetTreeId) || null;
+}
+
+function findEquipment(equipmentId) {
+  for (const assetTree of state.equipmentTree) {
+    const equipment = (assetTree.equipment || []).find((row) => row.equipment_id === equipmentId);
+    if (equipment) {
+      return { assetTree, equipment };
+    }
+  }
+  return null;
+}
+
+function findSensor(installationPointId, sensorId = "") {
+  for (const assetTree of state.equipmentTree) {
+    for (const equipment of assetTree.equipment || []) {
+      const sensor = (equipment.sensors || []).find((row) => (
+        (installationPointId && row.installation_point_id === installationPointId)
+        || (sensorId && row.sensor_id === sensorId)
+      ));
+      if (sensor) {
+        return { assetTree, equipment, sensor };
+      }
+    }
+  }
+  return null;
+}
+
+function expandSelectedScope() {
+  if (state.assetTreeId) {
+    state.expandedAssetTrees.add(state.assetTreeId);
+  }
+  if (state.equipmentId) {
+    state.expandedEquipment.add(state.equipmentId);
+  }
+}
+
+function isAssetExpanded(assetTree) {
+  return Boolean(
+    state.equipmentSearch
+    || state.expandedAssetTrees.has(assetTree.asset_tree_id)
+  );
+}
+
+function isEquipmentExpanded(assetTree, equipment) {
+  return Boolean(
+    state.equipmentSearch
+    || state.expandedEquipment.has(equipment.equipment_id)
+  );
+}
+
+function toggleAsset(assetTreeId) {
+  toggleSet(state.expandedAssetTrees, assetTreeId);
+  renderNavigator();
+}
+
+function toggleEquipment(equipmentId) {
+  toggleSet(state.expandedEquipment, equipmentId);
+  renderNavigator();
+}
+
+function toggleSet(set, value) {
+  if (set.has(value)) {
+    set.delete(value);
+  } else {
+    set.add(value);
+  }
+}
+
+function scopeLabel() {
+  if (state.scopeType === "asset_tree") {
+    const tree = findAssetTree(state.assetTreeId);
+    return tree?.asset_tree_name || `Asset Tree ${state.assetTreeId}`;
+  }
+  if (state.scopeType === "equipment") {
+    const found = findEquipment(state.equipmentId);
+    return found?.equipment.equipment_name || `Equipment ${state.equipmentId}`;
+  }
+  if (state.scopeType === "sensor") {
+    const found = findSensor(state.installationPointId, state.sensorId);
+    return found?.sensor.installation_point_name || `Sensor ${state.installationPointId || state.sensorId}`;
+  }
+  return "All equipment";
+}
+
+function filterRowsForScope(rows) {
+  if (state.scopeType === "all") {
+    return rows;
+  }
+  return rows.filter((row) => rowInScope(row));
+}
+
+function scopeClusterRows(rows) {
+  return filterRowsForScope(rows);
+}
+
+function selectedPoint(row) {
+  return state.scopeType !== "all" && rowInScope(row);
+}
+
+function rowInScope(row) {
+  const equipmentId = String(row.equipment_id || "");
+  const installationPointId = String(row.installation_point_id || "");
+  if (state.scopeType === "asset_tree") {
+    const tree = findAssetTree(state.assetTreeId);
+    if (!tree) {
+      return false;
+    }
+    return treeIncludesRow(tree, equipmentId, installationPointId);
+  }
+  if (state.scopeType === "equipment") {
+    return equipmentId === state.equipmentId || equipmentIncludesInstallation(state.equipmentId, installationPointId);
+  }
+  if (state.scopeType === "sensor") {
+    if (installationPointId) {
+      return installationPointId === state.installationPointId;
+    }
+    return equipmentId === state.equipmentId;
+  }
+  return true;
+}
+
+function treeIncludesRow(tree, equipmentId, installationPointId) {
+  return (tree.equipment || []).some((equipment) => (
+    equipment.equipment_id === equipmentId
+    || (equipment.sensors || []).some((sensor) => sensor.installation_point_id === installationPointId)
   ));
 }
 
-function selectedEquipment() {
-  return state.equipment.find((row) => row.equipment_id === state.equipmentId) || null;
+function equipmentIncludesInstallation(equipmentId, installationPointId) {
+  const found = findEquipment(equipmentId);
+  return Boolean(
+    found && (found.equipment.sensors || []).some((sensor) => sensor.installation_point_id === installationPointId),
+  );
 }
 
-function selectedSensorIds() {
-  return selectedEquipment()?.installation_point_ids || [];
+function dateRangeLabel(row) {
+  if (row.first_date && row.last_date && row.first_date !== row.last_date) {
+    return `${row.first_date} to ${row.last_date}`;
+  }
+  return row.first_date || row.last_date || "";
 }
 
 function selectedMetric() {
@@ -743,33 +1107,6 @@ function metricField(metric, stat) {
     return `${metric.prefix}_${stat}_${state.dimension}`;
   }
   return `${metric.prefix}_${stat}`;
-}
-
-function scopeLabel() {
-  if (state.installationPointId) {
-    return `Sensor ${state.installationPointId}`;
-  }
-  if (state.equipmentId) {
-    return `Equipment ${state.equipmentId}`;
-  }
-  return "All equipment";
-}
-
-function scopeClusterRows(rows) {
-  if (!state.equipmentId && !state.installationPointId) {
-    return rows;
-  }
-  return rows.filter((row) => selectedPoint(row));
-}
-
-function selectedPoint(row) {
-  if (state.installationPointId && row.installation_point_id === state.installationPointId) {
-    return true;
-  }
-  if (state.equipmentId && row.equipment_id === state.equipmentId) {
-    return true;
-  }
-  return false;
 }
 
 function renderSummary(items) {
