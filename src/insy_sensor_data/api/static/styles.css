@@ -328,7 +328,7 @@ input {
 
 .review-main {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(300px, auto) minmax(180px, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -353,6 +353,111 @@ input {
   border-color: var(--border);
   background: var(--panel);
   color: var(--ink);
+}
+
+.snapshot-review {
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.snapshot-context,
+.snapshot-panel {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.snapshot-context {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(360px, 2fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.snapshot-title {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.snapshot-title h2,
+.snapshot-panel-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.snapshot-title p,
+.snapshot-panel-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.snapshot-context-stats {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+  gap: 8px;
+}
+
+.snapshot-stat {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border-left: 1px solid #e6ebf1;
+  padding-left: 10px;
+}
+
+.snapshot-stat span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.snapshot-stat strong {
+  min-width: 0;
+  color: #1d3347;
+  font-size: 0.95rem;
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snapshot-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.snapshot-panel-heading {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  border-bottom: 1px solid #edf1f4;
+  padding-bottom: 7px;
+}
+
+.snapshot-chart {
+  width: 100%;
+  height: 260px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.snapshot-table-shell {
+  max-height: 230px;
+  overflow: auto;
 }
 
 .summary-grid {
@@ -472,6 +577,10 @@ tbody tr:hover {
   .summary-grid {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
+
+  .snapshot-context {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 780px) {
@@ -503,6 +612,10 @@ tbody tr:hover {
 
   .summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .snapshot-context-stats {
+    grid-template-columns: 1fr 1fr;
   }
 
   .plot {

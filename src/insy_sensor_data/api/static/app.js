@@ -54,8 +54,22 @@ const elements = {
   dimensionControl: document.querySelector("#dimension-control"),
   kControl: document.querySelector("#k-control"),
   statusLine: document.querySelector("#status-line"),
+  snapshotReview: document.querySelector("#snapshot-review"),
+  snapshotContext: document.querySelector("#snapshot-context"),
+  snapshotTrendStatus: document.querySelector("#snapshot-trend-status"),
+  snapshotTrendChart: document.querySelector("#snapshot-trend-chart"),
+  snapshotClusterStatus: document.querySelector("#snapshot-cluster-status"),
+  snapshotClusterChart: document.querySelector("#snapshot-cluster-chart"),
+  snapshotEventsStatus: document.querySelector("#snapshot-events-status"),
+  snapshotEventsHead: document.querySelector("#snapshot-events-head"),
+  snapshotEventsBody: document.querySelector("#snapshot-events-body"),
+  snapshotMeasurementsStatus: document.querySelector("#snapshot-measurements-status"),
+  snapshotMeasurementsHead: document.querySelector("#snapshot-measurements-head"),
+  snapshotMeasurementsBody: document.querySelector("#snapshot-measurements-body"),
   summaryGrid: document.querySelector("#summary-grid"),
+  workspace: document.querySelector("#workspace"),
   plot: document.querySelector("#plot"),
+  tableShell: document.querySelector("#table-shell"),
   tableHead: document.querySelector("#data-table-head"),
   tableBody: document.querySelector("#data-table-body"),
   tabs: Array.from(document.querySelectorAll(".tab")),
@@ -270,7 +284,7 @@ function updateTabState() {
 
 function updateViewControls() {
   const metricNeedsAxis = METRICS[state.metric]?.axis;
-  elements.dateControl.hidden = !["snapshot", "cluster"].includes(state.view);
+  elements.dateControl.hidden = state.view !== "cluster";
   elements.metricControl.hidden = !["snapshot", "trend"].includes(state.view);
   elements.dimensionControl.hidden = !(
     ["cluster", "drift"].includes(state.view)
@@ -442,7 +456,7 @@ async function renderActiveView() {
   clearView();
   try {
     if (state.view === "snapshot") {
-      await renderSnapshot();
+      await renderSnapshotReview();
     } else if (state.view === "trend") {
       await renderTrend();
     } else if (state.view === "cluster") {
@@ -455,45 +469,96 @@ async function renderActiveView() {
   }
 }
 
-async function renderSnapshot() {
-  const params = scopedParams();
-  const payload = await fetchJson(`/api/snapshots/${state.date}?${params}`);
-  const metric = selectedMetric();
-  const yField = metricField(metric, "mean");
-  const rows = filterRowsForScope(payload.rows || []);
-  setStatus(`Snapshot ${payload.source} ${payload.date}`);
-  renderSummary([
-    { label: "Sensors", value: rows.length },
-    { label: "All Rows", value: payload.row_count },
-    { label: "Metric", value: metric.label },
-    { label: "Scope", value: scopeLabel() },
-  ]);
-  const plotted = rows
-    .filter((row) => numeric(row[yField]) !== null)
-    .sort((left, right) => numeric(right[yField]) - numeric(left[yField]))
-    .slice(0, 60);
-  plotChart(
-    [
-      {
-        type: "bar",
-        x: plotted.map((row) => row.installation_point_id),
-        y: plotted.map((row) => numeric(row[yField])),
-        marker: { color: "#287271" },
-        hovertext: plotted.map((row) => row.equipment_name || row.equipment_id),
-      },
-    ],
-    { title: `Snapshot ${metric.label}`, xaxis: { title: "Sensor" }, yaxis: { title: metric.unit } },
+async function renderSnapshotReview() {
+  const params = snapshotReviewParams();
+  const reviewDate = snapshotDate();
+  const payload = await fetchJson(`/api/snapshot-review/${reviewDate}?${params}`);
+  setStatus(`Snapshot review ${payload.source} ${payload.date} | ${payload.scope.label}`);
+  renderSnapshotContext(payload);
+  renderSnapshotTrendPanel(payload.trend || {});
+  renderSnapshotClusterPanel(payload.cluster_context || {});
+  renderSnapshotEventsPanel(payload.events || {});
+  renderSnapshotMeasurements(payload.measurements || {});
+}
+
+function renderSnapshotContext(payload) {
+  const context = payload.context || {};
+  elements.snapshotContext.replaceChildren();
+  const title = document.createElement("div");
+  title.className = "snapshot-title";
+  const heading = document.createElement("h2");
+  heading.textContent = context.equipment_name || context.label || payload.scope?.label || "Snapshot review";
+  const subheading = document.createElement("p");
+  subheading.textContent = context.sensor_name || `${context.sensor_count || 0} sensors`;
+  title.append(heading, subheading);
+
+  const stats = document.createElement("div");
+  stats.className = "snapshot-context-stats";
+  [
+    { label: "Asset Number", value: context.customer_asset_id || "n/a" },
+    { label: "Rows", value: context.snapshot_row_count ?? 0 },
+    { label: "Sensors", value: context.sensor_count ?? 0 },
+    { label: "Scope", value: payload.scope?.type || "all" },
+  ].forEach((item) => stats.append(snapshotStat(item.label, item.value)));
+  elements.snapshotContext.append(title, stats);
+}
+
+function renderSnapshotTrendPanel(trend) {
+  elements.snapshotTrendStatus.textContent = trend.status === "available"
+    ? `${trend.row_count || 0} scoped rows`
+    : trend.message || "No trend artifact for this range";
+  const field = trend.value_field || metricField(selectedMetric(), "mean");
+  const traces = snapshotTrendTraces(trend, field);
+  plotInto(
+    elements.snapshotTrendChart,
+    traces,
+    { title: selectedMetric().label, xaxis: { title: "Date" }, yaxis: { title: selectedMetric().unit } },
   );
-  renderTable(rows, [
-    "installation_point_id",
-    "equipment_id",
-    "equipment_name",
-    "sensor_id",
-    "customer_asset_id",
-    yField,
-    metricField(metric, "max"),
-    metricField(metric, "min"),
-  ]);
+}
+
+function renderSnapshotClusterPanel(clusterContext) {
+  elements.snapshotClusterStatus.textContent = clusterContext.status === "available"
+    ? `${clusterContext.row_count || 0} scoped points | k=${clusterContext.k}`
+    : clusterContext.message || "No cluster artifact for this date";
+  const selectedIds = new Set(clusterContext.selected_ids || []);
+  const grouped = groupBy(clusterContext.points || [], "cluster");
+  const traces = Object.entries(grouped).map(([cluster, rows]) => ({
+    type: "scatter",
+    mode: "markers",
+    name: `Cluster ${cluster}`,
+    x: rows.map((row) => numeric(row.pc1)),
+    y: rows.map((row) => numeric(row.pc2)),
+    text: rows.map((row) => row.installation_point_name || row.installation_point_id),
+    marker: {
+      size: rows.map((row) => selectedIds.has(String(row.installation_point_id || "")) ? 13 : 8),
+      line: { width: rows.map((row) => selectedIds.has(String(row.installation_point_id || "")) ? 2 : 0), color: "#18202a" },
+    },
+  }));
+  plotInto(
+    elements.snapshotClusterChart,
+    traces,
+    { title: "Cluster PCA", xaxis: { title: "PC1" }, yaxis: { title: "PC2" } },
+  );
+}
+
+function renderSnapshotEventsPanel(events) {
+  elements.snapshotEventsStatus.textContent = `${events.row_count || 0} scoped events`;
+  renderTableInto(
+    elements.snapshotEventsHead,
+    elements.snapshotEventsBody,
+    events.rows || [],
+    ["date", "source", "status", "type", "asset_number", "sensor_name", "event_id", "work_order", "title"],
+  );
+}
+
+function renderSnapshotMeasurements(measurements) {
+  elements.snapshotMeasurementsStatus.textContent = `${measurements.row_count || 0} measurement rows`;
+  renderTableInto(
+    elements.snapshotMeasurementsHead,
+    elements.snapshotMeasurementsBody,
+    measurements.rows || [],
+    measurements.columns || [],
+  );
 }
 
 async function renderTrend() {
@@ -655,6 +720,7 @@ function renderDriftPair(payload) {
 }
 
 function renderMissingState(error) {
+  showSnapshotSurface(false);
   const command = commandHint();
   setStatus(error.message || "Missing artifact");
   renderSummary([
@@ -682,6 +748,34 @@ function commandHint() {
     return `uv run sensor-data trend build --source ${state.source} --start-date ${state.startDate} --end-date ${state.endDate} --input sqlite`;
   }
   return `uv run sensor-data snapshot build --source ${state.source} --date ${state.date} --input sqlite`;
+}
+
+function snapshotReviewParams() {
+  const params = new URLSearchParams();
+  params.set("source", state.source);
+  params.set("start_date", state.startDate);
+  params.set("end_date", state.endDate);
+  params.set("scope", state.scopeType);
+  if (state.assetTreeId) {
+    params.set("asset_tree_id", state.assetTreeId);
+  }
+  if (state.equipmentId) {
+    params.set("equipment_id", state.equipmentId);
+  }
+  if (state.installationPointId) {
+    params.set("installation_point_id", state.installationPointId);
+  }
+  if (state.sensorId) {
+    params.set("sensor_id", state.sensorId);
+  }
+  params.set("metric", state.metric);
+  params.set("dimension", state.dimension);
+  params.set("k", state.k);
+  return params;
+}
+
+function snapshotDate() {
+  return state.date || state.endDate || state.startDate;
 }
 
 function scopedParams() {
@@ -1124,20 +1218,25 @@ function renderSummary(items) {
 }
 
 function renderTable(rows, columns) {
+  renderTableInto(elements.tableHead, elements.tableBody, rows, columns);
+}
+
+function renderTableInto(head, body, rows, columns) {
   const visibleRows = rows.slice(0, 100);
   const visibleColumns = columns.filter((column) => visibleRows.some((row) => row[column] !== undefined));
-  elements.tableHead.replaceChildren();
-  elements.tableBody.replaceChildren();
+  head.replaceChildren();
+  body.replaceChildren();
   if (!visibleColumns.length) {
+    body.append(tableMessageRow("No rows", columns.length || 1));
     return;
   }
   const headerRow = document.createElement("tr");
   visibleColumns.forEach((column) => {
     const th = document.createElement("th");
-    th.textContent = column;
+    th.textContent = columnLabel(column);
     headerRow.append(th);
   });
-  elements.tableHead.append(headerRow);
+  head.append(headerRow);
   visibleRows.forEach((row) => {
     const tr = document.createElement("tr");
     visibleColumns.forEach((column) => {
@@ -1145,20 +1244,25 @@ function renderTable(rows, columns) {
       td.textContent = formatCell(row[column]);
       tr.append(td);
     });
-    elements.tableBody.append(tr);
+    body.append(tr);
   });
 }
 
 function plotChart(traces, layout) {
+  plotInto(elements.plot, traces, layout);
+}
+
+function plotInto(element, traces, layout) {
   if (!window.Plotly) {
-    elements.plot.textContent = "Chart library unavailable";
+    element.textContent = "Chart library unavailable";
     return;
   }
   if (!traces.length) {
-    elements.plot.textContent = "No chartable rows";
+    Plotly.purge(element);
+    element.textContent = "No chartable rows";
     return;
   }
-  Plotly.react(elements.plot, traces, {
+  Plotly.react(element, traces, {
     margin: { t: 48, r: 20, b: 52, l: 56 },
     paper_bgcolor: "#ffffff",
     plot_bgcolor: "#ffffff",
@@ -1175,13 +1279,34 @@ function plotChart(traces, layout) {
 
 function clearView() {
   setStatus("Loading...");
+  showSnapshotSurface(state.view === "snapshot");
   renderSummary([]);
   elements.tableHead.replaceChildren();
   elements.tableBody.replaceChildren();
   if (window.Plotly) {
     Plotly.purge(elements.plot);
+    Plotly.purge(elements.snapshotTrendChart);
+    Plotly.purge(elements.snapshotClusterChart);
   }
   elements.plot.textContent = "";
+  elements.snapshotContext.replaceChildren();
+  elements.snapshotTrendStatus.textContent = "";
+  elements.snapshotTrendChart.textContent = "";
+  elements.snapshotClusterStatus.textContent = "";
+  elements.snapshotClusterChart.textContent = "";
+  elements.snapshotEventsStatus.textContent = "";
+  elements.snapshotEventsHead.replaceChildren();
+  elements.snapshotEventsBody.replaceChildren();
+  elements.snapshotMeasurementsStatus.textContent = "";
+  elements.snapshotMeasurementsHead.replaceChildren();
+  elements.snapshotMeasurementsBody.replaceChildren();
+}
+
+function showSnapshotSurface(showSnapshot) {
+  elements.snapshotReview.hidden = !showSnapshot;
+  elements.summaryGrid.hidden = showSnapshot;
+  elements.workspace.hidden = showSnapshot;
+  elements.tableShell.hidden = showSnapshot;
 }
 
 function setStatus(message) {
@@ -1207,6 +1332,52 @@ function lineTrace(rows, field, name, color) {
     y: rows.map((row) => numeric(row[field])),
     line: { color },
   };
+}
+
+function snapshotTrendTraces(trend, field) {
+  if (trend.status !== "available") {
+    return [];
+  }
+  const palette = ["#287271", "#5d7f9f", "#a64253", "#8a6f3d", "#59656f", "#3d8068"];
+  if (["all", "asset_tree"].includes(state.scopeType) && trend.equipment_rows?.length) {
+    const rows = aggregateTrendRows(trend.equipment_rows, field);
+    const trace = lineTrace(rows, field, "Equipment average", "#287271");
+    return trace ? [trace] : [];
+  }
+  const groups = groupBy(trend.sensor_rows || [], "installation_point_id");
+  return Object.entries(groups)
+    .slice(0, 12)
+    .map(([installationId, rows], index) => {
+      const label = rows[0]?.installation_point_name || rows[0]?.sensor_id || installationId;
+      return lineTrace(rows, field, label, palette[index % palette.length]);
+    })
+    .filter(Boolean);
+}
+
+function snapshotStat(labelText, valueText) {
+  const item = document.createElement("div");
+  item.className = "snapshot-stat";
+  const label = document.createElement("span");
+  label.textContent = labelText;
+  const value = document.createElement("strong");
+  value.textContent = valueText ?? "n/a";
+  item.append(label, value);
+  return item;
+}
+
+function tableMessageRow(message, colspan) {
+  const row = document.createElement("tr");
+  const cell = document.createElement("td");
+  cell.colSpan = Math.max(colspan, 1);
+  cell.textContent = message;
+  row.append(cell);
+  return row;
+}
+
+function columnLabel(column) {
+  return column
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function setOptions(select, values, labeler, selected) {

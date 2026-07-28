@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.4.1a` adds named asset-tree equipment navigation on top of the read-only API and static web review surface:
+Sprint `0.4.1b` adds the first composed Snapshot review workspace on top of the named asset-tree equipment navigation:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -55,6 +55,7 @@ Sprint `0.4.1a` adds named asset-tree equipment navigation on top of the read-on
 - compact Waites reference tables with one row per asset tree, equipment, and sensor
 - global browser context for source and date range
 - named asset-tree, equipment, and sensor navigation with explicit scope state
+- selected-scope Snapshot review with context, trends, cluster context, events, and measurements
 - view-local controls for metric, dimension, and `k`
 - URL-backed browser state for local refresh/share workflows
 - Plotly-based snapshot, trend, cluster, and drift views over API responses
@@ -172,7 +173,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing processed artifacts in sprint `0.4.1a`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser. Upcoming specs move cluster/drift reads toward a prebuilt SQLite model registry and move routine trend reads toward on-demand SQLite queries over daily snapshot facts.
+The web and API are read-only over existing processed artifacts in sprint `0.4.1b`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser. Upcoming specs move cluster/drift reads toward a prebuilt SQLite model registry and move routine trend reads toward on-demand SQLite queries over daily snapshot facts.
 
 ## Source API
 

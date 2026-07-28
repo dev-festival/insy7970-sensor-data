@@ -12,6 +12,7 @@ from insy_sensor_data.artifact_views import (
     load_cluster_view,
     load_cluster_window_view,
     load_drift_view,
+    load_snapshot_review_view,
 )
 
 
@@ -57,6 +58,48 @@ def read_equipment_tree(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/snapshot-review/{snapshot_date}")
+def read_snapshot_review(
+    snapshot_date: str,
+    request: Request,
+    source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    scope: str = "all",
+    asset_tree_id: str | None = None,
+    equipment_id: str | None = None,
+    installation_point_id: str | None = None,
+    sensor_id: str | None = None,
+    metric: str = "rms_vel",
+    dimension: str = "x",
+    feature_space: str | None = None,
+    stat: str = "mean",
+    k: int = 4,
+) -> dict[str, Any]:
+    try:
+        return load_snapshot_review_view(
+            settings=request.app.state.settings,
+            run_date=date.fromisoformat(snapshot_date),
+            source=source,
+            start_date=date.fromisoformat(start_date) if start_date else None,
+            end_date=date.fromisoformat(end_date) if end_date else None,
+            scope=scope,
+            asset_tree_id=asset_tree_id,
+            equipment_id=equipment_id,
+            installation_point_id=installation_point_id,
+            sensor_id=sensor_id,
+            metric=metric,
+            dimension=dimension,
+            feature_space=feature_space,
+            stat=stat,
+            k=k,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/clusters")

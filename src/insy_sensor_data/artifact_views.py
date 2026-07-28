@@ -34,6 +34,22 @@ WINDOW_RE = re.compile(
     r"dimension=(?P<dimension>[^_]+)_"
     r"k=(?P<k>\d+)$"
 )
+VALID_SCOPE_TYPES = {"all", "asset_tree", "equipment", "sensor"}
+AXIS_METRICS = {"rms_vel", "rms_accel", "rms_pkpk", "rms_cf"}
+NON_AXIS_METRICS = {"impact", "temp_sensor", "temp_ambient"}
+SNAPSHOT_REVIEW_BASE_COLUMNS = [
+    "sensor_name",
+    "installation_point_id",
+    "asset_number",
+    "rms_vel_mean_x",
+    "rms_vel_mean_y",
+    "rms_vel_mean_z",
+    "rms_accel_mean_x",
+    "rms_accel_mean_y",
+    "rms_accel_mean_z",
+    "impact_mean",
+    "temp_sensor_mean",
+]
 
 
 def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
@@ -451,6 +467,103 @@ def load_cluster_window_view(
     }
 
 
+def load_snapshot_review_view(
+    settings: AppSettings,
+    run_date: date,
+    source: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    scope: str = "all",
+    asset_tree_id: str | None = None,
+    equipment_id: str | None = None,
+    installation_point_id: str | None = None,
+    sensor_id: str | None = None,
+    metric: str = "rms_vel",
+    dimension: str = "x",
+    feature_space: str | None = None,
+    stat: str = "mean",
+    k: int = 4,
+) -> dict[str, Any]:
+    source_mode = _optional_source(source)
+    effective_start = start_date or run_date
+    effective_end = end_date or run_date
+    if effective_end < effective_start:
+        raise ValueError("end_date must be on or after start_date")
+
+    payload = load_snapshot(settings, run_date)
+    snapshot_source = str(payload["metadata"].get("source") or "")
+    if source_mode is not None and snapshot_source != source_mode:
+        raise FileNotFoundError(
+            f"Missing snapshot artifact for source {source_mode} date {run_date.isoformat()}."
+        )
+    resolved_source = snapshot_source or source_mode or ""
+    scope_context = _resolve_review_scope(
+        settings=settings,
+        source=resolved_source,
+        start_date=effective_start,
+        end_date=effective_end,
+        scope=scope,
+        asset_tree_id=asset_tree_id,
+        equipment_id=equipment_id,
+        installation_point_id=installation_point_id,
+        sensor_id=sensor_id,
+    )
+    snapshot_rows = payload["rows"]
+    scoped_rows = _filter_rows_for_review_scope(snapshot_rows, scope_context)
+    selected_metric = _normalize_metric(metric)
+    selected_dimension = _normalize_dimension_for_metric(selected_metric, dimension)
+    selected_stat = _normalize_stat(stat)
+    cluster_dimension = _cluster_dimension_from_feature_space(feature_space, selected_dimension)
+    return {
+        "source": resolved_source,
+        "date": run_date.isoformat(),
+        "start_date": effective_start.isoformat(),
+        "end_date": effective_end.isoformat(),
+        "scope": _public_scope(scope_context),
+        "context": _snapshot_review_context(scope_context, scoped_rows, snapshot_rows),
+        "trend": _snapshot_review_trend(
+            settings=settings,
+            start_date=effective_start,
+            end_date=effective_end,
+            source=resolved_source,
+            scope_context=scope_context,
+            metric=selected_metric,
+            dimension=selected_dimension,
+            stat=selected_stat,
+        ),
+        "cluster_context": _snapshot_review_cluster_context(
+            settings=settings,
+            run_date=run_date,
+            source=resolved_source,
+            dimension=cluster_dimension,
+            k=k,
+            scope_context=scope_context,
+        ),
+        "events": _snapshot_review_events(
+            settings=settings,
+            run_date=run_date,
+            source=resolved_source,
+            scope_context=scope_context,
+            snapshot_rows=snapshot_rows,
+        ),
+        "measurements": _snapshot_review_measurements(
+            scoped_rows,
+            metric=selected_metric,
+            dimension=selected_dimension,
+            stat=selected_stat,
+        ),
+        "metadata": {
+            "snapshot_row_count": len(snapshot_rows),
+            "filtered_snapshot_row_count": len(scoped_rows),
+            "metric": selected_metric,
+            "dimension": selected_dimension,
+            "stat": selected_stat,
+            "cluster_dimension": cluster_dimension,
+            "k": _validate_k(k),
+        },
+    }
+
+
 def _snapshot_artifacts(settings: AppSettings) -> list[dict[str, Any]]:
     snapshots = []
     for snapshot_date in list_snapshot_dates(settings):
@@ -581,6 +694,472 @@ def _cluster_window_artifacts(root: Path) -> list[dict[str, Any]]:
             }
         )
     return artifacts
+
+
+def _resolve_review_scope(
+    settings: AppSettings,
+    source: str,
+    start_date: date,
+    end_date: date,
+    scope: str,
+    asset_tree_id: str | None,
+    equipment_id: str | None,
+    installation_point_id: str | None,
+    sensor_id: str | None,
+) -> dict[str, Any]:
+    scope_type = scope if scope in VALID_SCOPE_TYPES else "all"
+    context: dict[str, Any] = {
+        "type": scope_type,
+        "asset_tree_id": _text_id(asset_tree_id),
+        "equipment_id": _text_id(equipment_id),
+        "installation_point_id": _text_id(installation_point_id),
+        "sensor_id": _text_id(sensor_id),
+        "label": "All equipment",
+        "equipment_ids": set(),
+        "installation_point_ids": set(),
+    }
+    if scope_type == "all":
+        return context
+
+    try:
+        tree_payload = list_equipment_tree_view(
+            settings=settings,
+            source=source,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except (FileNotFoundError, ValueError):
+        tree_payload = {"asset_trees": []}
+
+    for asset_tree in tree_payload.get("asset_trees", []):
+        if scope_type == "asset_tree" and asset_tree.get("asset_tree_id") == context["asset_tree_id"]:
+            context["label"] = asset_tree.get("asset_tree_name") or f"Asset Tree {context['asset_tree_id']}"
+            context["equipment_ids"] = {
+                _text_id(row.get("equipment_id"))
+                for row in asset_tree.get("equipment", [])
+                if _text_id(row.get("equipment_id"))
+            }
+            context["installation_point_ids"] = {
+                _text_id(sensor.get("installation_point_id"))
+                for row in asset_tree.get("equipment", [])
+                for sensor in row.get("sensors", [])
+                if _text_id(sensor.get("installation_point_id"))
+            }
+            return context
+        for equipment in asset_tree.get("equipment", []):
+            equipment_id_value = _text_id(equipment.get("equipment_id"))
+            if scope_type == "equipment" and equipment_id_value == context["equipment_id"]:
+                context.update(
+                    {
+                        "asset_tree_id": _text_id(asset_tree.get("asset_tree_id")),
+                        "equipment_id": equipment_id_value,
+                        "equipment_name": equipment.get("equipment_name") or "",
+                        "customer_asset_id": equipment.get("customer_asset_id") or "",
+                        "label": equipment.get("equipment_name") or f"Equipment {equipment_id_value}",
+                        "equipment_ids": {equipment_id_value} if equipment_id_value else set(),
+                        "installation_point_ids": {
+                            _text_id(sensor.get("installation_point_id"))
+                            for sensor in equipment.get("sensors", [])
+                            if _text_id(sensor.get("installation_point_id"))
+                        },
+                    }
+                )
+                return context
+            for sensor in equipment.get("sensors", []):
+                installation_id = _text_id(sensor.get("installation_point_id"))
+                sensor_id_value = _text_id(sensor.get("sensor_id"))
+                if scope_type == "sensor" and (
+                    installation_id == context["installation_point_id"]
+                    or (context["sensor_id"] and sensor_id_value == context["sensor_id"])
+                ):
+                    context.update(
+                        {
+                            "asset_tree_id": _text_id(asset_tree.get("asset_tree_id")),
+                            "equipment_id": equipment_id_value,
+                            "installation_point_id": installation_id,
+                            "sensor_id": sensor_id_value,
+                            "equipment_name": equipment.get("equipment_name") or "",
+                            "customer_asset_id": sensor.get("customer_asset_id")
+                            or equipment.get("customer_asset_id")
+                            or "",
+                            "sensor_name": sensor.get("installation_point_name") or "",
+                            "label": sensor.get("installation_point_name") or f"Sensor {installation_id}",
+                            "equipment_ids": {equipment_id_value} if equipment_id_value else set(),
+                            "installation_point_ids": {installation_id} if installation_id else set(),
+                        }
+                    )
+                    return context
+
+    if scope_type == "asset_tree" and context["asset_tree_id"]:
+        context["label"] = f"Asset Tree {context['asset_tree_id']}"
+    elif scope_type == "equipment" and context["equipment_id"]:
+        context["label"] = f"Equipment {context['equipment_id']}"
+        context["equipment_ids"] = {context["equipment_id"]}
+    elif scope_type == "sensor" and context["installation_point_id"]:
+        context["label"] = f"Sensor {context['installation_point_id']}"
+        context["installation_point_ids"] = {context["installation_point_id"]}
+        if context["equipment_id"]:
+            context["equipment_ids"] = {context["equipment_id"]}
+    return context
+
+
+def _public_scope(scope_context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": scope_context["type"],
+        "asset_tree_id": _none_if_empty(scope_context.get("asset_tree_id", "")),
+        "equipment_id": _none_if_empty(scope_context.get("equipment_id", "")),
+        "installation_point_id": _none_if_empty(scope_context.get("installation_point_id", "")),
+        "sensor_id": _none_if_empty(scope_context.get("sensor_id", "")),
+        "label": scope_context.get("label", "All equipment"),
+    }
+
+
+def _snapshot_review_context(
+    scope_context: dict[str, Any],
+    scoped_rows: list[dict[str, Any]],
+    snapshot_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    rows = scoped_rows if scope_context["type"] != "all" else snapshot_rows
+    first = rows[0] if rows else {}
+    equipment_ids = sorted({_text_id(row.get("equipment_id")) for row in rows if _text_id(row.get("equipment_id"))})
+    sensor_ids = sorted(
+        {
+            _text_id(row.get("installation_point_id"))
+            for row in rows
+            if _text_id(row.get("installation_point_id"))
+        }
+    )
+    context = {
+        "label": scope_context.get("label", "All equipment"),
+        "equipment_name": scope_context.get("equipment_name") or first.get("equipment_name") or "",
+        "customer_asset_id": scope_context.get("customer_asset_id") or first.get("customer_asset_id") or "",
+        "sensor_name": scope_context.get("sensor_name") or first.get("installation_point_name") or "",
+        "equipment_count": len(equipment_ids),
+        "sensor_count": len(sensor_ids),
+        "snapshot_row_count": len(rows),
+        "all_snapshot_row_count": len(snapshot_rows),
+    }
+    if scope_context["type"] == "sensor" and not context["sensor_count"] and scope_context.get("installation_point_id"):
+        context["sensor_count"] = 1
+    return context
+
+
+def _snapshot_review_trend(
+    settings: AppSettings,
+    start_date: date,
+    end_date: date,
+    source: str,
+    scope_context: dict[str, Any],
+    metric: str,
+    dimension: str,
+    stat: str,
+) -> dict[str, Any]:
+    value_field = _metric_field(metric, stat, dimension)
+    try:
+        payload = load_trend_view(
+            settings=settings,
+            start_date=start_date,
+            end_date=end_date,
+            source=source,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "status": "missing",
+            "message": str(exc),
+            "value_field": value_field,
+            "sensor_rows": [],
+            "equipment_rows": [],
+            "rows": [],
+        }
+    sensor_rows = _filter_rows_for_review_scope(payload.get("sensor_rows", []), scope_context)
+    equipment_rows = _filter_rows_for_review_scope(payload.get("equipment_rows", []), scope_context)
+    return {
+        "status": "available",
+        "value_field": value_field,
+        "row_count": len(sensor_rows),
+        "sensor_rows": sensor_rows,
+        "equipment_rows": equipment_rows,
+        "rows": sensor_rows,
+        "skipped_dates": payload.get("metadata", {}).get("skipped_dates", []),
+    }
+
+
+def _snapshot_review_cluster_context(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+    dimension: str,
+    k: int,
+    scope_context: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        payload = load_cluster_view(
+            settings=settings,
+            run_date=run_date,
+            source=source,
+            dimension=dimension,
+            k=k,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "status": "missing",
+            "message": str(exc),
+            "dimension": dimension,
+            "k": k,
+            "points": [],
+            "rows": [],
+            "selected_ids": sorted(scope_context.get("installation_point_ids", set())),
+        }
+    points = _filter_rows_for_review_scope(payload.get("pca_rows", []), scope_context)
+    rows = _filter_rows_for_review_scope(payload.get("rows", []), scope_context)
+    return {
+        "status": "available",
+        "dimension": payload["dimension"],
+        "k": payload["k"],
+        "row_count": len(rows),
+        "all_row_count": payload["row_count"],
+        "points": points,
+        "rows": rows,
+        "selected_ids": sorted(scope_context.get("installation_point_ids", set())),
+        "metrics": payload.get("metrics", {}),
+    }
+
+
+def _snapshot_review_events(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+    scope_context: dict[str, Any],
+    snapshot_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    action_rows = _sqlite_action_item_rows(settings, run_date)
+    source_path = "sqlite"
+    if not action_rows:
+        action_rows = _raw_action_item_rows(settings, run_date, source)
+        source_path = "raw"
+    snapshot_context = _snapshot_lookup(snapshot_rows)
+    events = [
+        _event_row_from_action_item(row, run_date, snapshot_context)
+        for row in action_rows
+    ]
+    scoped_events = [row for row in events if _event_matches_scope(row, scope_context)]
+    return {
+        "status": "available",
+        "input": source_path,
+        "row_count": len(scoped_events),
+        "all_row_count": len(events),
+        "rows": scoped_events,
+    }
+
+
+def _snapshot_review_measurements(
+    rows: list[dict[str, Any]],
+    metric: str,
+    dimension: str,
+    stat: str,
+) -> dict[str, Any]:
+    columns = _measurement_columns(metric, dimension, stat)
+    measurement_rows = []
+    for row in rows:
+        measurement = {
+            "sensor_name": row.get("installation_point_name") or row.get("installation_point_id") or "",
+            "installation_point_id": row.get("installation_point_id") or "",
+            "asset_number": row.get("customer_asset_id") or "",
+            "equipment_name": row.get("equipment_name") or "",
+        }
+        for column in columns:
+            if column not in measurement:
+                measurement[column] = row.get(column)
+        measurement_rows.append(measurement)
+    return {
+        "status": "available",
+        "row_count": len(measurement_rows),
+        "columns": columns,
+        "rows": measurement_rows,
+    }
+
+
+def _filter_rows_for_review_scope(
+    rows: list[dict[str, Any]],
+    scope_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if scope_context["type"] == "all":
+        return rows
+    return [row for row in rows if _row_matches_review_scope(row, scope_context)]
+
+
+def _row_matches_review_scope(row: dict[str, Any], scope_context: dict[str, Any]) -> bool:
+    installation_ids = scope_context.get("installation_point_ids", set())
+    equipment_ids = scope_context.get("equipment_ids", set())
+    installation_id = _text_id(row.get("installation_point_id"))
+    equipment_id = _text_id(row.get("equipment_id"))
+    if scope_context["type"] == "sensor":
+        return bool(installation_id and installation_id in installation_ids)
+    if installation_id and installation_ids:
+        return installation_id in installation_ids
+    if equipment_id and equipment_ids:
+        return equipment_id in equipment_ids
+    return False
+
+
+def _sqlite_action_item_rows(settings: AppSettings, run_date: date) -> list[dict[str, Any]]:
+    database_path = get_storage_paths(settings.data_dir).observations_db_path
+    if not database_path.exists():
+        return []
+    try:
+        with sqlite3.connect(database_path) as connection:
+            connection.row_factory = sqlite3.Row
+            table_exists = connection.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'waites_action_items'
+                """
+            ).fetchone()
+            if table_exists is None:
+                return []
+            rows = connection.execute(
+                """
+                SELECT
+                    source_date,
+                    action_item_id,
+                    wo_number,
+                    wo_status,
+                    sensor_id,
+                    type,
+                    status,
+                    installation_point_id,
+                    equipment_id,
+                    title,
+                    description,
+                    urgency,
+                    closed_at
+                FROM waites_action_items
+                WHERE source_date = ?
+                ORDER BY action_item_id
+                """,
+                (run_date.isoformat(),),
+            ).fetchall()
+            return [dict(row) for row in rows]
+    except sqlite3.Error:
+        return []
+
+
+def _raw_action_item_rows(settings: AppSettings, run_date: date, source: str) -> list[dict[str, Any]]:
+    raw_dir = get_storage_paths(settings.data_dir).raw_waites_run_dir(run_date.isoformat())
+    manifest = _optional_json(raw_dir / "manifest.json")
+    if manifest and source and manifest.get("source") not in (None, source):
+        return []
+    try:
+        return read_json(raw_dir / "action-items.json").get("list", [])
+    except FileNotFoundError:
+        return []
+
+
+def _snapshot_lookup(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        _text_id(row.get("installation_point_id")): row
+        for row in rows
+        if _text_id(row.get("installation_point_id"))
+    }
+
+
+def _event_row_from_action_item(
+    row: dict[str, Any],
+    run_date: date,
+    snapshot_context: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    installation_point = row.get("installation_point") if isinstance(row.get("installation_point"), dict) else {}
+    equipment = row.get("equipment") if isinstance(row.get("equipment"), dict) else {}
+    installation_id = _text_id(row.get("installation_point_id") or installation_point.get("installation_point_id"))
+    context_row = snapshot_context.get(installation_id, {})
+    equipment_id = _text_id(row.get("equipment_id") or equipment.get("equipment_id") or context_row.get("equipment_id"))
+    action_id = _text_id(row.get("action_item_id")) or "unknown"
+    title = _clean_text(row.get("title")) or f"Action item {action_id}"
+    return {
+        "date": _text_id(row.get("source_date")) or run_date.isoformat(),
+        "source": "waites",
+        "status": _clean_text(row.get("status") or row.get("action_item_status")),
+        "type": _clean_text(row.get("type") or row.get("action_item_type")),
+        "asset_number": _clean_text(context_row.get("customer_asset_id")),
+        "installation_point_id": installation_id,
+        "sensor_name": _clean_text(context_row.get("installation_point_name")),
+        "equipment_id": equipment_id,
+        "event_id": action_id,
+        "work_order": _clean_text(row.get("wo_number")),
+        "work_order_status": _clean_text(row.get("wo_status")),
+        "title": title,
+        "urgency": _clean_text(row.get("urgency")),
+        "closed_at": _clean_text(row.get("closed_at")),
+    }
+
+
+def _event_matches_scope(row: dict[str, Any], scope_context: dict[str, Any]) -> bool:
+    if scope_context["type"] == "all":
+        return True
+    installation_id = _text_id(row.get("installation_point_id"))
+    equipment_id = _text_id(row.get("equipment_id"))
+    if scope_context["type"] == "sensor":
+        return bool(installation_id and installation_id in scope_context.get("installation_point_ids", set()))
+    if installation_id and installation_id in scope_context.get("installation_point_ids", set()):
+        return True
+    return bool(equipment_id and equipment_id in scope_context.get("equipment_ids", set()))
+
+
+def _measurement_columns(metric: str, dimension: str, stat: str) -> list[str]:
+    columns = list(SNAPSHOT_REVIEW_BASE_COLUMNS)
+    for field in [
+        _metric_field(metric, stat, dimension),
+        _metric_field(metric, "max", dimension),
+        _metric_field(metric, "min", dimension),
+        _metric_field(metric, "std", dimension),
+    ]:
+        if field not in columns:
+            columns.append(field)
+    return columns
+
+
+def _metric_field(metric: str, stat: str, dimension: str) -> str:
+    if metric in AXIS_METRICS:
+        axis = dimension if dimension in {"x", "y", "z"} else "x"
+        return f"{metric}_{stat}_{axis}"
+    return f"{metric}_{stat}"
+
+
+def _normalize_metric(metric: str) -> str:
+    candidate = (metric or "").strip().lower()
+    if candidate in AXIS_METRICS | NON_AXIS_METRICS:
+        return candidate
+    return "rms_vel"
+
+
+def _normalize_stat(stat: str) -> str:
+    candidate = (stat or "").strip().lower()
+    return candidate if candidate in {"mean", "max", "min", "std"} else "mean"
+
+
+def _normalize_dimension_for_metric(metric: str, dimension: str) -> str:
+    candidate = (dimension or "").strip().lower()
+    if metric in AXIS_METRICS:
+        return candidate if candidate in {"x", "y", "z"} else "x"
+    return "temperature" if metric.startswith("temp") else candidate or "x"
+
+
+def _cluster_dimension_from_feature_space(feature_space: str | None, dimension: str) -> str:
+    if not feature_space:
+        return _validate_dimension(dimension)
+    feature = feature_space.strip().lower()
+    if feature in DIMENSIONS:
+        return _validate_dimension(feature)
+    if feature.startswith("x_"):
+        return "x"
+    if feature.startswith("y_"):
+        return "y"
+    if feature.startswith("z_"):
+        return "z"
+    if feature == "temperature":
+        return "temperature"
+    return _validate_dimension(dimension)
 
 
 def _filter_rows(

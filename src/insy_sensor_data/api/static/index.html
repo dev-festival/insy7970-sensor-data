@@ -76,13 +76,59 @@
 
           <p id="status-line" class="status-line">Loading artifacts...</p>
 
+          <section id="snapshot-review" class="snapshot-review" aria-label="Snapshot review" hidden>
+            <header id="snapshot-context" class="snapshot-context"></header>
+
+            <section class="snapshot-panel" aria-label="Trend context">
+              <div class="snapshot-panel-heading">
+                <h2>Trend Context</h2>
+                <p id="snapshot-trend-status"></p>
+              </div>
+              <div id="snapshot-trend-chart" class="snapshot-chart" role="img" aria-label="Snapshot trend chart"></div>
+            </section>
+
+            <section class="snapshot-panel" aria-label="Cluster context">
+              <div class="snapshot-panel-heading">
+                <h2>Cluster Context</h2>
+                <p id="snapshot-cluster-status"></p>
+              </div>
+              <div id="snapshot-cluster-chart" class="snapshot-chart" role="img" aria-label="Snapshot cluster chart"></div>
+            </section>
+
+            <section class="snapshot-panel" aria-label="Events">
+              <div class="snapshot-panel-heading">
+                <h2>Events</h2>
+                <p id="snapshot-events-status"></p>
+              </div>
+              <div class="snapshot-table-shell">
+                <table>
+                  <thead id="snapshot-events-head"></thead>
+                  <tbody id="snapshot-events-body"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="snapshot-panel" aria-label="Measurements">
+              <div class="snapshot-panel-heading">
+                <h2>Measurements</h2>
+                <p id="snapshot-measurements-status"></p>
+              </div>
+              <div class="snapshot-table-shell">
+                <table>
+                  <thead id="snapshot-measurements-head"></thead>
+                  <tbody id="snapshot-measurements-body"></tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+
           <section id="summary-grid" class="summary-grid" aria-label="Summary"></section>
 
-          <section class="workspace">
+          <section id="workspace" class="workspace">
             <div id="plot" class="plot" role="img" aria-label="Current view chart"></div>
           </section>
 
-          <section class="table-shell" aria-label="Data table">
+          <section id="table-shell" class="table-shell" aria-label="Data table">
             <table>
               <thead id="data-table-head"></thead>
               <tbody id="data-table-body"></tbody>

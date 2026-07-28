@@ -38,6 +38,10 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert 'id="equipment-tree"' in response.text
     assert 'id="scope-status"' in response.text
     assert 'id="metric-select"' in response.text
+    assert 'id="snapshot-review"' in response.text
+    assert 'id="snapshot-context"' in response.text
+    assert 'id="snapshot-trend-chart"' in response.text
+    assert 'id="snapshot-cluster-chart"' in response.text
     assert 'data-view="cluster"' in response.text
     assert "plotly" in response.text.lower()
 
@@ -220,6 +224,77 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     assert window["metrics"]["date_count"] == 3
     assert len(window["quality_rows"]) == 3
     assert len(window["aligned_drift_rows"]) == 2
+
+
+def test_snapshot_review_endpoint_composes_sensor_scope(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+
+    response = client.get(
+        "/api/snapshot-review/2025-07-09"
+        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "&scope=sensor&installation_point_id=201300&metric=rms_vel&dimension=x&k=4"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scope"]["type"] == "sensor"
+    assert payload["scope"]["installation_point_id"] == "201300"
+    assert payload["context"]["snapshot_row_count"] == 1
+    assert payload["context"]["sensor_count"] == 1
+    assert payload["trend"]["status"] == "available"
+    assert payload["trend"]["row_count"] == 3
+    assert {row["installation_point_id"] for row in payload["trend"]["sensor_rows"]} == {"201300"}
+    assert payload["cluster_context"]["status"] == "available"
+    assert payload["cluster_context"]["row_count"] == 1
+    assert payload["events"]["status"] == "available"
+    assert payload["events"]["row_count"] == 1
+    assert payload["events"]["rows"][0]["event_id"] == "9001"
+    assert payload["measurements"]["row_count"] == 1
+    assert "rms_vel_mean_x" in payload["measurements"]["columns"]
+
+
+def test_snapshot_review_endpoint_composes_equipment_scope(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+
+    response = client.get(
+        "/api/snapshot-review/2025-07-09"
+        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "&scope=equipment&equipment_id=55576&metric=rms_accel&dimension=x&k=4"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scope"]["type"] == "equipment"
+    assert payload["scope"]["equipment_id"] == "55576"
+    assert payload["context"]["snapshot_row_count"] == 2
+    assert payload["context"]["sensor_count"] == 2
+    assert payload["trend"]["row_count"] == 6
+    assert payload["cluster_context"]["row_count"] == 2
+    assert {row["event_id"] for row in payload["events"]["rows"]} == {"9001", "9002"}
+
+
+def test_snapshot_review_endpoint_handles_missing_trend_and_cluster_artifacts(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    run_date = date(2025, 7, 9)
+    fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+    build_sensor_snapshot(settings=settings, run_date=run_date)
+
+    response = client.get(
+        "/api/snapshot-review/2025-07-09?source=mock&scope=sensor&installation_point_id=201300"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["context"]["snapshot_row_count"] == 1
+    assert payload["trend"]["status"] == "missing"
+    assert payload["cluster_context"]["status"] == "missing"
+    assert payload["events"]["row_count"] == 1
+    assert payload["measurements"]["row_count"] == 1
 
 
 def test_cluster_endpoint_validates_parameters_and_missing_artifacts(tmp_path: Path) -> None:
