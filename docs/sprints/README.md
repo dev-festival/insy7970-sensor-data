@@ -30,6 +30,7 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.4.2](0.4.2-chart-rendering-and-ui-polish.md) | Chart rendering and UI polish | Stable chart layout, metric controls, and dependency-light rendering decisions |
 | [0.4.3](0.4.3-offline-cluster-model-registry.md) | Offline cluster model registry | Prebuilt cluster model grids and drift results persisted to SQLite for app reads |
 | [0.4.4](0.4.4-on-demand-sqlite-trends.md) | On-demand SQLite trends | Trend API responses computed from SQLite daily snapshots instead of required artifacts |
+| [0.4.5](0.4.5-snapshot-ui-polish.md) | Snapshot UI polish | Independent review panes, pinned metadata, side-by-side charts, and collapsible detail tables |
 | [0.4.x](0.4.x-on-demand-source-drilldown.md) | On-demand source drilldown | Temporary live source detail for selected dashboard points without permanent raw storage |
 | [0.5.0](0.5.0-maximo-integration.md) | Maximo integration | Asset maintenance records aligned to Waites equipment by asset number |
 
