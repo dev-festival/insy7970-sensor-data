@@ -16,7 +16,7 @@ from insy_sensor_data.clustering.registry import (
 )
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.snapshots.build import list_snapshot_dates, load_snapshot
-from insy_sensor_data.snapshots.trends import list_trend_ranges, load_trends
+from insy_sensor_data.snapshots.trends import list_trend_ranges, load_trends, query_sqlite_trends
 from insy_sensor_data.storage import get_storage_paths
 
 
@@ -343,40 +343,112 @@ def load_trend_view(
     start_date: date,
     end_date: date,
     source: str | None = None,
+    scope: str = "all",
+    asset_tree_id: str | None = None,
     equipment_id: str | None = None,
     installation_point_id: str | None = None,
+    sensor_id: str | None = None,
     customer_asset_id: str | None = None,
+    metric: str = "rms_vel",
+    dimension: str = "x",
+    stat: str = "mean",
 ) -> dict[str, Any]:
     source_mode = _optional_source(source)
-    payload = load_trends(settings, start_date, end_date)
-    trend_source = str(payload["metadata"].get("source") or "")
-    if source_mode is not None and trend_source != source_mode:
-        raise FileNotFoundError(
-            f"Missing trend artifact for source {source_mode} range "
-            f"{start_date.isoformat()} to {end_date.isoformat()}."
+    resolved_source = source_mode or settings.source_mode
+    if end_date < start_date:
+        raise ValueError("end_date must be on or after start_date")
+    selected_metric = _normalize_metric(metric)
+    selected_dimension = _normalize_dimension_for_metric(selected_metric, dimension)
+    selected_stat = _normalize_stat(stat)
+    value_field = _metric_field(selected_metric, selected_stat, selected_dimension)
+    try:
+        payload = query_sqlite_trends(
+            settings=settings,
+            start_date=start_date,
+            end_date=end_date,
+            source=resolved_source,
         )
-    sensor_rows = _filter_rows(
-        payload["sensor_rows"],
+        trend_source = resolved_source
+        input_mode = "sqlite"
+    except FileNotFoundError:
+        payload = load_trends(settings, start_date, end_date)
+        trend_source = str(payload["metadata"].get("source") or "")
+        if source_mode is not None and trend_source != source_mode:
+            raise FileNotFoundError(
+                f"Missing trend data for source {source_mode} range "
+                f"{start_date.isoformat()} to {end_date.isoformat()}."
+            )
+        resolved_source = trend_source or resolved_source
+        input_mode = "artifact_fallback"
+
+    scope_context = _resolve_review_scope(
+        settings=settings,
+        source=resolved_source,
+        start_date=start_date,
+        end_date=end_date,
+        scope=scope,
+        asset_tree_id=asset_tree_id,
         equipment_id=equipment_id,
         installation_point_id=installation_point_id,
+        sensor_id=sensor_id,
+    )
+    trend_source = str(payload["metadata"].get("source") or "")
+    sensor_base_rows = _filter_rows_for_review_scope(payload["sensor_rows"], scope_context)
+    equipment_base_rows = _filter_rows_for_review_scope(payload["equipment_rows"], scope_context)
+    sensor_rows = _filter_rows(
+        sensor_base_rows,
+        equipment_id=equipment_id,
+        installation_point_id=installation_point_id,
+        sensor_id=sensor_id,
         customer_asset_id=customer_asset_id,
     )
     equipment_rows = _filter_rows(
-        payload["equipment_rows"],
+        equipment_base_rows,
         equipment_id=equipment_id,
         customer_asset_id=customer_asset_id,
     )
+    if installation_point_id or sensor_id:
+        selected_equipment_dates = {
+            (str(row.get("date") or ""), str(row.get("equipment_id") or ""))
+            for row in sensor_rows
+            if row.get("date") and row.get("equipment_id")
+        }
+        equipment_rows = [
+            row
+            for row in equipment_rows
+            if (str(row.get("date") or ""), str(row.get("equipment_id") or "")) in selected_equipment_dates
+        ]
+    metadata = {
+        **payload.get("metadata", {}),
+        "input_mode": input_mode,
+        "served_from": input_mode,
+        "metric": selected_metric,
+        "dimension": selected_dimension,
+        "stat": selected_stat,
+        "value_field": value_field,
+    }
     return {
         **payload,
-        "source": trend_source,
+        "source": trend_source or resolved_source,
+        "input": input_mode,
+        "input_mode": input_mode,
+        "metric": selected_metric,
+        "dimension": selected_dimension,
+        "stat": selected_stat,
+        "value_field": value_field,
+        "metadata": metadata,
+        "scope": _public_scope(scope_context),
         "sensor_row_count": len(payload["sensor_rows"]),
         "filtered_sensor_row_count": len(sensor_rows),
         "equipment_row_count": len(payload["equipment_rows"]),
         "filtered_equipment_row_count": len(equipment_rows),
         "filters": _filters(
             source=source_mode,
+            scope=scope,
+            asset_tree_id=asset_tree_id,
             equipment_id=equipment_id,
             installation_point_id=installation_point_id,
+            sensor_id=sensor_id,
             customer_asset_id=customer_asset_id,
         ),
         "sensor_rows": sensor_rows,
@@ -1231,11 +1303,13 @@ def _filter_rows(
     rows: list[dict[str, Any]],
     equipment_id: str | None = None,
     installation_point_id: str | None = None,
+    sensor_id: str | None = None,
     customer_asset_id: str | None = None,
 ) -> list[dict[str, Any]]:
     filters = {
         "equipment_id": equipment_id,
         "installation_point_id": installation_point_id,
+        "sensor_id": sensor_id,
         "customer_asset_id": customer_asset_id,
     }
     active = {key: str(value) for key, value in filters.items() if value not in (None, "")}

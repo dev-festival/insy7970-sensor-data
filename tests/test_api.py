@@ -6,6 +6,7 @@ from insy_sensor_data.api.main import create_app
 from insy_sensor_data.clustering.registry import build_cluster_model_grid
 from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.observations import connect_observation_store
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
@@ -97,22 +98,23 @@ def test_snapshot_and_trend_endpoints_read_processed_artifacts(tmp_path: Path) -
     trend_response = client.get("/api/trends?start_date=2025-07-09&end_date=2025-07-09")
     assert trend_response.status_code == 200
     trend_payload = trend_response.json()
+    assert trend_payload["input"] == "sqlite"
     assert len(trend_payload["sensor_rows"]) == 9
     assert trend_payload["metadata"]["equipment_record_count"] >= 1
 
 
-def test_trend_endpoint_reads_multi_day_mock_artifact(tmp_path: Path) -> None:
+def test_trend_endpoint_reads_multi_day_sqlite_snapshots_without_artifact(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
     for run_date in [date(2025, 7, 9), date(2025, 7, 10), date(2025, 7, 11)]:
         fetch_waites(settings=settings, run_date=run_date, facility_id=679)
         build_sensor_snapshot(settings=settings, run_date=run_date)
-    build_trends(settings=settings, start_date=date(2025, 7, 9), end_date=date(2025, 7, 11))
 
     response = client.get("/api/trends?start_date=2025-07-09&end_date=2025-07-11")
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["input"] == "sqlite"
     assert payload["metadata"]["sensor_record_count"] == 27
     assert payload["metadata"]["skipped_dates"] == []
     assert {row["date"] for row in payload["sensor_rows"]} == {
@@ -120,6 +122,36 @@ def test_trend_endpoint_reads_multi_day_mock_artifact(tmp_path: Path) -> None:
         "2025-07-10",
         "2025-07-11",
     }
+    assert not (
+        tmp_path
+        / "data"
+        / "processed"
+        / "trends"
+        / "start=2025-07-09_end=2025-07-11"
+        / "sensor_trends.csv"
+    ).exists()
+
+
+def test_trend_endpoint_falls_back_to_artifact_when_sqlite_rows_are_missing(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    start = date(2025, 7, 9)
+    end = date(2025, 7, 11)
+    for run_date in [start, date(2025, 7, 10), end]:
+        fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+        build_sensor_snapshot(settings=settings, run_date=run_date)
+    build_trends(settings=settings, start_date=start, end_date=end)
+    with connect_observation_store(settings) as connection:
+        connection.execute("DELETE FROM sensor_daily_snapshots")
+        connection.commit()
+
+    response = client.get("/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["input"] == "artifact_fallback"
+    assert payload["metadata"]["served_from"] == "artifact_fallback"
+    assert payload["sensor_row_count"] == 27
 
 
 def test_snapshot_endpoint_returns_404_for_missing_artifact(tmp_path: Path) -> None:
@@ -341,7 +373,8 @@ def test_snapshot_review_endpoint_handles_missing_trend_and_cluster_artifacts(tm
     assert response.status_code == 200
     payload = response.json()
     assert payload["context"]["snapshot_row_count"] == 1
-    assert payload["trend"]["status"] == "missing"
+    assert payload["trend"]["status"] == "available"
+    assert payload["trend"]["row_count"] == 1
     assert payload["cluster_context"]["status"] == "missing"
     assert payload["events"]["row_count"] == 1
     assert payload["measurements"]["row_count"] == 1
@@ -383,6 +416,16 @@ def test_snapshot_and_trend_endpoints_support_source_and_sensor_filters(tmp_path
     assert trend["sensor_row_count"] == 27
     assert trend["filtered_sensor_row_count"] == 3
     assert {row["installation_point_id"] for row in trend["sensor_rows"]} == {"201300"}
+
+    scoped_response = client.get(
+        "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "&scope=asset_tree&asset_tree_id=12440&metric=rms_accel&dimension=x&stat=mean"
+    )
+    assert scoped_response.status_code == 200
+    scoped = scoped_response.json()
+    assert scoped["scope"]["type"] == "asset_tree"
+    assert scoped["value_field"] == "rms_accel_mean_x"
+    assert 0 < scoped["filtered_sensor_row_count"] < scoped["sensor_row_count"]
 
 
 def _prepare_mock_window(settings: AppSettings) -> None:

@@ -543,7 +543,7 @@ function renderSnapshotContext(payload) {
 function renderSnapshotTrendPanel(trend) {
   elements.snapshotTrendStatus.textContent = trend.status === "available"
     ? `${trend.row_count || 0} scoped rows`
-    : trend.message || "No trend artifact for this range";
+    : trend.message || "No trend data for this range";
   const field = trend.value_field || metricField(selectedMetric(), "mean");
   const traces = snapshotTrendTraces(trend, field);
   plotInto(
@@ -613,6 +613,7 @@ async function renderTrend() {
     { label: "Sensor Rows", value: sensorRows.length },
     { label: "Equipment Rows", value: equipmentRows.length },
     { label: "Metric", value: metric.label },
+    { label: "Input", value: payload.input || payload.input_mode || payload.metadata?.input_mode || "artifact" },
     { label: "Scope", value: scopeLabel() },
   ]);
   const aggregates = aggregateTrendRows(sensorRows, meanField);
@@ -791,7 +792,10 @@ function commandHint() {
     return `uv run sensor-data cluster registry build-grid --source ${state.source} --start-date ${state.startDate} --end-date ${state.endDate} --feature-spaces ${state.featureSpace} --ks ${state.k}`;
   }
   if (state.view === "trend") {
-    return `uv run sensor-data trend build --source ${state.source} --start-date ${state.startDate} --end-date ${state.endDate} --input sqlite`;
+    if (state.source === "api") {
+      return `uv run sensor-data workflow api-range --start-date ${state.startDate} --end-date ${state.endDate} --facility 679 --raw-retention release --skip-cluster`;
+    }
+    return `uv run sensor-data workflow mock-range --start-date ${state.startDate} --end-date ${state.endDate} --skip-cluster`;
   }
   return `uv run sensor-data snapshot build --source ${state.source} --date ${state.date} --input sqlite`;
 }
@@ -828,12 +832,22 @@ function snapshotDate() {
 function scopedParams() {
   const params = new URLSearchParams();
   params.set("source", state.source);
-  if (state.scopeType === "equipment" && state.equipmentId) {
+  params.set("scope", state.scopeType);
+  if (state.assetTreeId) {
+    params.set("asset_tree_id", state.assetTreeId);
+  }
+  if (state.equipmentId) {
     params.set("equipment_id", state.equipmentId);
   }
-  if (state.scopeType === "sensor" && state.installationPointId) {
+  if (state.installationPointId) {
     params.set("installation_point_id", state.installationPointId);
   }
+  if (state.sensorId) {
+    params.set("sensor_id", state.sensorId);
+  }
+  params.set("metric", state.metric);
+  params.set("dimension", state.dimension);
+  params.set("stat", "mean");
   return params;
 }
 

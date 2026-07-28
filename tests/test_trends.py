@@ -7,7 +7,7 @@ import pytest
 
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
-from insy_sensor_data.snapshots.trends import build_trends
+from insy_sensor_data.snapshots.trends import build_trends, query_sqlite_trends
 from insy_sensor_data.waites.fetch import fetch_waites
 
 
@@ -90,6 +90,66 @@ def test_build_trends_with_multi_day_mock_data_shows_movement(tmp_path: Path) ->
     assert temp_spike[1] > temp_spike[0]
     assert temp_spike[1] > temp_spike[2]
     assert _row(rows, "2025-07-10", "201305")["rms_vel_mean_x"] == ""
+
+
+def test_query_sqlite_trends_reads_daily_snapshots_without_artifacts(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    start_date = date(2025, 7, 9)
+    end_date = date(2025, 7, 11)
+    for run_date in [start_date, date(2025, 7, 10), end_date]:
+        fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+        build_sensor_snapshot(settings=settings, run_date=run_date)
+
+    payload = query_sqlite_trends(
+        settings=settings,
+        start_date=start_date,
+        end_date=end_date,
+        source="mock",
+    )
+
+    assert payload["input"] == "sqlite"
+    assert payload["metadata"]["skipped_dates"] == []
+    assert len(payload["sensor_rows"]) == 27
+    assert len(payload["equipment_rows"]) >= 1
+    assert "rms_accel_mean_x" in payload["sensor_rows"][0]
+    assert "rms_cf_std_z" in payload["sensor_rows"][0]
+    assert "rms_vel_mean_x" in payload["equipment_rows"][0]
+    assert "rms_vel_mean_x_avg" in payload["equipment_rows"][0]
+    assert not (
+        tmp_path
+        / "data"
+        / "processed"
+        / "trends"
+        / "start=2025-07-09_end=2025-07-11"
+        / "sensor_trends.csv"
+    ).exists()
+
+
+def test_query_sqlite_trends_reports_missing_dates(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    for run_date in [date(2025, 7, 9), date(2025, 7, 11)]:
+        fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+        build_sensor_snapshot(settings=settings, run_date=run_date)
+
+    payload = query_sqlite_trends(
+        settings=settings,
+        start_date=date(2025, 7, 9),
+        end_date=date(2025, 7, 11),
+        source="mock",
+    )
+
+    assert payload["metadata"]["skipped_dates"] == ["2025-07-10"]
+    assert len(payload["sensor_rows"]) == 18
+
+
+def test_query_sqlite_trends_requires_matching_source_rows(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    run_date = date(2025, 7, 9)
+    fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+    build_sensor_snapshot(settings=settings, run_date=run_date)
+
+    with pytest.raises(FileNotFoundError, match="source api"):
+        query_sqlite_trends(settings=settings, start_date=run_date, end_date=run_date, source="api")
 
 
 def test_build_trends_reports_missing_snapshot_dates(tmp_path: Path) -> None:

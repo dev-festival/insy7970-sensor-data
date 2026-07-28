@@ -294,6 +294,8 @@ uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 
 uv run sensor-data trend build --source api --start-date 2026-07-19 --end-date 2026-07-19
 ```
 
+Materializes trend CSV/JSON artifacts for reports, exports, and offline inspection. The browser no longer requires this command for routine Trend tab rendering once daily snapshots exist in SQLite.
+
 Reads processed snapshots and writes:
 
 ```text
@@ -311,6 +313,14 @@ uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 
 ```
 
 Missing SQLite daily snapshots in the range are reported as skipped dates. This path does not require raw endpoint JSON or timestamp-native SQLite observation rows.
+
+Routine web/API trend reads are read-only queries over SQLite daily snapshots:
+
+```text
+GET /api/trends?source=api&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&metric=rms_vel&dimension=x&stat=mean
+```
+
+Supported web filters include `scope`, `asset_tree_id`, `equipment_id`, `installation_point_id`, `sensor_id`, and `customer_asset_id`. If SQLite daily rows are unavailable, the API falls back to matching trend artifacts when they exist.
 
 ### Run Human-Readable Workflows
 

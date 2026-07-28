@@ -50,6 +50,19 @@ EQUIPMENT_TREND_FIELDS = [
     "rms_vel_mean_z_avg",
 ]
 VALID_TREND_INPUT_MODES = {"snapshots", "sqlite"}
+TREND_IDENTIFIER_FIELDS = {
+    "date",
+    "source",
+    "installation_point_id",
+    "installation_point_name",
+    "equipment_id",
+    "equipment_name",
+    "sensor_id",
+    "facility_id",
+    "customer_asset_id",
+    "installation_customer_asset_id",
+    "equipment_customer_asset_id",
+}
 
 
 def build_trends(
@@ -146,6 +159,62 @@ def load_trends(settings: AppSettings, start_date: date, end_date: date) -> dict
     }
 
 
+def query_sqlite_trends(
+    settings: AppSettings,
+    start_date: date,
+    end_date: date,
+    source: str = "mock",
+) -> dict[str, Any]:
+    if source not in {"mock", "api"}:
+        raise ValueError("source must be one of: api, mock")
+    if end_date < start_date:
+        raise ValueError("end_date must be on or after start_date")
+
+    sensor_rows: list[dict[str, Any]] = []
+    skipped_dates: list[str] = []
+    for run_date in _date_range(start_date, end_date):
+        try:
+            snapshot_rows = _sqlite_snapshot_rows(settings, run_date, source)
+        except FileNotFoundError:
+            skipped_dates.append(run_date.isoformat())
+            continue
+        for row in snapshot_rows:
+            sensor_rows.append(
+                {
+                    "date": run_date.isoformat(),
+                    "source": source,
+                    **_sqlite_sensor_trend_row(row),
+                }
+            )
+
+    if not sensor_rows:
+        raise FileNotFoundError(
+            f"No SQLite daily snapshots found for source {source} in the requested trend range."
+        )
+
+    equipment_rows = _equipment_trends(sensor_rows)
+    metadata = {
+        "source": source,
+        "input_mode": "sqlite",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "sensor_record_count": len(sensor_rows),
+        "equipment_record_count": len(equipment_rows),
+        "skipped_dates": skipped_dates,
+        "source_mismatch_dates": [],
+    }
+    return {
+        "source": source,
+        "input": "sqlite",
+        "input_mode": "sqlite",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "metadata": metadata,
+        "sensor_rows": sensor_rows,
+        "equipment_rows": equipment_rows,
+    }
+
+
 def list_trend_ranges(settings: AppSettings) -> list[dict[str, str]]:
     storage = get_storage_paths(settings.data_dir)
     if not storage.trends_dir.exists():
@@ -200,6 +269,10 @@ def _sensor_trend_row(row: dict[str, str]) -> dict[str, str]:
     return {field: row.get(field, "") for field in SENSOR_TREND_FIELDS if field != "date"}
 
 
+def _sqlite_sensor_trend_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in row.items() if key not in {"date", "source"}}
+
+
 def _equipment_trends(sensor_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in sensor_rows:
@@ -209,28 +282,51 @@ def _equipment_trends(sensor_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     output: list[dict[str, Any]] = []
     for (run_date, equipment_id), rows in sorted(grouped.items()):
         first = rows[0]
-        output.append(
-            {
-                "date": run_date,
-                "equipment_id": equipment_id,
-                "equipment_name": first.get("equipment_name"),
-                "customer_asset_id": first.get("customer_asset_id"),
-                "sensor_count": len(rows),
-                "impact_mean_avg": _avg(row.get("impact_mean") for row in rows),
-                "temp_sensor_mean_avg": _avg(row.get("temp_sensor_mean") for row in rows),
-                "rms_vel_mean_x_avg": _avg(row.get("rms_vel_mean_x") for row in rows),
-                "rms_vel_mean_y_avg": _avg(row.get("rms_vel_mean_y") for row in rows),
-                "rms_vel_mean_z_avg": _avg(row.get("rms_vel_mean_z") for row in rows),
-            }
-        )
+        equipment_row: dict[str, Any] = {
+            "date": run_date,
+            "source": first.get("source"),
+            "equipment_id": equipment_id,
+            "equipment_name": first.get("equipment_name"),
+            "customer_asset_id": first.get("customer_asset_id"),
+            "sensor_count": len(rows),
+        }
+        for field in _numeric_trend_fields(rows):
+            average = _avg(row.get(field) for row in rows)
+            equipment_row[field] = average
+            equipment_row[f"{field}_avg"] = average
+        output.append(equipment_row)
     return output
 
 
 def _avg(values: Any) -> float | None:
-    numeric_values = [float(value) for value in values if value not in (None, "")]
+    numeric_values = [
+        numeric_value
+        for numeric_value in (_numeric(value) for value in values)
+        if numeric_value is not None
+    ]
     if not numeric_values:
         return None
     return sum(numeric_values) / len(numeric_values)
+
+
+def _numeric_trend_fields(rows: list[dict[str, Any]]) -> list[str]:
+    fields: set[str] = set()
+    for row in rows:
+        for field, value in row.items():
+            if field in TREND_IDENTIFIER_FIELDS:
+                continue
+            if _numeric(value) is not None:
+                fields.add(field)
+    return sorted(fields)
+
+
+def _numeric(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _date_range(start_date: date, end_date: date) -> list[date]:

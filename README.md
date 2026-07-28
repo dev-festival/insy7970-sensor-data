@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.4.3` adds an offline SQLite cluster model registry over the SVG-backed review workspace:
+Sprint `0.4.4` adds on-demand SQLite trend reads over the registered-model review workspace:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -54,6 +54,8 @@ Sprint `0.4.3` adds an offline SQLite cluster model registry over the SVG-backed
 - `workflow mock-range --cluster-models` and `workflow api-range --cluster-models`
 - `workflow mock-range` and `workflow api-range` for date-window orchestration
 - SQLite daily snapshot store mirrored from `sensor_snapshot.csv`
+- on-demand `/api/trends` reads over `sensor_daily_snapshots`
+- trend artifact fallback for export/report compatibility
 - Waites ingestion ledger with endpoint counts, validation status, checksums, and retention status
 - workflow raw-retention modes: `keep`, `compress`, and `release`
 - date-scoped staging purge after snapshot and ledger persistence are verified
@@ -176,6 +178,7 @@ Then open:
 - `http://127.0.0.1:8000/api/equipment-tree?source=mock`
 - `http://127.0.0.1:8000/api/snapshots/2025-07-09?source=mock`
 - `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11`
+- `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11&scope=asset_tree&asset_tree_id=12440&metric=rms_accel&dimension=x&stat=mean`
 - `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4`
 - `http://127.0.0.1:8000/api/cluster-models?source=mock&start_date=2025-07-09&end_date=2025-07-11`
 - `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel&k=5`
@@ -185,7 +188,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing processed artifacts and registered SQLite cluster models in sprint `0.4.3`. Build snapshots and trends first, then run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser. Trend views still require trend artifacts until the on-demand SQLite trend sprint.
+The web and API are read-only over existing daily snapshots, optional trend artifacts, and registered SQLite cluster models in sprint `0.4.4`. Build snapshots first; the Trend tab reads from `sensor_daily_snapshots` on request and falls back to trend artifacts only when SQLite daily rows are unavailable. Run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser.
 
 ## Source API
 
@@ -223,7 +226,7 @@ Live Waites canary ingestion writes the same raw paths:
 data/raw/waites/date=YYYY-MM-DD/
 ```
 
-Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations.
+Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations. Routine web trend reads use `/api/trends` directly over `sensor_daily_snapshots` and do not write CSV artifacts.
 
 The mock trend dates are intentionally small and controlled:
 
