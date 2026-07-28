@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from insy_sensor_data.api.main import create_app
+from insy_sensor_data.clustering.registry import build_cluster_model_grid
 from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
@@ -229,6 +230,50 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     assert window["metrics"]["date_count"] == 3
     assert len(window["quality_rows"]) == 3
     assert len(window["aligned_drift_rows"]) == 2
+
+    build_cluster_model_grid(
+        settings=settings,
+        start_date=date(2025, 7, 9),
+        end_date=date(2025, 7, 11),
+        source="mock",
+        feature_spaces=["x_accel"],
+        ks=[5],
+    )
+
+    models_response = client.get(
+        "/api/cluster-models?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+    )
+    assert models_response.status_code == 200
+    models = models_response.json()
+    assert models["complete_count"] == 3
+    assert models["feature_spaces"] == ["x_accel"]
+    assert models["ks"] == [5]
+
+    registered_cluster_response = client.get(
+        "/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel&k=5"
+    )
+    assert registered_cluster_response.status_code == 200
+    registered_cluster = registered_cluster_response.json()
+    assert registered_cluster["registered"] is True
+    assert registered_cluster["feature_space"] == "x_accel"
+    assert registered_cluster["metrics"]["feature_count"] == 4
+
+    registered_window_response = client.get(
+        "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5"
+    )
+    assert registered_window_response.status_code == 200
+    registered_window = registered_window_response.json()
+    assert registered_window["registered"] is True
+    assert registered_window["metrics"]["pair_count"] == 2
+    assert len(registered_window["quality_rows"]) == 3
+
+    registered_drift_response = client.get(
+        "/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&feature_space=x_accel&k=5"
+    )
+    assert registered_drift_response.status_code == 200
+    registered_drift = registered_drift_response.json()
+    assert registered_drift["registered"] is True
+    assert registered_drift["aligned_metrics"]["matched_sensor_count"] == 9
 
 
 def test_snapshot_review_endpoint_composes_sensor_scope(tmp_path: Path) -> None:

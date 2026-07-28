@@ -56,6 +56,14 @@ class StoragePaths:
         return self.processed_dir / "cluster_windows"
 
     @property
+    def cluster_models_dir(self) -> Path:
+        return self.processed_dir / "cluster_models"
+
+    @property
+    def cluster_model_drift_dir(self) -> Path:
+        return self.processed_dir / "cluster_model_drift"
+
+    @property
     def observations_db_path(self) -> Path:
         return self.processed_dir / "observations.sqlite"
 
@@ -70,6 +78,8 @@ class StoragePaths:
             self.clusters_dir,
             self.drift_dir,
             self.cluster_windows_dir,
+            self.cluster_models_dir,
+            self.cluster_model_drift_dir,
         ]
         for path in dirs:
             path.mkdir(parents=True, exist_ok=True)

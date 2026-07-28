@@ -4,6 +4,11 @@ from datetime import date, timedelta
 from typing import Any
 
 from insy_sensor_data.artifacts import read_json
+from insy_sensor_data.clustering.registry import (
+    DEFAULT_FEATURE_SPACES,
+    DEFAULT_REGISTRY_KS,
+    build_cluster_model_grid,
+)
 from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import (
@@ -154,6 +159,9 @@ def run_mock_range_workflow(
     keep_native: bool = False,
     dimensions: list[str] | None = None,
     k: int = 4,
+    cluster_models: bool = False,
+    feature_spaces: list[str] | None = None,
+    ks: list[int] | None = None,
     skip_fetch: bool = False,
     skip_cluster: bool = False,
     force: bool = False,
@@ -171,6 +179,9 @@ def run_mock_range_workflow(
         keep_native=keep_native,
         dimensions=dimensions or ["x"],
         k=k,
+        cluster_models=cluster_models,
+        feature_spaces=feature_spaces,
+        ks=ks,
         skip_fetch=skip_fetch,
         skip_cluster=skip_cluster,
         force=force,
@@ -253,6 +264,9 @@ def run_api_range_workflow(
     keep_native: bool = False,
     dimensions: list[str] | None = None,
     k: int = 4,
+    cluster_models: bool = False,
+    feature_spaces: list[str] | None = None,
+    ks: list[int] | None = None,
     skip_fetch: bool = False,
     skip_cluster: bool = False,
     force: bool = False,
@@ -270,6 +284,9 @@ def run_api_range_workflow(
         keep_native=keep_native,
         dimensions=dimensions or ["x"],
         k=k,
+        cluster_models=cluster_models,
+        feature_spaces=feature_spaces,
+        ks=ks,
         skip_fetch=skip_fetch,
         skip_cluster=skip_cluster,
         force=force,
@@ -289,6 +306,9 @@ def _run_range_workflow(
     keep_native: bool,
     dimensions: list[str],
     k: int,
+    cluster_models: bool,
+    feature_spaces: list[str] | None,
+    ks: list[int] | None,
     skip_fetch: bool,
     skip_cluster: bool,
     force: bool,
@@ -329,19 +349,54 @@ def _run_range_workflow(
     )
 
     cluster_windows: list[dict[str, Any]] = []
+    cluster_model_grid: dict[str, Any] | None = None
     if not skip_cluster:
-        for dimension in dimensions:
-            cluster_windows.append(
-                build_cluster_window(
-                    settings=settings,
-                    start_date=start_date,
-                    end_date=end_date,
-                    source=source,
-                    dimension=dimension,
-                    k=k,
-                    force=force,
-                )
+        if cluster_models:
+            cluster_model_grid = build_cluster_model_grid(
+                settings=settings,
+                start_date=start_date,
+                end_date=end_date,
+                source=source,
+                feature_spaces=feature_spaces or list(DEFAULT_FEATURE_SPACES),
+                ks=ks or list(DEFAULT_REGISTRY_KS),
+                force=force,
             )
+        else:
+            for dimension in dimensions:
+                cluster_windows.append(
+                    build_cluster_window(
+                        settings=settings,
+                        start_date=start_date,
+                        end_date=end_date,
+                        source=source,
+                        dimension=dimension,
+                        k=k,
+                        force=force,
+                    )
+                )
+
+    selected_feature_spaces = feature_spaces or list(DEFAULT_FEATURE_SPACES)
+    selected_ks = ks or list(DEFAULT_REGISTRY_KS)
+    if cluster_models:
+        next_steps = [
+            "Inspect registered cluster models and drift before using them operationally.",
+            (
+                "uv run sensor-data cluster registry build-grid "
+                f"--source {source} --start-date {start_date.isoformat()} "
+                f"--end-date {end_date.isoformat()} --feature-spaces "
+                f"{','.join(selected_feature_spaces)} "
+                f"--ks {','.join(str(value) for value in selected_ks)}"
+            ),
+        ]
+    else:
+        next_steps = [
+            "Inspect cluster window quality summaries before using drift operationally.",
+            (
+                "uv run sensor-data cluster window "
+                f"--source {source} --start-date {start_date.isoformat()} "
+                f"--end-date {end_date.isoformat()} --dimension {dimensions[0]} --k {k}"
+            ),
+        ]
 
     summary = {
         "workflow": f"{source}-range",
@@ -355,6 +410,9 @@ def _run_range_workflow(
         "keep_native": keep_native,
         "dimensions": dimensions,
         "k": k,
+        "cluster_models": cluster_models,
+        "feature_spaces": selected_feature_spaces,
+        "ks": selected_ks,
         "skip_fetch": skip_fetch,
         "skip_cluster": skip_cluster,
         "force": force,
@@ -362,14 +420,8 @@ def _run_range_workflow(
         "days": days,
         "trend": trend_summary,
         "cluster_windows": cluster_windows,
-        "next_steps": [
-            "Inspect cluster window quality summaries before using drift operationally.",
-            (
-                "uv run sensor-data cluster window "
-                f"--source {source} --start-date {start_date.isoformat()} "
-                f"--end-date {end_date.isoformat()} --dimension {dimensions[0]} --k {k}"
-            ),
-        ],
+        "cluster_model_grid": cluster_model_grid,
+        "next_steps": next_steps,
     }
     summary["steps"] = _range_steps(summary)
     return summary
@@ -541,6 +593,7 @@ def _range_steps(summary: dict[str, Any]) -> list[dict[str, Any]]:
     days = summary.get("days", [])
     trend = summary.get("trend", {})
     cluster_windows = summary.get("cluster_windows", [])
+    cluster_model_grid = summary.get("cluster_model_grid") or {}
     status_counts: dict[str, int] = {}
     for day in days:
         status = str(day.get("status", "unknown"))
@@ -566,6 +619,19 @@ def _range_steps(summary: dict[str, Any]) -> list[dict[str, Any]]:
     ]
     if summary.get("skip_cluster"):
         steps.append({"title": "Skipped clustering", "details": ["Reason: --skip-cluster"]})
+    elif summary.get("cluster_models"):
+        steps.append(
+            {
+                "title": "Built cluster model registry",
+                "details": [
+                    f"Feature spaces: {', '.join(summary.get('feature_spaces', []))}",
+                    f"k values: {', '.join(str(value) for value in summary.get('ks', []))}",
+                    f"Models built/reused/failed: {cluster_model_grid.get('models_built', 0)}/{cluster_model_grid.get('models_reused', 0)}/{cluster_model_grid.get('models_failed', 0)}",
+                    f"Drift built/reused/skipped: {cluster_model_grid.get('drift_built', 0)}/{cluster_model_grid.get('drift_reused', 0)}/{cluster_model_grid.get('drift_skipped', 0)}",
+                    f"SQLite registry: {cluster_model_grid.get('database_path')}",
+                ],
+            }
+        )
     else:
         steps.append(
             {

@@ -620,6 +620,64 @@ def test_cli_workflow_mock_range_writes_cluster_window_and_resumes(tmp_path: Pat
     assert (window_dir / "aligned_drift_summary.csv").exists()
 
 
+def test_cli_cluster_registry_build_grid_writes_sqlite_models(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    workflow_result = runner.invoke(
+        app,
+        [
+            "workflow",
+            "mock-range",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-10",
+            "--skip-cluster",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert workflow_result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "cluster",
+            "registry",
+            "build-grid",
+            "--source",
+            "mock",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-10",
+            "--feature-spaces",
+            "x_accel",
+            "--ks",
+            "5",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["model_count"] == 2
+    assert payload["models_built"] == 2
+    assert payload["drift_built"] == 1
+    assert payload["feature_spaces"] == ["x_accel"]
+    assert payload["ks"] == [5]
+    assert _sqlite_count(data_dir, "cluster_model_runs") == 2
+    assert _sqlite_count(data_dir, "cluster_drift_runs") == 1
+    model_dir = data_dir / "processed" / "cluster_models" / "date=2025-07-09_source=mock_feature_space=x_accel_k=5"
+    assert (model_dir / "sensor_clusters.csv").exists()
+    assert (model_dir / "metrics.json").exists()
+
+
 def test_cli_workflow_api_day_requires_token(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"

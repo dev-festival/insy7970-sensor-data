@@ -8,6 +8,12 @@ import sqlite3
 
 from insy_sensor_data.artifacts import read_csv_rows, read_json
 from insy_sensor_data.clustering.features import DIMENSIONS
+from insy_sensor_data.clustering.registry import (
+    list_registered_cluster_models,
+    load_registered_cluster_view,
+    load_registered_cluster_window_view,
+    load_registered_drift_view,
+)
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.snapshots.build import list_snapshot_dates, load_snapshot
 from insy_sensor_data.snapshots.trends import list_trend_ranges, load_trends
@@ -59,10 +65,11 @@ def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
     clusters = _cluster_artifacts(storage.clusters_dir)
     drift = _drift_artifacts(storage.drift_dir)
     cluster_windows = _cluster_window_artifacts(storage.cluster_windows_dir)
+    cluster_models = list_registered_cluster_models(settings)["models"]
     sources = sorted(
         {
             str(row["source"])
-            for group in [snapshots, trends, clusters, drift, cluster_windows]
+            for group in [snapshots, trends, clusters, drift, cluster_windows, cluster_models]
             for row in group
             if row.get("source")
         }
@@ -75,10 +82,17 @@ def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
             if row.get("dimension")
         }
     )
+    feature_spaces = sorted(
+        {
+            str(row["feature_space"])
+            for row in cluster_models
+            if row.get("feature_space") and row.get("status") == "complete"
+        }
+    )
     ks = sorted(
         {
             int(row["k"])
-            for group in [clusters, drift, cluster_windows]
+            for group in [clusters, drift, cluster_windows, cluster_models]
             for row in group
             if row.get("k") is not None
         }
@@ -86,16 +100,19 @@ def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
     return {
         "sources": sources,
         "dimensions": dimensions,
+        "feature_spaces": feature_spaces,
         "ks": ks,
         "snapshots": snapshots,
         "trends": trends,
         "clusters": clusters,
+        "cluster_models": cluster_models,
         "drift": drift,
         "cluster_windows": cluster_windows,
         "counts": {
             "snapshots": len(snapshots),
             "trends": len(trends),
             "clusters": len(clusters),
+            "cluster_models": len(cluster_models),
             "drift": len(drift),
             "cluster_windows": len(cluster_windows),
         },
@@ -373,8 +390,17 @@ def load_cluster_view(
     source: str,
     dimension: str,
     k: int,
+    feature_space: str | None = None,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
+    if feature_space:
+        return load_registered_cluster_view(
+            settings=settings,
+            run_date=run_date,
+            source=source_mode,
+            feature_space=feature_space,
+            k=_validate_k(k),
+        )
     cluster_dimension = _validate_dimension(dimension)
     cluster_k = _validate_k(k)
     storage = get_storage_paths(settings.data_dir)
@@ -406,8 +432,18 @@ def load_drift_view(
     source: str,
     dimension: str,
     k: int,
+    feature_space: str | None = None,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
+    if feature_space:
+        return load_registered_drift_view(
+            settings=settings,
+            from_date=from_date,
+            to_date=to_date,
+            source=source_mode,
+            feature_space=feature_space,
+            k=_validate_k(k),
+        )
     cluster_dimension = _validate_dimension(dimension)
     cluster_k = _validate_k(k)
     if to_date < from_date:
@@ -440,8 +476,18 @@ def load_cluster_window_view(
     source: str,
     dimension: str,
     k: int,
+    feature_space: str | None = None,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
+    if feature_space:
+        return load_registered_cluster_window_view(
+            settings=settings,
+            start_date=start_date,
+            end_date=end_date,
+            source=source_mode,
+            feature_space=feature_space,
+            k=_validate_k(k),
+        )
     cluster_dimension = _validate_dimension(dimension)
     cluster_k = _validate_k(k)
     if end_date < start_date:
@@ -536,6 +582,7 @@ def load_snapshot_review_view(
             run_date=run_date,
             source=resolved_source,
             dimension=cluster_dimension,
+            feature_space=feature_space,
             k=k,
             scope_context=scope_context,
         ),
@@ -889,6 +936,7 @@ def _snapshot_review_cluster_context(
     run_date: date,
     source: str,
     dimension: str,
+    feature_space: str | None,
     k: int,
     scope_context: dict[str, Any],
 ) -> dict[str, Any]:
@@ -898,6 +946,7 @@ def _snapshot_review_cluster_context(
             run_date=run_date,
             source=source,
             dimension=dimension,
+            feature_space=feature_space,
             k=k,
         )
     except FileNotFoundError as exc:
@@ -905,6 +954,7 @@ def _snapshot_review_cluster_context(
             "status": "missing",
             "message": str(exc),
             "dimension": dimension,
+            "feature_space": feature_space,
             "k": k,
             "points": [],
             "rows": [],
@@ -915,6 +965,7 @@ def _snapshot_review_cluster_context(
     return {
         "status": "available",
         "dimension": payload["dimension"],
+        "feature_space": payload.get("feature_space"),
         "k": payload["k"],
         "row_count": len(rows),
         "all_row_count": payload["row_count"],
@@ -1160,6 +1211,20 @@ def _cluster_dimension_from_feature_space(feature_space: str | None, dimension: 
     if feature == "temperature":
         return "temperature"
     return _validate_dimension(dimension)
+
+
+def list_cluster_model_view(
+    settings: AppSettings,
+    source: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict[str, Any]:
+    return list_registered_cluster_models(
+        settings=settings,
+        source=source,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 def _filter_rows(

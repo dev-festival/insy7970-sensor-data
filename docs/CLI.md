@@ -318,8 +318,9 @@ Missing SQLite daily snapshots in the range are reported as skipped dates. This 
 uv run sensor-data workflow mock-day --date 2025-07-09
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
+uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --cluster-models
 uv run sensor-data workflow api-day --date 2026-07-19 --facility 679
-uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --dimension x --k 4
+uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --cluster-models
 ```
 
 Workflow commands run the normal multi-step paths and print a compact, human-readable summary. They are the comfortable operator surface. The lower-level commands above remain the composable JSON surface.
@@ -340,17 +341,22 @@ uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-0
 
 `api-day` is the friendly live canary wrapper. It fetches live Waites data, validates the raw shape, verifies checksums, loads SQLite observations, builds an API-source snapshot, stores the daily rows in SQLite, and applies the retention policy. It requires `WAITES_ACCESS_TOKEN`.
 
-`mock-range` and `api-range` are operating-window workflows. They process each date independently, reuse valid daily snapshots by default, build trend outputs, and optionally build cluster-window interpretation artifacts:
+`mock-range` and `api-range` are operating-window workflows. They process each date independently, reuse valid daily snapshots by default, build trend outputs, and can either build legacy cluster-window interpretation artifacts or the registered SQLite model grid:
 
 ```powershell
 uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
 uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --dimension x --k 4
+uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --cluster-models
+uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --cluster-models
 ```
 
 Useful range options:
 
 ```powershell
 --dimensions x,y,z,temperature
+--cluster-models
+--feature-spaces x_accel,y_vel,z_vel,temperature
+--ks 5
 --skip-fetch
 --skip-cluster
 --resume
@@ -359,7 +365,7 @@ Useful range options:
 --json
 ```
 
-`--resume` is the default. Existing valid snapshot, feature, cluster, and drift artifacts are reused. Use `--force` when you deliberately want to rebuild.
+`--resume` is the default. Existing valid snapshot, feature, cluster, drift, and registered model rows are reused. Use `--force` when you deliberately want to rebuild.
 
 Raw retention modes are available on day and trend workflows:
 
@@ -552,6 +558,69 @@ data/processed/cluster_windows/start=YYYY-MM-DD_end=YYYY-MM-DD_source=SOURCE_dim
 ```
 
 `quality_summary.csv` includes row counts, feature counts, inertia, silhouette, Calinski-Harabasz, warnings, and interpretation text. Small mock runs such as 9 rows with `k=4` are marked as contract tests, not cluster-quality evidence.
+
+### Build Registered Cluster Model Grid
+
+```powershell
+uv run sensor-data cluster registry build-grid --source mock --start-date 2025-07-09 --end-date 2025-07-11 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
+uv run sensor-data cluster registry build-grid --source api --start-date 2026-07-24 --end-date 2026-07-26 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
+```
+
+Build snapshots for the date range first. The registry command consumes the processed daily snapshot artifacts, builds one deterministic KMeans model for each date, feature space, and `k`, computes adjacent-date centroid-aligned drift when both dates are complete, and writes the app-facing rows into:
+
+```text
+data/processed/observations.sqlite
+  cluster_model_runs
+  cluster_model_assignments
+  cluster_model_centroids
+  cluster_drift_runs
+  cluster_drift_assignments
+  cluster_centroid_alignment
+```
+
+It also preserves inspectable CSV/JSON evidence:
+
+```text
+data/processed/cluster_models/date=YYYY-MM-DD_source=SOURCE_feature_space=FEATURE_SPACE_k=K/
+  sensor_clusters.csv
+  cluster_summary.csv
+  pca_coordinates.csv
+  metrics.json
+
+data/processed/cluster_model_drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_feature_space=FEATURE_SPACE_k=K/
+  aligned_cluster_drift.csv
+  centroid_alignment.csv
+  aligned_metrics.json
+```
+
+Default model grid:
+
+```text
+feature_spaces = x_accel,y_vel,z_vel,temperature
+ks = 5
+random_seed = 42
+```
+
+Feature-space meanings:
+
+```text
+x_accel      X-axis RMS acceleration daily stats
+y_vel        Y-axis RMS velocity daily stats
+z_vel        Z-axis RMS velocity daily stats
+temperature  sensor temperature daily stats
+```
+
+Useful options:
+
+```powershell
+--feature-spaces x_accel,temperature
+--ks 5,7
+--resume
+--force
+--json
+```
+
+Use `--json` when a script wants counts for `models_built`, `models_reused`, `models_failed`, `drift_built`, `drift_reused`, `drift_skipped`, and `drift_failed`.
 
 ## Raw Retention Guidance
 

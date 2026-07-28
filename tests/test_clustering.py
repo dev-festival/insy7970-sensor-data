@@ -10,6 +10,13 @@ from typer.testing import CliRunner
 from insy_sensor_data.artifacts import write_csv_rows, write_json
 from insy_sensor_data.cli import app
 from insy_sensor_data.clustering.model import build_cluster_run, compare_cluster_drift
+from insy_sensor_data.clustering.registry import (
+    build_cluster_model_grid,
+    list_registered_cluster_models,
+    load_registered_cluster_view,
+    load_registered_cluster_window_view,
+    load_registered_drift_view,
+)
 from insy_sensor_data.clustering.window import align_cluster_drift, build_cluster_window
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
@@ -169,6 +176,89 @@ def test_build_cluster_window_writes_quality_and_aligned_drift_outputs(tmp_path:
     quality_rows = _csv_rows(Path(summary["quality_summary_path"]))
     assert quality_rows[0]["quality_level"] == "contract_test_only"
     assert "contract" in quality_rows[0]["interpretation"].lower()
+
+
+def test_build_cluster_model_grid_persists_registered_models_and_drift(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    start_date = date(2025, 7, 9)
+    end_date = date(2025, 7, 10)
+    for run_date in [start_date, end_date]:
+        _prepare_snapshot(settings, run_date)
+
+    summary = build_cluster_model_grid(
+        settings=settings,
+        start_date=start_date,
+        end_date=end_date,
+        source="mock",
+        feature_spaces=["x_accel", "temperature"],
+        ks=[5],
+    )
+
+    assert summary["model_count"] == 4
+    assert summary["models_built"] == 4
+    assert summary["drift_built"] == 2
+    assert summary["drift_skipped"] == 0
+    assert Path(summary["database_path"]).exists()
+
+    discovery = list_registered_cluster_models(settings, source="mock")
+    assert discovery["complete_count"] == 4
+    assert set(discovery["feature_spaces"]) == {"x_accel", "temperature"}
+    assert discovery["ks"] == [5]
+
+    cluster = load_registered_cluster_view(
+        settings=settings,
+        run_date=start_date,
+        source="mock",
+        feature_space="x_accel",
+        k=5,
+    )
+    assert cluster["registered"] is True
+    assert cluster["row_count"] == 9
+    assert cluster["cluster_row_count"] == 5
+    assert cluster["metrics"]["feature_count"] == 4
+    assert cluster["metrics"]["features"] == [
+        "rms_accel_mean_x",
+        "rms_accel_std_x",
+        "rms_accel_max_x",
+        "rms_accel_min_x",
+    ]
+    assert len(cluster["pca_rows"]) == 9
+
+    drift = load_registered_drift_view(
+        settings=settings,
+        from_date=start_date,
+        to_date=end_date,
+        source="mock",
+        feature_space="x_accel",
+        k=5,
+    )
+    assert drift["registered"] is True
+    assert drift["metrics"]["matched_sensor_count"] == 9
+    assert len(drift["aligned_rows"]) == 9
+
+    window = load_registered_cluster_window_view(
+        settings=settings,
+        start_date=start_date,
+        end_date=end_date,
+        source="mock",
+        feature_space="x_accel",
+        k=5,
+    )
+    assert window["registered"] is True
+    assert window["metrics"]["pair_count"] == 1
+    assert len(window["quality_rows"]) == 2
+    assert len(window["aligned_drift_rows"]) == 1
+
+    resumed = build_cluster_model_grid(
+        settings=settings,
+        start_date=start_date,
+        end_date=end_date,
+        source="mock",
+        feature_spaces=["x_accel", "temperature"],
+        ks=[5],
+    )
+    assert resumed["models_reused"] == 4
+    assert resumed["drift_reused"] == 2
 
 
 def test_cli_cluster_run_and_drift_write_json_summaries(tmp_path: Path) -> None:

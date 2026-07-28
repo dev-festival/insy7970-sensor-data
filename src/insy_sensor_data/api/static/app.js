@@ -1,7 +1,14 @@
 const DEFAULT_DIMENSIONS = ["x", "y", "z", "temperature"];
+const DEFAULT_FEATURE_SPACES = ["x_accel", "y_vel", "z_vel", "temperature"];
 const DEFAULT_METRIC = "rms_vel";
-const DEFAULT_K = "4";
+const DEFAULT_K = "5";
 const VALID_SCOPE_TYPES = new Set(["all", "asset_tree", "equipment", "sensor"]);
+const FEATURE_SPACE_LABELS = {
+  x_accel: "X Acceleration",
+  y_vel: "Y Velocity",
+  z_vel: "Z Velocity",
+  temperature: "Temperature",
+};
 
 const METRICS = {
   rms_vel: { label: "RMS Velocity", prefix: "rms_vel", axis: true, unit: "in/s" },
@@ -27,6 +34,7 @@ const state = {
   installationPointId: "",
   sensorId: "",
   dimension: "x",
+  featureSpace: "x_accel",
   metric: DEFAULT_METRIC,
   k: DEFAULT_K,
   equipmentSearch: "",
@@ -138,7 +146,11 @@ function bindEvents() {
     renderActiveView();
   });
   elements.dimensionSelect.addEventListener("change", () => {
-    updateState({ dimension: elements.dimensionSelect.value });
+    if (clusterModelView()) {
+      updateState({ featureSpace: elements.dimensionSelect.value });
+    } else {
+      updateState({ dimension: elements.dimensionSelect.value });
+    }
     renderActiveView();
   });
   elements.kSelect.addEventListener("change", () => {
@@ -231,6 +243,10 @@ function normalizeState() {
   if (!dimensions.includes(state.dimension)) {
     state.dimension = dimensions[0] || "x";
   }
+  const featureSpaces = availableFeatureSpaces();
+  if (!featureSpaces.includes(state.featureSpace)) {
+    state.featureSpace = featureSpaces[0] || "x_accel";
+  }
   const ks = availableKs().map(String);
   if (!ks.includes(String(state.k))) {
     state.k = ks.includes(DEFAULT_K) ? DEFAULT_K : ks[0] || DEFAULT_K;
@@ -280,7 +296,17 @@ function updateControlsFromState() {
     (row) => row.label,
     state.metric,
   );
-  setOptions(elements.dimensionSelect, availableDimensions(), (value) => value, state.dimension);
+  const modelView = clusterModelView();
+  const dimensionLabel = elements.dimensionControl.querySelector("span");
+  if (dimensionLabel) {
+    dimensionLabel.textContent = modelView ? "Feature Space" : "Dimension";
+  }
+  setOptions(
+    elements.dimensionSelect,
+    modelView ? availableFeatureSpaces() : availableDimensions(),
+    (value) => modelView ? featureSpaceLabel(value) : value,
+    modelView ? state.featureSpace : state.dimension,
+  );
   setOptions(elements.kSelect, availableKs(), (value) => String(value), state.k);
   elements.equipmentSearch.value = state.equipmentSearch;
   updateTabState();
@@ -528,8 +554,9 @@ function renderSnapshotTrendPanel(trend) {
 }
 
 function renderSnapshotClusterPanel(clusterContext) {
+  const modelLabel = clusterContext.feature_space ? `${featureSpaceLabel(clusterContext.feature_space)} | ` : "";
   elements.snapshotClusterStatus.textContent = clusterContext.status === "available"
-    ? `${clusterContext.row_count || 0} scoped points | k=${clusterContext.k}`
+    ? `${clusterContext.row_count || 0} scoped points | ${modelLabel}k=${clusterContext.k}`
     : clusterContext.message || "No cluster artifact for this date";
   const selectedIds = new Set(clusterContext.selected_ids || []);
   const grouped = groupBy(clusterContext.points || [], "cluster");
@@ -611,10 +638,12 @@ async function renderCluster() {
   const metrics = payload.metrics || {};
   const metricValues = metrics.metrics || {};
   const clusterRows = scopeClusterRows(payload.rows || []);
-  setStatus(`Cluster ${payload.source} ${payload.date} ${payload.dimension} k=${payload.k}`);
+  const modelLabel = payload.feature_space ? featureSpaceLabel(payload.feature_space) : payload.dimension;
+  setStatus(`Cluster ${payload.source} ${payload.date} ${modelLabel} k=${payload.k}`);
   renderSummary([
     { label: "Sensors", value: clusterRows.length },
     { label: "All Sensors", value: payload.row_count },
+    { label: payload.feature_space ? "Feature Space" : "Dimension", value: modelLabel },
     { label: "Inertia", value: formatNumber(metrics.kmeans?.inertia) },
     { label: "Scope", value: scopeLabel() },
   ]);
@@ -642,7 +671,9 @@ async function renderCluster() {
     ...featureColumns,
   ]);
   if (metricValues.silhouette_score?.value !== undefined) {
-    setStatus(`Cluster ${payload.source} ${payload.date} | silhouette ${formatNumber(metricValues.silhouette_score.value)}`);
+    setStatus(
+      `Cluster ${payload.source} ${payload.date} ${modelLabel} | silhouette ${formatNumber(metricValues.silhouette_score.value)}`,
+    );
   }
 }
 
@@ -663,10 +694,12 @@ async function renderDrift() {
 
 function renderClusterWindow(payload) {
   const metrics = payload.metrics || {};
-  setStatus(`Cluster window ${payload.source} ${payload.start_date} to ${payload.end_date}`);
+  const modelLabel = payload.feature_space ? featureSpaceLabel(payload.feature_space) : payload.dimension;
+  setStatus(`Cluster window ${payload.source} ${payload.start_date} to ${payload.end_date} ${modelLabel}`);
   renderSummary([
     { label: "Dates", value: metrics.date_count },
     { label: "Pairs", value: metrics.pair_count },
+    { label: payload.feature_space ? "Feature Space" : "Dimension", value: modelLabel },
     { label: "Warnings", value: metrics.warning_count },
     { label: "Scope", value: scopeLabel() },
   ]);
@@ -696,13 +729,15 @@ function renderClusterWindow(payload) {
 
 function renderDriftPair(payload) {
   const aligned = payload.aligned_metrics || {};
-  setStatus(`Drift ${payload.source} ${payload.from_date} to ${payload.to_date}`);
+  const modelLabel = payload.feature_space ? featureSpaceLabel(payload.feature_space) : payload.dimension;
+  setStatus(`Drift ${payload.source} ${payload.from_date} to ${payload.to_date} ${modelLabel || ""}`.trim());
   const rawRows = payload.aligned_rows?.length ? payload.aligned_rows : payload.raw_rows || [];
   const rows = filterRowsForScope(rawRows);
   renderSummary([
     { label: "Matched", value: rows.length },
     { label: "All Matched", value: aligned.matched_sensor_count || payload.metrics.matched_sensor_count },
-    { label: "Raw Changes", value: payload.metrics.changed_sensor_count },
+    { label: payload.feature_space ? "Feature Space" : "Dimension", value: modelLabel },
+    { label: "Raw Changes", value: payload.metrics.changed_sensor_count ?? payload.metrics.raw_label_changed_count },
     { label: "Scope", value: scopeLabel() },
   ]);
   const clusterField = payload.aligned_rows?.length ? "aligned_changed" : "changed";
@@ -750,10 +785,10 @@ function renderMissingState(error) {
 
 function commandHint() {
   if (state.view === "cluster") {
-    return `uv run sensor-data cluster run --source ${state.source} --date ${state.date} --dimension ${state.dimension} --k ${state.k}`;
+    return `uv run sensor-data cluster registry build-grid --source ${state.source} --start-date ${state.date} --end-date ${state.date} --feature-spaces ${state.featureSpace} --ks ${state.k}`;
   }
   if (state.view === "drift") {
-    return `uv run sensor-data cluster window --source ${state.source} --start-date ${state.startDate} --end-date ${state.endDate} --dimension ${state.dimension} --k ${state.k}`;
+    return `uv run sensor-data cluster registry build-grid --source ${state.source} --start-date ${state.startDate} --end-date ${state.endDate} --feature-spaces ${state.featureSpace} --ks ${state.k}`;
   }
   if (state.view === "trend") {
     return `uv run sensor-data trend build --source ${state.source} --start-date ${state.startDate} --end-date ${state.endDate} --input sqlite`;
@@ -781,6 +816,7 @@ function snapshotReviewParams() {
   }
   params.set("metric", state.metric);
   params.set("dimension", state.dimension);
+  params.set("feature_space", state.featureSpace);
   params.set("k", state.k);
   return params;
 }
@@ -805,7 +841,8 @@ function clusterParams() {
   const params = new URLSearchParams();
   params.set("source", state.source);
   params.set("date", state.date);
-  params.set("dimension", state.dimension);
+  params.set("dimension", featureSpaceDimension(state.featureSpace));
+  params.set("feature_space", state.featureSpace);
   params.set("k", state.k);
   return params;
 }
@@ -815,7 +852,8 @@ function clusterWindowParams() {
   params.set("source", state.source);
   params.set("start_date", state.startDate);
   params.set("end_date", state.endDate);
-  params.set("dimension", state.dimension);
+  params.set("dimension", featureSpaceDimension(state.featureSpace));
+  params.set("feature_space", state.featureSpace);
   params.set("k", state.k);
   return params;
 }
@@ -825,7 +863,8 @@ function driftParamsFromState() {
   params.set("source", state.source);
   params.set("from_date", state.startDate);
   params.set("to_date", state.endDate);
-  params.set("dimension", state.dimension);
+  params.set("dimension", featureSpaceDimension(state.featureSpace));
+  params.set("feature_space", state.featureSpace);
   params.set("k", state.k);
   return params;
 }
@@ -869,6 +908,7 @@ function readStateFromUrl() {
   const scope = params.get("scope");
   const legacyInstallationId = params.get("installation_point_id") || "";
   const legacyEquipmentId = params.get("equipment_id") || "";
+  const rawDimension = params.get("dimension") || "";
   const scopeType = VALID_SCOPE_TYPES.has(scope) ? scope : legacyInstallationId ? "sensor" : legacyEquipmentId ? "equipment" : "all";
   Object.assign(state, {
     source: params.get("source") || state.source,
@@ -881,7 +921,8 @@ function readStateFromUrl() {
     equipmentId: params.get("equipment_id") || legacyEquipmentId,
     installationPointId: params.get("installation_point_id") || legacyInstallationId,
     sensorId: params.get("sensor_id") || "",
-    dimension: params.get("dimension") || state.dimension,
+    dimension: isFeatureSpace(rawDimension) ? state.dimension : rawDimension || state.dimension,
+    featureSpace: params.get("feature_space") || (isFeatureSpace(rawDimension) ? rawDimension : state.featureSpace),
     metric: params.get("metric") || state.metric,
     k: params.get("k") || state.k,
   });
@@ -908,6 +949,7 @@ function updateUrlFromState(replace = false) {
     params.set("sensor_id", state.sensorId);
   }
   params.set("dimension", state.dimension);
+  params.set("feature_space", state.featureSpace);
   params.set("metric", state.metric);
   params.set("k", state.k);
   const nextUrl = `${window.location.pathname}?${params}`;
@@ -940,6 +982,9 @@ function availableDates() {
     ...(state.artifacts?.clusters || [])
       .filter((row) => !source || row.source === source)
       .map((row) => row.date),
+    ...(state.artifacts?.cluster_models || [])
+      .filter((row) => !source || row.source === source)
+      .map((row) => row.date || row.source_date),
   ]);
 }
 
@@ -953,6 +998,38 @@ function datesInRange() {
 
 function availableDimensions() {
   return (state.artifacts?.dimensions?.length ? state.artifacts.dimensions : DEFAULT_DIMENSIONS).slice().sort();
+}
+
+function availableFeatureSpaces() {
+  return (state.artifacts?.feature_spaces?.length ? state.artifacts.feature_spaces : DEFAULT_FEATURE_SPACES).slice().sort();
+}
+
+function clusterModelView() {
+  return ["cluster", "drift"].includes(state.view);
+}
+
+function isFeatureSpace(value) {
+  return Boolean(value && Object.prototype.hasOwnProperty.call(FEATURE_SPACE_LABELS, value));
+}
+
+function featureSpaceLabel(value) {
+  return FEATURE_SPACE_LABELS[value] || value || "n/a";
+}
+
+function featureSpaceDimension(value) {
+  if (value === "temperature") {
+    return "temperature";
+  }
+  if (String(value || "").startsWith("x_")) {
+    return "x";
+  }
+  if (String(value || "").startsWith("y_")) {
+    return "y";
+  }
+  if (String(value || "").startsWith("z_")) {
+    return "z";
+  }
+  return state.dimension || "x";
 }
 
 function availableKs() {

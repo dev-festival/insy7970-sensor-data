@@ -12,6 +12,7 @@ from insy_sensor_data.artifact_views import (
     load_cluster_view,
     load_cluster_window_view,
     load_drift_view,
+    list_cluster_model_view,
     load_snapshot_review_view,
 )
 
@@ -108,6 +109,7 @@ def read_clusters(
     cluster_date: str = Query(..., alias="date"),
     source: str | None = None,
     dimension: str = "x",
+    feature_space: str | None = None,
     k: int = 4,
 ) -> dict[str, Any]:
     try:
@@ -116,6 +118,7 @@ def read_clusters(
             run_date=date.fromisoformat(cluster_date),
             source=source or request.app.state.settings.source_mode,
             dimension=dimension,
+            feature_space=feature_space,
             k=k,
         )
     except ValueError as exc:
@@ -131,6 +134,7 @@ def read_drift(
     to_date: str,
     source: str | None = None,
     dimension: str = "x",
+    feature_space: str | None = None,
     k: int = 4,
 ) -> dict[str, Any]:
     try:
@@ -140,6 +144,7 @@ def read_drift(
             to_date=date.fromisoformat(to_date),
             source=source or request.app.state.settings.source_mode,
             dimension=dimension,
+            feature_space=feature_space,
             k=k,
         )
     except ValueError as exc:
@@ -155,6 +160,7 @@ def read_cluster_windows(
     end_date: str,
     source: str | None = None,
     dimension: str = "x",
+    feature_space: str | None = None,
     k: int = 4,
 ) -> dict[str, Any]:
     try:
@@ -164,9 +170,28 @@ def read_cluster_windows(
             end_date=date.fromisoformat(end_date),
             source=source or request.app.state.settings.source_mode,
             dimension=dimension,
+            feature_space=feature_space,
             k=k,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/cluster-models")
+def read_cluster_models(
+    request: Request,
+    source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    try:
+        return list_cluster_model_view(
+            settings=request.app.state.settings,
+            source=source or request.app.state.settings.source_mode,
+            start_date=date.fromisoformat(start_date) if start_date else None,
+            end_date=date.fromisoformat(end_date) if end_date else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

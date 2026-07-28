@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.4.2` replaces the first-pass Plotly charts with a dependency-light SVG chart renderer across the review workspace:
+Sprint `0.4.3` adds an offline SQLite cluster model registry over the SVG-backed review workspace:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -47,6 +47,11 @@ Sprint `0.4.2` replaces the first-pass Plotly charts with a dependency-light SVG
 - centroid-aligned drift artifacts that distinguish label movement from likely behavior movement
 - cluster window summaries under `data/processed/cluster_windows/`
 - `cluster align-drift` and `cluster window` commands
+- registered cluster model grids under `data/processed/cluster_models/`
+- registered centroid-aligned drift artifacts under `data/processed/cluster_model_drift/`
+- SQLite cluster model runs, assignments, centroids, drift runs, drift assignments, and centroid alignment tables
+- `cluster registry build-grid` for prebuilding feature-space models and adjacent-date drift
+- `workflow mock-range --cluster-models` and `workflow api-range --cluster-models`
 - `workflow mock-range` and `workflow api-range` for date-window orchestration
 - SQLite daily snapshot store mirrored from `sensor_snapshot.csv`
 - Waites ingestion ledger with endpoint counts, validation status, checksums, and retention status
@@ -101,7 +106,9 @@ uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k
 uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
 uv run sensor-data cluster align-drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
 uv run sensor-data cluster window --source mock --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
+uv run sensor-data cluster registry build-grid --source mock --start-date 2025-07-09 --end-date 2025-07-11 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
 uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
+uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --cluster-models
 ```
 
 The leaf commands print JSON so they can be composed by scripts. The `workflow` commands print human-readable summaries by default and support `--json` when a combined structured result is useful.
@@ -117,7 +124,7 @@ uv run sensor-data snapshot build --source api --date 2026-07-19 --input sqlite
 uv run sensor-data store purge-native --source api --date 2026-07-19 --confirm-delete
 uv run sensor-data trend build --source api --input sqlite --start-date 2026-07-19 --end-date 2026-07-19
 uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-retention release
-uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --dimension x --k 4
+uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --cluster-models
 ```
 
 The live workflow reads `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`, saves raw responses under `data/raw/waites/`, writes validation reports beside the raw run, stores the daily snapshot in CSV and SQLite, records a compact ingestion ledger, and defaults to releasing bulky raw/native/date-scoped staging rows after snapshot success. Use `--raw-retention keep --keep-native` when you need inspection/replay. Keep `.env` and `data/` out of Git.
@@ -134,6 +141,7 @@ uv run sensor-data cluster run --source mock --date 2025-07-10 --dimension x --k
 uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
 uv run sensor-data cluster align-drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
 uv run sensor-data cluster window --source mock --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
+uv run sensor-data cluster registry build-grid --source mock --start-date 2025-07-09 --end-date 2025-07-11 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
 uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 ```
 
@@ -169,11 +177,15 @@ Then open:
 - `http://127.0.0.1:8000/api/snapshots/2025-07-09?source=mock`
 - `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11`
 - `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4`
+- `http://127.0.0.1:8000/api/cluster-models?source=mock&start_date=2025-07-09&end_date=2025-07-11`
+- `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&dimension=x&k=4`
+- `http://127.0.0.1:8000/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4`
+- `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing processed artifacts in sprint `0.4.2`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser. Upcoming specs move cluster/drift reads toward a prebuilt SQLite model registry and move routine trend reads toward on-demand SQLite queries over daily snapshot facts.
+The web and API are read-only over existing processed artifacts and registered SQLite cluster models in sprint `0.4.3`. Build snapshots and trends first, then run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser. Trend views still require trend artifacts until the on-demand SQLite trend sprint.
 
 ## Source API
 
@@ -201,6 +213,8 @@ data/processed/features/date=YYYY-MM-DD_source=SOURCE/
 data/processed/clusters/date=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
 data/processed/drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
 data/processed/cluster_windows/start=YYYY-MM-DD_end=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
+data/processed/cluster_models/date=YYYY-MM-DD_source=SOURCE_feature_space=FEATURE_SPACE_k=K/
+data/processed/cluster_model_drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_feature_space=FEATURE_SPACE_k=K/
 ```
 
 Live Waites canary ingestion writes the same raw paths:

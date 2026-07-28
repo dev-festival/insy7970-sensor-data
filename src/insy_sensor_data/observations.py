@@ -19,7 +19,7 @@ from insy_sensor_data.waites.client import ENDPOINT_FILENAMES
 from insy_sensor_data.waites.validate import ensure_waites_raw_valid
 
 
-OBSERVATION_SCHEMA_VERSION = 4
+OBSERVATION_SCHEMA_VERSION = 5
 VALID_OBSERVATION_SOURCES = {"mock", "api"}
 VALID_RAW_RETENTION_MODES = {"release", "compress", "keep"}
 
@@ -258,6 +258,104 @@ def initialize_observation_store(connection: sqlite3.Connection) -> None:
             PRIMARY KEY (source, source_date, installation_point_id)
         );
 
+        CREATE TABLE IF NOT EXISTS cluster_model_runs (
+            model_run_id TEXT PRIMARY KEY,
+            source TEXT NOT NULL,
+            source_date TEXT NOT NULL,
+            feature_space TEXT NOT NULL,
+            k INTEGER NOT NULL,
+            algorithm TEXT NOT NULL,
+            random_seed INTEGER NOT NULL,
+            feature_policy_version TEXT NOT NULL,
+            feature_columns_json TEXT NOT NULL,
+            scaler_policy TEXT NOT NULL,
+            input_snapshot_hash TEXT,
+            input_snapshot_row_count INTEGER NOT NULL,
+            feature_row_count INTEGER NOT NULL,
+            feature_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            artifact_dir TEXT,
+            metrics_json TEXT,
+            warnings_json TEXT,
+            UNIQUE(source, source_date, feature_space, k, algorithm, random_seed, feature_policy_version)
+        );
+
+        CREATE TABLE IF NOT EXISTS cluster_model_assignments (
+            model_run_id TEXT NOT NULL,
+            installation_point_id TEXT NOT NULL,
+            sensor_id TEXT,
+            equipment_id TEXT,
+            equipment_name TEXT,
+            customer_asset_id TEXT,
+            installation_point_name TEXT,
+            cluster INTEGER NOT NULL,
+            distance_to_centroid REAL,
+            pca_x REAL,
+            pca_y REAL,
+            features_json TEXT,
+            PRIMARY KEY(model_run_id, installation_point_id),
+            FOREIGN KEY(model_run_id) REFERENCES cluster_model_runs(model_run_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS cluster_model_centroids (
+            model_run_id TEXT NOT NULL,
+            cluster INTEGER NOT NULL,
+            sensor_count INTEGER NOT NULL,
+            centroid_json TEXT NOT NULL,
+            pca_x REAL,
+            pca_y REAL,
+            summary_json TEXT,
+            PRIMARY KEY(model_run_id, cluster),
+            FOREIGN KEY(model_run_id) REFERENCES cluster_model_runs(model_run_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS cluster_drift_runs (
+            drift_run_id TEXT PRIMARY KEY,
+            from_model_run_id TEXT NOT NULL,
+            to_model_run_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            from_date TEXT NOT NULL,
+            to_date TEXT NOT NULL,
+            feature_space TEXT NOT NULL,
+            k INTEGER NOT NULL,
+            alignment_policy TEXT NOT NULL,
+            matched_sensor_count INTEGER NOT NULL,
+            raw_changed_sensor_count INTEGER NOT NULL,
+            aligned_changed_sensor_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            metrics_json TEXT,
+            warnings_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(from_model_run_id) REFERENCES cluster_model_runs(model_run_id),
+            FOREIGN KEY(to_model_run_id) REFERENCES cluster_model_runs(model_run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS cluster_drift_assignments (
+            drift_run_id TEXT NOT NULL,
+            installation_point_id TEXT NOT NULL,
+            from_cluster INTEGER,
+            to_cluster INTEGER,
+            aligned_to_cluster INTEGER,
+            status TEXT NOT NULL,
+            raw_changed INTEGER NOT NULL,
+            aligned_changed INTEGER NOT NULL,
+            distance_delta REAL,
+            PRIMARY KEY(drift_run_id, installation_point_id),
+            FOREIGN KEY(drift_run_id) REFERENCES cluster_drift_runs(drift_run_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS cluster_centroid_alignment (
+            drift_run_id TEXT NOT NULL,
+            from_cluster INTEGER NOT NULL,
+            to_cluster INTEGER,
+            distance REAL,
+            mapping_confidence TEXT,
+            PRIMARY KEY(drift_run_id, from_cluster),
+            FOREIGN KEY(drift_run_id) REFERENCES cluster_drift_runs(drift_run_id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS waites_ingestion_ledger (
             source TEXT NOT NULL,
             source_date TEXT NOT NULL,
@@ -333,6 +431,18 @@ def initialize_observation_store(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_waites_ingestion_ledger_date
             ON waites_ingestion_ledger (source, source_date);
+
+        CREATE INDEX IF NOT EXISTS idx_cluster_model_runs_lookup
+            ON cluster_model_runs (source, source_date, feature_space, k, status);
+
+        CREATE INDEX IF NOT EXISTS idx_cluster_model_runs_feature_space
+            ON cluster_model_runs (source, feature_space, k, status);
+
+        CREATE INDEX IF NOT EXISTS idx_cluster_model_assignments_equipment
+            ON cluster_model_assignments (model_run_id, equipment_id, installation_point_id);
+
+        CREATE INDEX IF NOT EXISTS idx_cluster_drift_runs_lookup
+            ON cluster_drift_runs (source, from_date, to_date, feature_space, k, status);
         """
     )
     connection.execute(

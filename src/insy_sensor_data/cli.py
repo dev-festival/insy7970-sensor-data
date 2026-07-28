@@ -15,6 +15,12 @@ from insy_sensor_data.clustering.model import (
     build_cluster_run,
     compare_cluster_drift,
 )
+from insy_sensor_data.clustering.registry import (
+    DEFAULT_FEATURE_SPACES,
+    DEFAULT_REGISTRY_KS,
+    FEATURE_SPACE_SPECS,
+    build_cluster_model_grid,
+)
 from insy_sensor_data.clustering.window import align_cluster_drift, build_cluster_window
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
@@ -54,6 +60,7 @@ trend_app = typer.Typer(help="Processed trend commands.")
 workflow_app = typer.Typer(help="Human-readable workflow commands.")
 report_app = typer.Typer(help="Evidence report commands.")
 cluster_app = typer.Typer(help="Clustering preparation and model commands.")
+cluster_registry_app = typer.Typer(help="SQLite cluster model registry commands.")
 app.add_typer(waites_app, name="waites")
 app.add_typer(raw_app, name="raw")
 app.add_typer(store_app, name="store")
@@ -62,6 +69,7 @@ app.add_typer(trend_app, name="trend")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(report_app, name="report")
 app.add_typer(cluster_app, name="cluster")
+cluster_app.add_typer(cluster_registry_app, name="registry")
 
 
 EnvFileOption = Annotated[
@@ -544,6 +552,24 @@ def workflow_mock_range(
         int,
         typer.Option("--k", help="Number of KMeans clusters for cluster windows."),
     ] = 4,
+    cluster_models: Annotated[
+        bool,
+        typer.Option(
+            "--cluster-models/--legacy-clusters",
+            help="Build the SQLite cluster model registry instead of legacy cluster-window artifacts.",
+        ),
+    ] = False,
+    feature_spaces: Annotated[
+        str | None,
+        typer.Option(
+            "--feature-spaces",
+            help="Comma-separated registered feature spaces, e.g. x_accel,y_vel,z_vel,temperature.",
+        ),
+    ] = None,
+    ks: Annotated[
+        str | None,
+        typer.Option("--ks", help="Comma-separated registered k values. Defaults to 5 for cluster models."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Print the combined workflow summary as JSON."),
@@ -582,6 +608,8 @@ def workflow_mock_range(
     trend_input = _validate_input_mode(input_mode, VALID_TREND_INPUT_MODES, "trend input")
     retention_mode = _validate_input_mode(raw_retention, VALID_RAW_RETENTION_MODES, "raw retention")
     cluster_dimensions = _parse_dimensions(dimension, dimensions)
+    registry_feature_spaces = _parse_feature_spaces(feature_spaces)
+    registry_ks = _parse_ks(ks)
     settings = AppSettings.from_env(env_file=env_file)
     try:
         summary = run_mock_range_workflow(
@@ -594,6 +622,9 @@ def workflow_mock_range(
             keep_native=keep_native,
             dimensions=cluster_dimensions,
             k=k,
+            cluster_models=cluster_models,
+            feature_spaces=registry_feature_spaces,
+            ks=registry_ks,
             skip_fetch=skip_fetch,
             skip_cluster=skip_cluster,
             force=force or not resume,
@@ -674,6 +705,24 @@ def workflow_api_range(
         int,
         typer.Option("--k", help="Number of KMeans clusters for cluster windows."),
     ] = 4,
+    cluster_models: Annotated[
+        bool,
+        typer.Option(
+            "--cluster-models/--legacy-clusters",
+            help="Build the SQLite cluster model registry instead of legacy cluster-window artifacts.",
+        ),
+    ] = False,
+    feature_spaces: Annotated[
+        str | None,
+        typer.Option(
+            "--feature-spaces",
+            help="Comma-separated registered feature spaces, e.g. x_accel,y_vel,z_vel,temperature.",
+        ),
+    ] = None,
+    ks: Annotated[
+        str | None,
+        typer.Option("--ks", help="Comma-separated registered k values. Defaults to 5 for cluster models."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Print the combined workflow summary as JSON."),
@@ -712,6 +761,8 @@ def workflow_api_range(
     trend_input = _validate_input_mode(input_mode, VALID_TREND_INPUT_MODES, "trend input")
     retention_mode = _validate_input_mode(raw_retention, VALID_RAW_RETENTION_MODES, "raw retention")
     cluster_dimensions = _parse_dimensions(dimension, dimensions)
+    registry_feature_spaces = _parse_feature_spaces(feature_spaces)
+    registry_ks = _parse_ks(ks)
     settings = AppSettings.from_env(env_file=env_file)
     try:
         summary = run_api_range_workflow(
@@ -724,6 +775,9 @@ def workflow_api_range(
             keep_native=keep_native,
             dimensions=cluster_dimensions,
             k=k,
+            cluster_models=cluster_models,
+            feature_spaces=registry_feature_spaces,
+            ks=registry_ks,
             skip_fetch=skip_fetch,
             skip_cluster=skip_cluster,
             force=force or not resume,
@@ -1007,6 +1061,68 @@ def cluster_window(
     _emit_cluster_window_summary(summary, json_output)
 
 
+@cluster_registry_app.command("build-grid")
+def cluster_registry_build_grid(
+    start_date: Annotated[
+        str,
+        typer.Option("--start-date", help="First model date in YYYY-MM-DD format."),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Option("--end-date", help="Last model date in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    feature_spaces: Annotated[
+        str,
+        typer.Option(
+            "--feature-spaces",
+            help="Comma-separated feature spaces: x_accel,y_vel,z_vel,temperature.",
+        ),
+    ] = ",".join(DEFAULT_FEATURE_SPACES),
+    ks: Annotated[
+        str,
+        typer.Option("--ks", help="Comma-separated k values for registered models."),
+    ] = ",".join(str(value) for value in DEFAULT_REGISTRY_KS),
+    random_seed: Annotated[
+        int,
+        typer.Option("--random-seed", help="Deterministic KMeans initialization seed."),
+    ] = DEFAULT_RANDOM_SEED,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume/--no-resume", help="Reuse complete registered models by default."),
+    ] = True,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Rebuild complete registered models deliberately."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the registry grid summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Build the offline SQLite cluster model registry over a date range."""
+    source_mode = _validate_source(source)
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = build_cluster_model_grid(
+            settings=settings,
+            start_date=_parse_run_date(start_date),
+            end_date=_parse_run_date(end_date),
+            source=source_mode,
+            feature_spaces=_parse_feature_spaces(feature_spaces),
+            ks=_parse_ks(ks),
+            random_seed=random_seed,
+            force=force or not resume,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    _emit_cluster_registry_summary(summary, json_output)
+
+
 def _validate_source(source: str) -> str:
     source_mode = source.strip().lower()
     if source_mode not in VALID_SOURCE_MODES:
@@ -1060,6 +1176,43 @@ def _parse_dimensions(dimension: str, dimensions: str | None) -> list[str]:
     ]
     if not parsed:
         raise typer.BadParameter("at least one dimension is required")
+    return parsed
+
+
+def _parse_feature_spaces(feature_spaces: str | None) -> list[str] | None:
+    if feature_spaces is None:
+        return None
+    parsed = []
+    for raw_value in feature_spaces.split(","):
+        value = raw_value.strip().lower()
+        if not value:
+            continue
+        if value not in FEATURE_SPACE_SPECS:
+            allowed = ", ".join(FEATURE_SPACE_SPECS)
+            raise typer.BadParameter(f"feature_space must be one of: {allowed}")
+        parsed.append(value)
+    if not parsed:
+        raise typer.BadParameter("at least one feature space is required")
+    return parsed
+
+
+def _parse_ks(ks: str | None) -> list[int] | None:
+    if ks is None:
+        return None
+    parsed = []
+    for raw_value in ks.split(","):
+        value = raw_value.strip()
+        if not value:
+            continue
+        try:
+            k = int(value)
+        except ValueError as exc:
+            raise typer.BadParameter("ks must be comma-separated integers") from exc
+        if k < 1:
+            raise typer.BadParameter("k must be at least 1")
+        parsed.append(k)
+    if not parsed:
+        raise typer.BadParameter("at least one k value is required")
     return parsed
 
 
@@ -1193,3 +1346,23 @@ def _emit_cluster_window_summary(summary: dict[str, object], json_output: bool) 
             f"{pair['from_date']} -> {pair['to_date']}: "
             f"raw={pair['raw_label_changed_count']}, aligned={pair['aligned_changed_count']}"
         )
+
+
+def _emit_cluster_registry_summary(summary: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(summary, sort_keys=True))
+        return
+
+    typer.echo("Cluster model grid complete")
+    typer.echo("")
+    typer.echo(f"Source: {summary['source']}")
+    typer.echo(f"Dates: {summary['start_date']} to {summary['end_date']}")
+    typer.echo(f"Feature spaces: {', '.join(summary.get('feature_spaces', []))}")
+    typer.echo(f"k values: {', '.join(str(value) for value in summary.get('ks', []))}")
+    typer.echo(f"Models built: {summary.get('models_built', 0)}")
+    typer.echo(f"Models reused: {summary.get('models_reused', 0)}")
+    typer.echo(f"Models failed: {summary.get('models_failed', 0)}")
+    typer.echo(f"Drift pairs built: {summary.get('drift_built', 0)}")
+    typer.echo(f"Drift pairs reused: {summary.get('drift_reused', 0)}")
+    typer.echo(f"Drift pairs skipped: {summary.get('drift_skipped', 0)}")
+    typer.echo(f"SQLite registry: {summary.get('database_path')}")
