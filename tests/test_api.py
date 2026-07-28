@@ -43,7 +43,12 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert 'id="snapshot-trend-chart"' in response.text
     assert 'id="snapshot-cluster-chart"' in response.text
     assert 'data-view="cluster"' in response.text
-    assert "plotly" in response.text.lower()
+    assert "/static/charts.js" in response.text
+    assert "plotly" not in response.text.lower()
+
+    chart_response = client.get("/static/charts.js")
+    assert chart_response.status_code == 200
+    assert "window.SensorCharts" in chart_response.text
 
 
 def test_waites_raw_runs_endpoint_lists_available_manifests(tmp_path: Path) -> None:

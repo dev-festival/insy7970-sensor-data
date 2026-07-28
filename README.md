@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.4.1b` adds the first composed Snapshot review workspace on top of the named asset-tree equipment navigation:
+Sprint `0.4.2` replaces the first-pass Plotly charts with a dependency-light SVG chart renderer across the review workspace:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -58,7 +58,7 @@ Sprint `0.4.1b` adds the first composed Snapshot review workspace on top of the 
 - selected-scope Snapshot review with context, trends, cluster context, events, and measurements
 - view-local controls for metric, dimension, and `k`
 - URL-backed browser state for local refresh/share workflows
-- Plotly-based snapshot, trend, cluster, and drift views over API responses
+- first-party SVG snapshot, trend, cluster, and drift charts over API responses
 
 Maximo integration begins in later sprints.
 
@@ -173,7 +173,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing processed artifacts in sprint `0.4.1b`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser. Upcoming specs move cluster/drift reads toward a prebuilt SQLite model registry and move routine trend reads toward on-demand SQLite queries over daily snapshot facts.
+The web and API are read-only over existing processed artifacts in sprint `0.4.2`. Use the CLI workflows and cluster commands to create missing snapshots, trends, clusters, drift, or cluster-window artifacts before selecting those parameters in the browser. Upcoming specs move cluster/drift reads toward a prebuilt SQLite model registry and move routine trend reads toward on-demand SQLite queries over daily snapshot facts.
 
 ## Source API
 

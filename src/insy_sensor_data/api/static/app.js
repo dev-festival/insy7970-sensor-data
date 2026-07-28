@@ -167,6 +167,17 @@ function bindEvents() {
     await loadEquipmentTree();
     await renderActiveView();
   });
+
+  window.addEventListener("resize", debounce(() => {
+    if (!window.SensorCharts) {
+      return;
+    }
+    [
+      elements.plot,
+      elements.snapshotTrendChart,
+      elements.snapshotClusterChart,
+    ].forEach((element) => window.SensorCharts.redraw(element));
+  }, 150));
 }
 
 async function loadArtifacts() {
@@ -1253,28 +1264,11 @@ function plotChart(traces, layout) {
 }
 
 function plotInto(element, traces, layout) {
-  if (!window.Plotly) {
-    element.textContent = "Chart library unavailable";
+  if (!window.SensorCharts) {
+    element.textContent = "Chart renderer unavailable";
     return;
   }
-  if (!traces.length) {
-    Plotly.purge(element);
-    element.textContent = "No chartable rows";
-    return;
-  }
-  Plotly.react(element, traces, {
-    margin: { t: 48, r: 20, b: 52, l: 56 },
-    paper_bgcolor: "#ffffff",
-    plot_bgcolor: "#ffffff",
-    font: { family: "Inter, Segoe UI, sans-serif", size: 12, color: "#18202a" },
-    title: { text: layout.title, font: { size: 15 } },
-    xaxis: layout.xaxis || {},
-    yaxis: layout.yaxis || {},
-    legend: { orientation: "h" },
-  }, {
-    displayModeBar: false,
-    responsive: true,
-  });
+  window.SensorCharts.render(element, traces, layout || {});
 }
 
 function clearView() {
@@ -1283,10 +1277,10 @@ function clearView() {
   renderSummary([]);
   elements.tableHead.replaceChildren();
   elements.tableBody.replaceChildren();
-  if (window.Plotly) {
-    Plotly.purge(elements.plot);
-    Plotly.purge(elements.snapshotTrendChart);
-    Plotly.purge(elements.snapshotClusterChart);
+  if (window.SensorCharts) {
+    window.SensorCharts.clear(elements.plot);
+    window.SensorCharts.clear(elements.snapshotTrendChart);
+    window.SensorCharts.clear(elements.snapshotClusterChart);
   }
   elements.plot.textContent = "";
   elements.snapshotContext.replaceChildren();
