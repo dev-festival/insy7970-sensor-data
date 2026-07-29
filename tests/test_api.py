@@ -6,6 +6,7 @@ from insy_sensor_data.api.main import create_app
 from insy_sensor_data.clustering.registry import build_cluster_model_grid
 from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.maximo.db import MaximoDatabaseError
 from insy_sensor_data.observations import connect_observation_store
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import build_trends
@@ -363,6 +364,98 @@ def test_snapshot_review_endpoint_composes_equipment_scope(tmp_path: Path) -> No
     assert payload["trend"]["row_count"] == 6
     assert payload["cluster_context"]["row_count"] == 2
     assert {row["event_id"] for row in payload["events"]["rows"]} == {"9001", "9002"}
+
+
+def test_snapshot_review_maximo_events_activate_at_asset_tree_scope(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+
+    all_response = client.get(
+        "/api/snapshot-review/2025-07-09?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+    )
+    assert all_response.status_code == 200
+    assert all_response.json()["events"]["providers"]["maximo"]["status"] == "not_requested"
+    assert all(row["source"] != "maximo" for row in all_response.json()["events"]["rows"])
+
+    tree_response = client.get(
+        "/api/snapshot-review/2025-07-09"
+        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "&scope=asset_tree&asset_tree_id=12440"
+    )
+    assert tree_response.status_code == 200
+    tree_events = tree_response.json()["events"]
+    assert tree_events["providers"]["maximo"]["status"] == "available"
+    assert tree_events["providers"]["maximo"]["assetnums"] == [
+        "HYDF128PX",
+        "LEVF412TS",
+        "LEVF454TS",
+    ]
+    assert {row["event_id"] for row in tree_events["rows"]} == {"9001", "9002", "1234570"}
+    assert next(row for row in tree_events["rows"] if row["source"] == "maximo") == {
+        "date": "2025-07-10",
+        "source": "maximo",
+        "status": "APPR",
+        "type": "CM",
+        "asset_number": "LEVF454TS",
+        "installation_point_id": "",
+        "installation_point_ids": ["201302", "201303"],
+        "sensor_name": "",
+        "equipment_id": "55577",
+        "equipment_ids": ["55577"],
+        "event_id": "1234570",
+        "work_order": "1234570",
+        "work_order_status": "APPR",
+        "title": "Open inspection for steel pinch roll",
+        "urgency": "",
+        "closed_at": "",
+    }
+
+    sensor_response = client.get(
+        "/api/snapshot-review/2025-07-09"
+        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "&scope=sensor&asset_tree_id=12440&equipment_id=55577&installation_point_id=201303"
+    )
+    assert sensor_response.status_code == 200
+    assert {row["event_id"] for row in sensor_response.json()["events"]["rows"]} == {"1234570"}
+
+
+def test_snapshot_review_keeps_waites_events_when_maximo_is_unavailable(tmp_path: Path, monkeypatch) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+
+    def unavailable(*_args, **_kwargs):
+        raise MaximoDatabaseError("test DB2 outage")
+
+    monkeypatch.setattr("insy_sensor_data.artifact_views.load_asset_history", unavailable)
+    response = client.get(
+        "/api/snapshot-review/2025-07-09"
+        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "&scope=asset_tree&asset_tree_id=12440"
+    )
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert events["status"] == "partial"
+    assert events["providers"]["maximo"]["status"] == "unavailable"
+    assert {row["event_id"] for row in events["rows"]} == {"9001", "9002"}
+
+
+def test_maximo_asset_history_endpoint_returns_mock_records(tmp_path: Path) -> None:
+    client = TestClient(create_app(settings=AppSettings(data_dir=tmp_path / "data")))
+
+    response = client.get(
+        "/api/maximo/asset-history?assetnum=LEVF412TS&start_date=2025-06-01&end_date=2025-07-09&source=mock"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["wonum"] == "1234567"
+
+    invalid_response = client.get(
+        "/api/maximo/asset-history?assetnum=LEVF412TS&start_date=not-a-date&end_date=2025-07-09"
+    )
+    assert invalid_response.status_code == 422
 
 
 def test_snapshot_review_endpoint_handles_missing_trend_and_cluster_artifacts(tmp_path: Path) -> None:

@@ -699,6 +699,31 @@ def test_cli_workflow_api_day_requires_token(tmp_path: Path) -> None:
     assert "WAITES_ACCESS_TOKEN" in result.output or "WAITES_ACCESS_TOKEN" in str(result.exception)
 
 
+def test_cli_maximo_asset_history_returns_mock_records(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "maximo",
+            "asset-history",
+            "--assetnum",
+            "LEVF454TS",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-11",
+            "--source",
+            "mock",
+            "--env-file",
+            str(tmp_path / ".env"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["row_count"] == 1
+    assert payload["rows"][0]["wonum"] == "1234570"
+
+
 def test_cli_report_mock_trend_writes_evidence_report(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     env_file = tmp_path / ".env"

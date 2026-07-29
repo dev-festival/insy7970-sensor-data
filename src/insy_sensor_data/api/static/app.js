@@ -592,7 +592,17 @@ function renderSnapshotClusterPanel(clusterContext) {
 }
 
 function renderSnapshotEventsPanel(events) {
-  elements.snapshotEventsStatus.textContent = `${events.row_count || 0} scoped events`;
+  const maximo = events.providers?.maximo || {};
+  let suffix = "";
+  if (maximo.status === "not_requested") {
+    suffix = " | Maximo: select Asset Tree";
+  } else if (maximo.status === "unavailable") {
+    suffix = " | Maximo unavailable";
+  } else if (["available", "partial"].includes(maximo.status)) {
+    const warning = maximo.warning_count ? `, ${maximo.warning_count} assets skipped` : "";
+    suffix = ` | Maximo: ${maximo.row_count || 0}${warning}`;
+  }
+  elements.snapshotEventsStatus.textContent = `${events.row_count || 0} scoped events${suffix}`;
   renderTableInto(
     elements.snapshotEventsHead,
     elements.snapshotEventsBody,

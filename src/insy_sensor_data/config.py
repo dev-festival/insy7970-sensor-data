@@ -20,7 +20,9 @@ class AppSettings:
     waites_access_token: str = ""
     waites_facility_id: int = 679
     maximo_dsn: str = "MaximoMAS9"
-    maximo_schema: str = ""
+    maximo_schema: str = "MAXIMO"
+    maximo_site_id: str = "HMA"
+    maximo_assetnum_max_length: int = 12
     maximo_query_timeout_seconds: int = 30
 
     @classmethod
@@ -45,7 +47,13 @@ class AppSettings:
             waites_access_token=env.get("WAITES_ACCESS_TOKEN", cls.waites_access_token),
             waites_facility_id=_get_int(env, "WAITES_FACILITY_ID", cls.waites_facility_id),
             maximo_dsn=env.get("MAXIMO_DSN", cls.maximo_dsn),
-            maximo_schema=env.get("MAXIMO_SCHEMA", cls.maximo_schema),
+            maximo_schema=env.get("MAXIMO_SCHEMA", cls.maximo_schema).strip() or cls.maximo_schema,
+            maximo_site_id=env.get("MAXIMO_SITE_ID", cls.maximo_site_id).strip() or cls.maximo_site_id,
+            maximo_assetnum_max_length=_get_positive_int(
+                env,
+                "MAXIMO_ASSETNUM_MAX_LENGTH",
+                cls.maximo_assetnum_max_length,
+            ),
             maximo_query_timeout_seconds=_get_int(
                 env,
                 "MAXIMO_QUERY_TIMEOUT_SECONDS",
@@ -89,3 +97,10 @@ def _get_int(env: Mapping[str, str], key: str, default: int) -> int:
         return int(raw_value)
     except ValueError as exc:
         raise ValueError(f"{key} must be an integer") from exc
+
+
+def _get_positive_int(env: Mapping[str, str], key: str, default: int) -> int:
+    value = _get_int(env, key, default)
+    if value < 1:
+        raise ValueError(f"{key} must be greater than zero")
+    return value

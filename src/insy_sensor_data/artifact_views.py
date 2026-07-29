@@ -15,6 +15,9 @@ from insy_sensor_data.clustering.registry import (
     load_registered_drift_view,
 )
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
+from insy_sensor_data.joins import index_snapshot_assets, normalize_asset_number
+from insy_sensor_data.maximo.db import MaximoDatabaseError
+from insy_sensor_data.maximo.history import load_asset_history
 from insy_sensor_data.snapshots.build import list_snapshot_dates, load_snapshot
 from insy_sensor_data.snapshots.trends import list_trend_ranges, load_trends, query_sqlite_trends
 from insy_sensor_data.storage import get_storage_paths
@@ -661,6 +664,8 @@ def load_snapshot_review_view(
         "events": _snapshot_review_events(
             settings=settings,
             run_date=run_date,
+            start_date=effective_start,
+            end_date=effective_end,
             source=resolved_source,
             scope_context=scope_context,
             snapshot_rows=snapshot_rows,
@@ -836,6 +841,7 @@ def _resolve_review_scope(
         "label": "All equipment",
         "equipment_ids": set(),
         "installation_point_ids": set(),
+        "activation_equipment_ids": set(),
     }
     if scope_type == "all":
         return context
@@ -858,6 +864,7 @@ def _resolve_review_scope(
                 for row in asset_tree.get("equipment", [])
                 if _text_id(row.get("equipment_id"))
             }
+            context["activation_equipment_ids"] = set(context["equipment_ids"])
             context["installation_point_ids"] = {
                 _text_id(sensor.get("installation_point_id"))
                 for row in asset_tree.get("equipment", [])
@@ -876,6 +883,11 @@ def _resolve_review_scope(
                         "customer_asset_id": equipment.get("customer_asset_id") or "",
                         "label": equipment.get("equipment_name") or f"Equipment {equipment_id_value}",
                         "equipment_ids": {equipment_id_value} if equipment_id_value else set(),
+                        "activation_equipment_ids": {
+                            _text_id(row.get("equipment_id"))
+                            for row in asset_tree.get("equipment", [])
+                            if _text_id(row.get("equipment_id"))
+                        },
                         "installation_point_ids": {
                             _text_id(sensor.get("installation_point_id"))
                             for sensor in equipment.get("sensors", [])
@@ -904,6 +916,11 @@ def _resolve_review_scope(
                             "sensor_name": sensor.get("installation_point_name") or "",
                             "label": sensor.get("installation_point_name") or f"Sensor {installation_id}",
                             "equipment_ids": {equipment_id_value} if equipment_id_value else set(),
+                            "activation_equipment_ids": {
+                                _text_id(row.get("equipment_id"))
+                                for row in asset_tree.get("equipment", [])
+                                if _text_id(row.get("equipment_id"))
+                            },
                             "installation_point_ids": {installation_id} if installation_id else set(),
                         }
                     )
@@ -1051,6 +1068,8 @@ def _snapshot_review_cluster_context(
 def _snapshot_review_events(
     settings: AppSettings,
     run_date: date,
+    start_date: date,
+    end_date: date,
     source: str,
     scope_context: dict[str, Any],
     snapshot_rows: list[dict[str, Any]],
@@ -1061,17 +1080,98 @@ def _snapshot_review_events(
         action_rows = _raw_action_item_rows(settings, run_date, source)
         source_path = "raw"
     snapshot_context = _snapshot_lookup(snapshot_rows)
-    events = [
+    waites_events = [
         _event_row_from_action_item(row, run_date, snapshot_context)
         for row in action_rows
     ]
+    maximo = _snapshot_maximo_events(
+        settings=settings,
+        start_date=start_date,
+        end_date=end_date,
+        source=source,
+        scope_context=scope_context,
+        snapshot_rows=snapshot_rows,
+    )
+    events = waites_events + maximo["rows"]
     scoped_events = [row for row in events if _event_matches_scope(row, scope_context)]
     return {
-        "status": "available",
+        "status": "partial" if maximo["status"] in {"partial", "unavailable"} else "available",
         "input": source_path,
         "row_count": len(scoped_events),
         "all_row_count": len(events),
-        "rows": scoped_events,
+        "rows": _sort_events(scoped_events),
+        "providers": {
+            "waites": {
+                "status": "available",
+                "input": source_path,
+                "row_count": len(waites_events),
+            },
+            "maximo": {key: value for key, value in maximo.items() if key != "rows"},
+        },
+    }
+
+
+def _snapshot_maximo_events(
+    settings: AppSettings,
+    start_date: date,
+    end_date: date,
+    source: str,
+    scope_context: dict[str, Any],
+    snapshot_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if scope_context["type"] == "all":
+        return {
+            "status": "not_requested",
+            "message": "Select an Asset Tree to load Maximo work orders.",
+            "input": None,
+            "assetnums": [],
+            "row_count": 0,
+            "rows": [],
+        }
+
+    asset_index = index_snapshot_assets(
+        snapshot_rows,
+        scope_context.get("activation_equipment_ids", set()),
+    )
+    if not asset_index:
+        return {
+            "status": "available",
+            "message": "No non-empty customer asset numbers are available in this Asset Tree.",
+            "input": source,
+            "assetnums": [],
+            "row_count": 0,
+            "rows": [],
+        }
+
+    try:
+        history = load_asset_history(
+            settings=settings,
+            assetnums=asset_index.keys(),
+            start_date=start_date,
+            end_date=end_date,
+            source=source,
+        )
+    except (FileNotFoundError, MaximoDatabaseError, ValueError) as exc:
+        return {
+            "status": "unavailable",
+            "message": str(exc),
+            "input": source,
+            "assetnums": sorted(asset_index),
+            "row_count": 0,
+            "rows": [],
+        }
+
+    rows = [_event_row_from_workorder(row, asset_index) for row in history["rows"]]
+    return {
+        "status": history["status"],
+        "message": history.get("message"),
+        "input": history["input"],
+        "assetnums": history["assetnums"],
+        "queried_assetnums": history["queried_assetnums"],
+        "skipped_assets": history["skipped_assets"],
+        "warning_count": history["warning_count"],
+        "row_count": len(rows),
+        "rows": rows,
     }
 
 
@@ -1217,16 +1317,63 @@ def _event_row_from_action_item(
     }
 
 
+def _event_row_from_workorder(
+    row: dict[str, Any],
+    asset_index: dict[str, dict[str, set[str]]],
+) -> dict[str, Any]:
+    asset_number = normalize_asset_number(row.get("assetnum"))
+    matched = asset_index.get(asset_number, {})
+    equipment_ids = sorted(matched.get("equipment_ids", set()), key=_sort_key)
+    installation_point_ids = sorted(
+        matched.get("installation_point_ids", set()),
+        key=_sort_key,
+    )
+    return {
+        "date": _clean_text(row.get("reportdate")),
+        "source": "maximo",
+        "status": _clean_text(row.get("status")),
+        "type": _clean_text(row.get("worktype")),
+        "asset_number": asset_number,
+        "installation_point_id": "",
+        "installation_point_ids": installation_point_ids,
+        "sensor_name": "",
+        "equipment_id": equipment_ids[0] if len(equipment_ids) == 1 else "",
+        "equipment_ids": equipment_ids,
+        "event_id": _clean_text(row.get("wonum")),
+        "work_order": _clean_text(row.get("wonum")),
+        "work_order_status": _clean_text(row.get("status")),
+        "title": _clean_text(row.get("description")),
+        "urgency": "",
+        "closed_at": _clean_text(row.get("actfinish")),
+    }
+
+
 def _event_matches_scope(row: dict[str, Any], scope_context: dict[str, Any]) -> bool:
     if scope_context["type"] == "all":
         return True
-    installation_id = _text_id(row.get("installation_point_id"))
-    equipment_id = _text_id(row.get("equipment_id"))
+    installation_ids = _event_ids(row, "installation_point_id", "installation_point_ids")
+    equipment_ids = _event_ids(row, "equipment_id", "equipment_ids")
     if scope_context["type"] == "sensor":
-        return bool(installation_id and installation_id in scope_context.get("installation_point_ids", set()))
-    if installation_id and installation_id in scope_context.get("installation_point_ids", set()):
+        return bool(installation_ids & scope_context.get("installation_point_ids", set()))
+    if installation_ids & scope_context.get("installation_point_ids", set()):
         return True
-    return bool(equipment_id and equipment_id in scope_context.get("equipment_ids", set()))
+    return bool(equipment_ids & scope_context.get("equipment_ids", set()))
+
+
+def _event_ids(row: dict[str, Any], singular_key: str, plural_key: str) -> set[str]:
+    values = {_text_id(row.get(singular_key))}
+    plural_values = row.get(plural_key)
+    if isinstance(plural_values, list):
+        values.update(_text_id(value) for value in plural_values)
+    return {value for value in values if value}
+
+
+def _sort_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        rows,
+        key=lambda row: (_text_id(row.get("date")), _text_id(row.get("work_order") or row.get("event_id"))),
+        reverse=True,
+    )
 
 
 def _measurement_columns(metric: str, dimension: str, stat: str) -> list[str]:

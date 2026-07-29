@@ -24,6 +24,8 @@ def test_settings_load_env_file_and_process_env_overrides(tmp_path: Path) -> Non
                 "INSY_SOURCE_MODE=api",
                 "INSY_DATA_DIR=file-data",
                 "WAITES_FACILITY_ID=111",
+                "MAXIMO_SITE_ID=TEST",
+                "MAXIMO_ASSETNUM_MAX_LENGTH=15",
                 "MAXIMO_QUERY_TIMEOUT_SECONDS=45",
             ]
         ),
@@ -42,6 +44,8 @@ def test_settings_load_env_file_and_process_env_overrides(tmp_path: Path) -> Non
     assert settings.source_mode == "mock"
     assert settings.data_dir == Path("env-data")
     assert settings.waites_facility_id == 111
+    assert settings.maximo_site_id == "TEST"
+    assert settings.maximo_assetnum_max_length == 15
     assert settings.maximo_query_timeout_seconds == 45
 
 

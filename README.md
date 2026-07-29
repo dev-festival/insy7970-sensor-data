@@ -6,7 +6,7 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.4.5` polishes the Snapshot review workspace over the SQLite trend and registered-model layers:
+Sprint `0.5.0` adds bounded Maximo work-order history to the Snapshot review workspace over the SQLite trend and registered-model layers:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -67,13 +67,17 @@ Sprint `0.4.5` polishes the Snapshot review workspace over the SQLite trend and 
 - view-local controls for metric, dimension, and `k`
 - URL-backed browser state for local refresh/share workflows
 - first-party SVG snapshot, trend, cluster, and drift charts over API responses
+- Maximo fixture-backed work-order history and an ODBC boundary for live DB2 access
+- Asset Tree-scoped Maximo Events using Waites `customer_asset_id` to Maximo `assetnum`
+- Maximo event-provider status that preserves Waites events if DB2 is unavailable
+- diagnostic Maximo asset-history CLI and API lookup
 
-Maximo integration begins in later sprints.
 
 ## Requirements
 
 - Python 3.13 or newer
 - uv
+- For live Maximo lookups: an installed DB2 ODBC driver and a server-managed DSN
 
 ## Setup
 
@@ -89,6 +93,7 @@ Edit `.env` for local values. Keep `.env` out of Git.
 ```powershell
 uv run sensor-data --help
 uv run sensor-data health
+uv run sensor-data maximo asset-history --source mock --assetnum LEVF454TS --start-date 2025-07-09 --end-date 2025-07-11
 uv run sensor-data serve --source mock
 uv run sensor-data waites fetch --source mock --date 2025-07-09 --facility 679
 uv run sensor-data waites validate --source mock --date 2025-07-09
@@ -177,6 +182,7 @@ Then open:
 - `http://127.0.0.1:8000/api/waites/raw-runs`
 - `http://127.0.0.1:8000/api/equipment?source=mock`
 - `http://127.0.0.1:8000/api/equipment-tree?source=mock`
+- `http://127.0.0.1:8000/api/maximo/asset-history?assetnum=LEVF454TS&start_date=2025-07-09&end_date=2025-07-11&source=mock`
 - `http://127.0.0.1:8000/api/snapshots/2025-07-09?source=mock`
 - `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11`
 - `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11&scope=asset_tree&asset_tree_id=12440&metric=rms_accel&dimension=x&stat=mean`
@@ -189,7 +195,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing daily snapshots, optional trend artifacts, and registered SQLite cluster models in sprint `0.4.5`. Build snapshots first; the Trend tab reads from `sensor_daily_snapshots` on request and falls back to trend artifacts only when SQLite daily rows are unavailable. Run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser.
+The web and API are read-only over existing daily snapshots, optional trend artifacts, registered SQLite cluster models, and bounded Maximo work-order lookups in sprint `0.5.0`. Build snapshots first; the Trend tab reads from `sensor_daily_snapshots` on request and falls back to trend artifacts only when SQLite daily rows are unavailable. Maximo is queried only when an Asset Tree, equipment, or sensor is selected; All Equipment never initiates a Maximo query. Run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser.
 
 ## Source API
 
@@ -228,6 +234,21 @@ data/raw/waites/date=YYYY-MM-DD/
 ```
 
 Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations. Routine web trend reads use `/api/trends` directly over `sensor_daily_snapshots` and do not write CSV artifacts.
+
+## Maximo History
+
+The Snapshot Events pane always shows Waites action items. When an Asset Tree (or an
+equipment/sensor within an Asset Tree) is selected, it also queries Maximo work orders
+for the distinct, non-empty Waites customer asset numbers represented by that tree.
+The query is read-only, bounded by the selected date range, and uses `REPORTDATE`.
+The default All Equipment scope never queries Maximo.
+
+Live lookup uses `MAXIMO_DSN`, `MAXIMO_SCHEMA`, `MAXIMO_SITE_ID`,
+`MAXIMO_ASSETNUM_MAX_LENGTH`, and `MAXIMO_QUERY_TIMEOUT_SECONDS` from `.env`; the ODBC
+DSN should be configured on the server. Asset values containing whitespace or longer
+than the configured Maximo asset-number limit are reported as skipped while the
+remaining assets are still queried.
+`source=mock` uses the committed fixture and never imports an ODBC driver.
 
 The mock trend dates are intentionally small and controlled:
 

@@ -1,1 +1,1 @@
-"""Maximo DB2/ODBC boundary."""
+"""Maximo fixture and DB2/ODBC history boundary."""

@@ -709,12 +709,15 @@ uv run pytest -m live
 
 Unset `INSY_RUN_LIVE_TESTS` to return to offline-only test behavior.
 
-## Planned Commands
+## Maximo Asset History
 
-These are not implemented yet, but they are the intended shape from the sprint plan.
+Query one bounded, read-only work-order history through the mock fixture or the
+server-configured DB2/ODBC DSN:
 
 ```powershell
-uv run sensor-data maximo asset-history --assetnum A119450 --source mock
+uv run sensor-data maximo asset-history --assetnum LEVF454TS --start-date 2025-07-09 --end-date 2025-07-11 --source mock
 ```
 
-As commands are implemented, move them from this planned section into the current section with examples.
+The result is JSON with normalized `wonum`, `assetnum`, `reportdate`, description,
+work type, and status. The required date range protects the live DB2 provider from an
+unbounded history lookup.

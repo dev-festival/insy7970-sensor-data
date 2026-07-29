@@ -22,6 +22,8 @@ def build_health_report(settings: AppSettings) -> dict[str, Any]:
         "maximo": {
             "dsn": settings.maximo_dsn,
             "schema": settings.maximo_schema,
+            "site_id": settings.maximo_site_id,
+            "assetnum_max_length": settings.maximo_assetnum_max_length,
             "query_timeout_seconds": settings.maximo_query_timeout_seconds,
         },
     }

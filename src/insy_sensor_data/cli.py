@@ -24,6 +24,8 @@ from insy_sensor_data.clustering.registry import (
 from insy_sensor_data.clustering.window import align_cluster_drift, build_cluster_window
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.health import build_health_report
+from insy_sensor_data.maximo.db import MaximoDatabaseError
+from insy_sensor_data.maximo.history import load_asset_history
 from insy_sensor_data.observations import (
     VALID_RAW_RETENTION_MODES,
     load_waites_observations,
@@ -61,6 +63,7 @@ workflow_app = typer.Typer(help="Human-readable workflow commands.")
 report_app = typer.Typer(help="Evidence report commands.")
 cluster_app = typer.Typer(help="Clustering preparation and model commands.")
 cluster_registry_app = typer.Typer(help="SQLite cluster model registry commands.")
+maximo_app = typer.Typer(help="Maximo maintenance history commands.")
 app.add_typer(waites_app, name="waites")
 app.add_typer(raw_app, name="raw")
 app.add_typer(store_app, name="store")
@@ -69,6 +72,7 @@ app.add_typer(trend_app, name="trend")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(report_app, name="report")
 app.add_typer(cluster_app, name="cluster")
+app.add_typer(maximo_app, name="maximo")
 cluster_app.add_typer(cluster_registry_app, name="registry")
 
 
@@ -175,6 +179,42 @@ def waites_validate(
     typer.echo(json.dumps(validation_summary(report), sort_keys=True))
     if report["error_count"]:
         _fail(f"raw Waites validation failed; see {report['validation_path']}")
+
+
+@maximo_app.command("asset-history")
+def maximo_asset_history(
+    assetnum: Annotated[
+        str,
+        typer.Option("--assetnum", help="Maximo asset number to look up."),
+    ],
+    start_date: Annotated[
+        str,
+        typer.Option("--start-date", help="First REPORTDATE to include, YYYY-MM-DD."),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Option("--end-date", help="Last REPORTDATE to include, YYYY-MM-DD."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Provider mode: mock fixture or live DB2/ODBC API."),
+    ] = "mock",
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Print read-only Maximo work-order history as JSON."""
+    source_mode = _validate_source(source)
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        history = load_asset_history(
+            settings=settings,
+            assetnums=[assetnum],
+            start_date=_parse_run_date(start_date),
+            end_date=_parse_run_date(end_date),
+            source=source_mode,
+        )
+    except (FileNotFoundError, MaximoDatabaseError, ValueError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(history, sort_keys=True))
 
 
 @raw_app.command("compress")
