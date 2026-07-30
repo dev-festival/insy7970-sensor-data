@@ -33,6 +33,7 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.4.5](0.4.5-snapshot-ui-polish.md) | Snapshot UI polish | Independent review panes, pinned metadata, side-by-side charts, and collapsible detail tables |
 | [0.4.x](0.4.x-on-demand-source-drilldown.md) | On-demand source drilldown | Temporary live source detail for selected dashboard points without permanent raw storage |
 | [0.5.0](0.5.0-maximo-integration.md) | Maximo integration | Asset maintenance records aligned to Waites equipment by asset number |
+| [0.5.1](0.5.1-snapshot-trend-debugging.md) | Snapshot trend debugging | Chronological sparse-data trends, point-selected snapshots, coverage, and diagnostics |
 
 ## Sprint Style
 
