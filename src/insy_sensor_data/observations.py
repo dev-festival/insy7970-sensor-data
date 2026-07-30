@@ -11,6 +11,11 @@ import sqlite3
 from insy_sensor_data.artifacts import read_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import get_storage_paths
+from insy_sensor_data.store.events import (
+    initialize_event_schema,
+    record_waites_event_coverage,
+    upsert_waites_events,
+)
 from insy_sensor_data.waites.asset_tree import (
     asset_tree_records_from_payload,
     normalize_asset_tree_records,
@@ -19,7 +24,7 @@ from insy_sensor_data.waites.client import ENDPOINT_FILENAMES
 from insy_sensor_data.waites.validate import ensure_waites_raw_valid
 
 
-OBSERVATION_SCHEMA_VERSION = 5
+OBSERVATION_SCHEMA_VERSION = 6
 VALID_OBSERVATION_SOURCES = {"mock", "api"}
 VALID_RAW_RETENTION_MODES = {"release", "compress", "keep"}
 
@@ -443,6 +448,8 @@ def initialize_observation_store(connection: sqlite3.Connection) -> None:
             ON cluster_drift_runs (source, from_date, to_date, feature_space, k, status);
         """
     )
+    initialize_event_schema(connection)
+    _ensure_snapshot_scope_indexes(connection)
     connection.execute(
         """
         INSERT OR IGNORE INTO observation_schema (version, applied_at)
@@ -1253,6 +1260,22 @@ def _insert_waites_payloads(
         """,
         action_rows,
     )
+    upsert_waites_events(
+        connection,
+        source=source,
+        source_date=source_date,
+        observed_at=loaded_at,
+        rows=payloads["action-items"],
+    )
+    record_waites_event_coverage(
+        connection,
+        source=source,
+        source_date=source_date,
+        state="imported" if payloads["action-items"] else "genuinely_empty",
+        input_mode="ingestion",
+        event_observation_count=len(payloads["action-items"]),
+        checked_at=loaded_at,
+    )
 
     return {
         "asset_trees": len(asset_tree_rows),
@@ -1534,20 +1557,42 @@ def _ensure_daily_snapshot_columns(connection: sqlite3.Connection, fieldnames: l
         )
         existing.add(field)
 
-    if "equipment_id" in existing:
+    _ensure_snapshot_scope_indexes(connection, existing=existing)
+
+
+def _ensure_snapshot_scope_indexes(
+    connection: sqlite3.Connection,
+    *,
+    existing: set[str] | None = None,
+) -> None:
+    columns = existing if existing is not None else _daily_snapshot_columns(connection)
+    scope_indexes = {
+        "equipment_id": (
+            "idx_sensor_daily_snapshots_equipment_scope",
+            "equipment_id",
+            "idx_sensor_daily_snapshots_equipment",
+        ),
+        "customer_asset_id": (
+            "idx_sensor_daily_snapshots_asset_scope",
+            "customer_asset_id",
+            "idx_sensor_daily_snapshots_asset",
+        ),
+        "installation_point_id": (
+            "idx_sensor_daily_snapshots_installation_scope",
+            "installation_point_id",
+            "idx_sensor_daily_snapshots_installation",
+        ),
+    }
+    for field, (index_name, scope_column, legacy_index_name) in scope_indexes.items():
+        if field not in columns:
+            continue
         connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_sensor_daily_snapshots_equipment
-                ON sensor_daily_snapshots (source, source_date, equipment_id)
+            f"""
+            CREATE INDEX IF NOT EXISTS {index_name}
+                ON sensor_daily_snapshots (source, {scope_column}, source_date)
             """
         )
-    if "customer_asset_id" in existing:
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_sensor_daily_snapshots_asset
-                ON sensor_daily_snapshots (source, source_date, customer_asset_id)
-            """
-        )
+        connection.execute(f"DROP INDEX IF EXISTS {legacy_index_name}")
 
 
 def _daily_snapshot_columns(connection: sqlite3.Connection) -> set[str]:

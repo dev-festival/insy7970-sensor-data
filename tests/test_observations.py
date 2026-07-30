@@ -30,7 +30,7 @@ def test_load_waites_observations_creates_schema_and_records_counts(tmp_path: Pa
 
     assert observation_db_path(settings).exists()
     assert summary["source"] == "mock"
-    assert summary["schema_version"] == 5
+    assert summary["schema_version"] == 6
     assert summary["row_counts"] == {
         "asset_trees": 3,
         "equipment": 6,

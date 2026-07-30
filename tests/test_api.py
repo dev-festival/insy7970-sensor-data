@@ -5,12 +5,18 @@ from fastapi.testclient import TestClient
 import pytest
 
 from insy_sensor_data.api.main import create_app
-from insy_sensor_data.artifact_views import _trend_coverage, _trend_series
 from insy_sensor_data.clustering.registry import build_cluster_model_grid
 from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.maximo.db import MaximoDatabaseError
-from insy_sensor_data.observations import connect_observation_store
+from insy_sensor_data.observations import (
+    connect_observation_store,
+    load_waites_observations,
+)
+from insy_sensor_data.services.trends import (
+    trend_coverage as _trend_coverage,
+    trend_series as _trend_series,
+)
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
@@ -145,7 +151,9 @@ def test_trend_endpoint_reads_multi_day_sqlite_snapshots_without_artifact(tmp_pa
     ).exists()
 
 
-def test_trend_endpoint_falls_back_to_artifact_when_sqlite_rows_are_missing(tmp_path: Path) -> None:
+def test_trend_endpoint_reports_missing_store_facts_without_artifact_fallback(
+    tmp_path: Path,
+) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
     start = date(2025, 7, 9)
@@ -160,11 +168,8 @@ def test_trend_endpoint_falls_back_to_artifact_when_sqlite_rows_are_missing(tmp_
 
     response = client.get("/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["input"] == "artifact_fallback"
-    assert payload["metadata"]["served_from"] == "artifact_fallback"
-    assert payload["sensor_row_count"] == 27
+    assert response.status_code == 404
+    assert "Snapshots are unavailable" in response.json()["detail"]
 
 
 def test_snapshot_endpoint_returns_404_for_missing_artifact(tmp_path: Path) -> None:
@@ -186,12 +191,13 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     artifacts = artifacts_response.json()
     assert artifacts["counts"]["snapshots"] == 3
     assert artifacts["counts"]["trends"] == 1
-    assert artifacts["counts"]["clusters"] == 3
-    assert artifacts["counts"]["drift"] == 2
-    assert artifacts["counts"]["cluster_windows"] == 1
+    assert artifacts["counts"]["clusters"] == 0
+    assert artifacts["counts"]["drift"] == 0
+    assert artifacts["counts"]["cluster_windows"] == 0
     assert artifacts["sources"] == ["mock"]
-    assert artifacts["dimensions"] == ["x"]
-    assert artifacts["ks"] == [4]
+    assert artifacts["dimensions"] == []
+    assert artifacts["ks"] == []
+    assert artifacts["data_revisions"]["mock"]["store"] == "sqlite"
     assert artifacts["latest_readiness"]["mock"] == {
         "snapshot_date": "2025-07-11",
         "registered_model_date": None,
@@ -264,30 +270,18 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     _prepare_mock_window(settings)
 
     cluster_response = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4")
-    assert cluster_response.status_code == 200
-    cluster = cluster_response.json()
-    assert cluster["row_count"] == 9
-    assert cluster["cluster_row_count"] == 4
-    assert cluster["metrics"]["feature_count"] == 16
-    assert len(cluster["pca_rows"]) == 9
+    assert cluster_response.status_code == 409
+    assert "registered feature_space" in cluster_response.json()["detail"]
 
     drift_response = client.get(
         "/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&dimension=x&k=4"
     )
-    assert drift_response.status_code == 200
-    drift = drift_response.json()
-    assert len(drift["raw_rows"]) >= 1
-    assert len(drift["aligned_rows"]) >= 1
-    assert drift["aligned_metrics"]["matched_sensor_count"] >= 1
+    assert drift_response.status_code == 409
 
     window_response = client.get(
         "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4"
     )
-    assert window_response.status_code == 200
-    window = window_response.json()
-    assert window["metrics"]["date_count"] == 3
-    assert len(window["quality_rows"]) == 3
-    assert len(window["aligned_drift_rows"]) == 2
+    assert window_response.status_code == 409
 
     build_cluster_model_grid(
         settings=settings,
@@ -365,8 +359,7 @@ def test_snapshot_review_endpoint_composes_sensor_scope(tmp_path: Path) -> None:
     assert payload["trend"]["status"] == "available"
     assert payload["trend"]["row_count"] == 3
     assert {row["installation_point_id"] for row in payload["trend"]["sensor_rows"]} == {"201300"}
-    assert payload["cluster_context"]["status"] == "available"
-    assert payload["cluster_context"]["row_count"] == 1
+    assert payload["cluster_context"]["status"] == "missing"
     assert payload["events"]["status"] == "available"
     assert payload["events"]["row_count"] == 1
     assert payload["events"]["rows"][0]["event_id"] == "9001"
@@ -471,7 +464,7 @@ def test_snapshot_review_endpoint_composes_equipment_scope(tmp_path: Path) -> No
     assert payload["context"]["snapshot_row_count"] == 2
     assert payload["context"]["sensor_count"] == 2
     assert payload["trend"]["row_count"] == 6
-    assert payload["cluster_context"]["row_count"] == 2
+    assert payload["cluster_context"]["status"] == "missing"
     assert {row["event_id"] for row in payload["events"]["rows"]} == {"9001", "9002"}
 
 
@@ -537,7 +530,7 @@ def test_snapshot_review_keeps_waites_events_when_maximo_is_unavailable(tmp_path
     def unavailable(*_args, **_kwargs):
         raise MaximoDatabaseError("test DB2 outage")
 
-    monkeypatch.setattr("insy_sensor_data.artifact_views.load_asset_history", unavailable)
+    monkeypatch.setattr("insy_sensor_data.services.review.load_asset_history", unavailable)
     response = client.get(
         "/api/snapshot-review/2025-07-09"
         "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
@@ -572,6 +565,11 @@ def test_snapshot_review_endpoint_handles_missing_trend_and_cluster_artifacts(tm
     client = TestClient(create_app(settings=settings))
     run_date = date(2025, 7, 9)
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+    load_waites_observations(
+        settings=settings,
+        run_date=run_date,
+        source="mock",
+    )
     build_sensor_snapshot(settings=settings, run_date=run_date)
 
     response = client.get(
@@ -590,7 +588,9 @@ def test_snapshot_review_endpoint_handles_missing_trend_and_cluster_artifacts(tm
     assert payload["measurements"]["row_count"] == 1
 
 
-def test_cluster_endpoint_validates_parameters_and_missing_artifacts(tmp_path: Path) -> None:
+def test_cluster_endpoint_validates_parameters_and_requires_registered_model(
+    tmp_path: Path,
+) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
 
@@ -601,7 +601,7 @@ def test_cluster_endpoint_validates_parameters_and_missing_artifacts(tmp_path: P
     assert bad_k.status_code == 422
 
     missing = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4")
-    assert missing.status_code == 404
+    assert missing.status_code == 409
 
 
 def test_snapshot_and_trend_endpoints_support_source_and_sensor_filters(tmp_path: Path) -> None:
@@ -784,6 +784,11 @@ def _prepare_mock_window(settings: AppSettings) -> None:
     end = date(2025, 7, 11)
     for run_date in [start, date(2025, 7, 10), end]:
         fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+        load_waites_observations(
+            settings=settings,
+            run_date=run_date,
+            source="mock",
+        )
         build_sensor_snapshot(settings=settings, run_date=run_date)
     build_trends(settings=settings, start_date=start, end_date=end)
     build_cluster_window(settings=settings, start_date=start, end_date=end, source="mock", dimension="x", k=4)

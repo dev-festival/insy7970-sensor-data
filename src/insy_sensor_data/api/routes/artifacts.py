@@ -5,16 +5,15 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from insy_sensor_data.artifact_views import (
-    discover_artifacts,
-    list_equipment_tree_view,
-    list_equipment_view,
-    load_cluster_view,
-    load_cluster_window_view,
-    load_drift_view,
-    list_cluster_model_view,
-    load_snapshot_review_view,
+from insy_sensor_data.services.review import load_snapshot_review
+from insy_sensor_data.store.context import service_context
+from insy_sensor_data.store.models import (
+    list_models,
+    load_cluster,
+    load_cluster_window,
+    load_drift,
 )
+from insy_sensor_data.store.references import list_equipment, list_equipment_tree
 
 
 router = APIRouter(prefix="/api", tags=["artifacts"])
@@ -22,7 +21,7 @@ router = APIRouter(prefix="/api", tags=["artifacts"])
 
 @router.get("/artifacts")
 def read_artifacts(request: Request) -> dict[str, Any]:
-    return discover_artifacts(request.app.state.settings)
+    return service_context(request.app.state.settings)
 
 
 @router.get("/equipment")
@@ -33,7 +32,7 @@ def read_equipment(
     end_date: str | None = None,
 ) -> dict[str, Any]:
     try:
-        return list_equipment_view(
+        return list_equipment(
             request.app.state.settings,
             source=source,
             start_date=date.fromisoformat(start_date) if start_date else None,
@@ -51,7 +50,7 @@ def read_equipment_tree(
     end_date: str | None = None,
 ) -> dict[str, Any]:
     try:
-        return list_equipment_tree_view(
+        return list_equipment_tree(
             request.app.state.settings,
             source=source,
             start_date=date.fromisoformat(start_date) if start_date else None,
@@ -80,7 +79,7 @@ def read_snapshot_review(
     k: int = 4,
 ) -> dict[str, Any]:
     try:
-        return load_snapshot_review_view(
+        return load_snapshot_review(
             settings=request.app.state.settings,
             run_date=date.fromisoformat(snapshot_date),
             source=source,
@@ -99,8 +98,6 @@ def read_snapshot_review(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/clusters")
@@ -113,18 +110,17 @@ def read_clusters(
     k: int = 4,
 ) -> dict[str, Any]:
     try:
-        return load_cluster_view(
+        if dimension not in {"x", "y", "z"}:
+            raise ValueError("dimension must be one of: x, y, z")
+        return load_cluster(
             settings=request.app.state.settings,
             run_date=date.fromisoformat(cluster_date),
             source=source or request.app.state.settings.source_mode,
-            dimension=dimension,
             feature_space=feature_space,
             k=k,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/drift")
@@ -138,19 +134,18 @@ def read_drift(
     k: int = 4,
 ) -> dict[str, Any]:
     try:
-        return load_drift_view(
+        if dimension not in {"x", "y", "z"}:
+            raise ValueError("dimension must be one of: x, y, z")
+        return load_drift(
             settings=request.app.state.settings,
             from_date=date.fromisoformat(from_date),
             to_date=date.fromisoformat(to_date),
             source=source or request.app.state.settings.source_mode,
-            dimension=dimension,
             feature_space=feature_space,
             k=k,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/cluster-windows")
@@ -164,19 +159,18 @@ def read_cluster_windows(
     k: int = 4,
 ) -> dict[str, Any]:
     try:
-        return load_cluster_window_view(
+        if dimension not in {"x", "y", "z"}:
+            raise ValueError("dimension must be one of: x, y, z")
+        return load_cluster_window(
             settings=request.app.state.settings,
             start_date=date.fromisoformat(start_date),
             end_date=date.fromisoformat(end_date),
             source=source or request.app.state.settings.source_mode,
-            dimension=dimension,
             feature_space=feature_space,
             k=k,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/cluster-models")
@@ -187,7 +181,7 @@ def read_cluster_models(
     end_date: str | None = None,
 ) -> dict[str, Any]:
     try:
-        return list_cluster_model_view(
+        return list_models(
             settings=request.app.state.settings,
             source=source or request.app.state.settings.source_mode,
             start_date=date.fromisoformat(start_date) if start_date else None,

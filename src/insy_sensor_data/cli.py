@@ -37,6 +37,7 @@ from insy_sensor_data.snapshots.build import VALID_SNAPSHOT_INPUT_MODES
 from insy_sensor_data.snapshots.build import build_sensor_snapshot, store_existing_sensor_snapshot
 from insy_sensor_data.snapshots.trends import VALID_TREND_INPUT_MODES
 from insy_sensor_data.snapshots.trends import build_trends
+from insy_sensor_data.store.events import backfill_waites_events
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.client import WaitesApiError
 from insy_sensor_data.waites.validate import validate_waites_raw, validation_summary
@@ -323,6 +324,27 @@ def store_load_waites(
             run_date=_parse_run_date(load_date),
             source=source_mode,
             replace=replace,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
+@store_app.command("backfill-events")
+def store_backfill_events(
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode to migrate: mock or api."),
+    ] = "mock",
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Backfill durable Waites events and report dates that need a narrow re-fetch."""
+    source_mode = _validate_source(source)
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = backfill_waites_events(
+            settings=settings,
+            source=source_mode,
         )
     except (FileNotFoundError, ValueError) as exc:
         _fail(str(exc))

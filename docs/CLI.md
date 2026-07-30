@@ -228,6 +228,9 @@ waites_installation_point_reference
 Those reference tables are the one-row-per-asset-tree, one-row-per-equipment, and one-row-per-sensor view. The date-scoped `waites_equipment` and `waites_installation_points` rows exist only so a snapshot can replay the exact pull for that date when inspection retention is enabled.
 
 The load records source date, source mode, facility, manifest SHA-256, load time, schema version, endpoint row counts, and daily metric rollup counts.
+Action items are also upserted into `waites_events`, keyed by source, provider, and
+provider event ID. Repeated daily observations update status and last-seen state
+without creating duplicate Events rows.
 
 The command is idempotent by source date. By default, rerunning it replaces the existing rows for that date:
 
@@ -236,6 +239,20 @@ uv run sensor-data store load-waites --source mock --date 2025-07-09 --replace
 ```
 
 Use `--no-replace` when you want the command to fail if the date is already loaded.
+
+### Backfill Durable Waites Events
+
+```powershell
+uv run sensor-data store backfill-events --source mock
+uv run sensor-data store backfill-events --source api
+```
+
+Migrates action items for dates already recorded in the ingestion ledger. The JSON
+report separates dates imported from retained raw or SQLite rows, dates confirmed
+genuinely empty by their endpoint count, and dates requiring a narrow Waites
+action-item re-fetch. The operation is replay-safe. Coverage is persisted so the
+web Events provider reports incomplete historical dates as `partial` instead of
+returning an unexplained empty result.
 
 ### Purge Native Waites Observations
 

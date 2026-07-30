@@ -36,6 +36,7 @@ from insy_sensor_data.clustering.model import (
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import connect_observation_store, observation_db_path
 from insy_sensor_data.storage import get_storage_paths
+from insy_sensor_data.store.connection import read_store
 
 
 REGISTRY_SCHEMA_VERSION = 1
@@ -444,11 +445,31 @@ def list_registered_cluster_models(
         clauses.append("source_date <= ?")
         params.append(end_date.isoformat())
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    with connect_observation_store(settings) as connection:
+    with read_store(settings, required_tables=("cluster_model_runs",)) as connection:
         rows = _query_dicts(
             connection,
             f"""
-            SELECT *
+            SELECT
+                model_run_id,
+                source,
+                source_date,
+                feature_space,
+                k,
+                algorithm,
+                random_seed,
+                feature_policy_version,
+                feature_columns_json,
+                scaler_policy,
+                input_snapshot_hash,
+                input_snapshot_row_count,
+                feature_row_count,
+                feature_count,
+                status,
+                created_at,
+                completed_at,
+                artifact_dir,
+                metrics_json,
+                warnings_json
             FROM cluster_model_runs
             {where}
             ORDER BY source_date, feature_space, k, created_at
@@ -1215,10 +1236,30 @@ def _find_model_run(
     if status is not None:
         clauses.append("status = ?")
         params.append(status)
-    with connect_observation_store(settings) as connection:
+    with read_store(settings, required_tables=("cluster_model_runs",)) as connection:
         row = connection.execute(
             f"""
-            SELECT *
+            SELECT
+                model_run_id,
+                source,
+                source_date,
+                feature_space,
+                k,
+                algorithm,
+                random_seed,
+                feature_policy_version,
+                feature_columns_json,
+                scaler_policy,
+                input_snapshot_hash,
+                input_snapshot_row_count,
+                feature_row_count,
+                feature_count,
+                status,
+                created_at,
+                completed_at,
+                artifact_dir,
+                metrics_json,
+                warnings_json
             FROM cluster_model_runs
             WHERE {" AND ".join(clauses)}
             LIMIT 1
@@ -1238,10 +1279,26 @@ def _find_drift_run(
     if status is not None:
         clauses.append("status = ?")
         params.append(status)
-    with connect_observation_store(settings) as connection:
+    with read_store(settings, required_tables=("cluster_drift_runs",)) as connection:
         row = connection.execute(
             f"""
-            SELECT *
+            SELECT
+                drift_run_id,
+                from_model_run_id,
+                to_model_run_id,
+                source,
+                from_date,
+                to_date,
+                feature_space,
+                k,
+                alignment_policy,
+                matched_sensor_count,
+                raw_changed_sensor_count,
+                aligned_changed_sensor_count,
+                status,
+                metrics_json,
+                warnings_json,
+                created_at
             FROM cluster_drift_runs
             WHERE {" AND ".join(clauses)}
             LIMIT 1
@@ -1276,11 +1333,26 @@ def _require_model_run(
 
 
 def _model_assignment_rows(settings: AppSettings, model_run_id: str) -> list[dict[str, Any]]:
-    with connect_observation_store(settings) as connection:
+    with read_store(
+        settings,
+        required_tables=("cluster_model_assignments",),
+    ) as connection:
         rows = _query_dicts(
             connection,
             """
-            SELECT *
+            SELECT
+                model_run_id,
+                installation_point_id,
+                sensor_id,
+                equipment_id,
+                equipment_name,
+                customer_asset_id,
+                installation_point_name,
+                cluster,
+                distance_to_centroid,
+                pca_x,
+                pca_y,
+                features_json
             FROM cluster_model_assignments
             WHERE model_run_id = ?
             ORDER BY CAST(installation_point_id AS INTEGER), installation_point_id
@@ -1309,11 +1381,21 @@ def _model_assignment_rows(settings: AppSettings, model_run_id: str) -> list[dic
 
 
 def _model_centroid_summary_rows(settings: AppSettings, model_run_id: str) -> list[dict[str, Any]]:
-    with connect_observation_store(settings) as connection:
+    with read_store(
+        settings,
+        required_tables=("cluster_model_centroids",),
+    ) as connection:
         rows = _query_dicts(
             connection,
             """
-            SELECT *
+            SELECT
+                model_run_id,
+                cluster,
+                sensor_count,
+                centroid_json,
+                pca_x,
+                pca_y,
+                summary_json
             FROM cluster_model_centroids
             WHERE model_run_id = ?
             ORDER BY cluster
@@ -1332,12 +1414,31 @@ def _model_centroid_summary_rows(settings: AppSettings, model_run_id: str) -> li
 
 
 def _drift_assignment_rows(settings: AppSettings, drift_run_id: str) -> list[dict[str, Any]]:
-    with connect_observation_store(settings) as connection:
+    with read_store(
+        settings,
+        required_tables=(
+            "cluster_drift_assignments",
+            "cluster_drift_runs",
+            "cluster_model_assignments",
+        ),
+    ) as connection:
         rows = _query_dicts(
             connection,
             """
-            SELECT assignment.*, model_rows.equipment_id, model_rows.equipment_name, model_rows.sensor_id,
-                   model_rows.customer_asset_id
+            SELECT
+                assignment.drift_run_id,
+                assignment.installation_point_id,
+                assignment.from_cluster,
+                assignment.to_cluster,
+                assignment.aligned_to_cluster,
+                assignment.status,
+                assignment.raw_changed,
+                assignment.aligned_changed,
+                assignment.distance_delta,
+                model_rows.equipment_id,
+                model_rows.equipment_name,
+                model_rows.sensor_id,
+                model_rows.customer_asset_id
             FROM cluster_drift_assignments AS assignment
             LEFT JOIN cluster_drift_runs AS drift
               ON drift.drift_run_id = assignment.drift_run_id
@@ -1369,11 +1470,19 @@ def _drift_assignment_rows(settings: AppSettings, drift_run_id: str) -> list[dic
 
 
 def _centroid_alignment_for_drift(settings: AppSettings, drift_run_id: str) -> list[dict[str, Any]]:
-    with connect_observation_store(settings) as connection:
+    with read_store(
+        settings,
+        required_tables=("cluster_centroid_alignment",),
+    ) as connection:
         rows = _query_dicts(
             connection,
             """
-            SELECT *
+            SELECT
+                drift_run_id,
+                from_cluster,
+                to_cluster,
+                distance,
+                mapping_confidence
             FROM cluster_centroid_alignment
             WHERE drift_run_id = ?
             ORDER BY from_cluster

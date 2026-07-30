@@ -9,9 +9,9 @@ modules.
 
 ## Current Capabilities
 
-Sprint `0.6.0` contains the primary web read path with compact server-scoped trend
-responses, bounded details, explicit Snapshot/model readiness, and durable Waites
-events:
+Sprint `0.6.1` makes SQLite the operational read authority behind the compact
+`0.6.0` web contracts. It adds explicit store failures, cross-day durable Waites
+event identity, and a maintenance backfill for older action-item dates:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -21,6 +21,10 @@ events:
 - independently bounded trend detail rows through `limit` and `offset`
 - per-date Snapshot and registered-model readiness
 - Waites action items retained through release-mode ingestion
+- cross-day Waites event deduplication with provider status and first/last-seen state
+- persisted event-date coverage, including explicit narrow re-fetch requirements
+- SQLite-backed equipment hierarchy, Snapshot, Trend, Events, and registered-model reads
+- typed missing, migration-required, unavailable, and corrupt-store API failures
 - chronological Snapshot trends with continuous dashed gap connections, point-selected Snapshot dates, coverage badges, and per-sensor diagnostics
 - `.env.example` configuration contract
 - pytest harness
@@ -110,6 +114,7 @@ uv run sensor-data waites validate --source mock --date 2025-07-09
 uv run sensor-data raw verify --source waites --date 2025-07-09
 uv run sensor-data raw compress --source waites --date 2025-07-09
 uv run sensor-data store load-waites --source mock --date 2025-07-09
+uv run sensor-data store backfill-events --source mock
 uv run sensor-data snapshot build --source mock --date 2025-07-09
 uv run sensor-data snapshot build --source mock --date 2025-07-09 --input sqlite
 uv run sensor-data snapshot store --source mock --date 2025-07-09
@@ -256,7 +261,7 @@ Live Waites canary ingestion writes the same raw paths:
 data/raw/waites/date=YYYY-MM-DD/
 ```
 
-Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. Release-mode retention removes high-frequency and replay-only staging rows after verification but preserves `waites_action_items` for the web Events pane. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations. Routine web trend reads use `/api/trends` directly over `sensor_daily_snapshots` and do not write CSV artifacts.
+Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, `waites_installation_point_reference`, and cross-day `waites_events` facts. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. Release-mode retention removes high-frequency and replay-only staging rows after verification while preserving durable Events facts. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations. Normal web reads use SQLite repositories and never silently fall back to CSV or JSON; raw-run and legacy artifact readers remain explicit diagnostics and migration inputs.
 
 ## Maximo History
 

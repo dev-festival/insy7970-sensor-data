@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from insy_sensor_data.artifact_views import load_snapshot_view
+from insy_sensor_data.store.snapshots import load_snapshot_view
 
 
 router = APIRouter(prefix="/api/snapshots", tags=["snapshots"])
@@ -32,6 +32,4 @@ def read_snapshot(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return payload

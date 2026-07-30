@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from insy_sensor_data.artifact_views import load_trend_view
+from insy_sensor_data.services.trends import load_trend_view
 
 
 router = APIRouter(prefix="/api/trends", tags=["trends"])
@@ -51,6 +51,4 @@ def read_trends(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return payload
