@@ -53,8 +53,17 @@
 
     const hasBars = traces.some((trace) => trace.type === "bar");
     const numericX = !hasBars && traces.every((trace) => trace.points.every((point) => point.xNumber !== null));
+    const temporalX = numericX && traces.every(
+      (trace) => trace.points.every((point) => point.xIsDate),
+    );
     const categories = unique(traces.flatMap((trace) => trace.points.map((point) => point.xLabel)));
-    const xDomain = numericX ? paddedDomain(traces.flatMap((trace) => trace.points.map((point) => point.xNumber))) : null;
+    const xDomain = numericX
+      ? configuredDomain(layout.xaxis?.range) || paddedDomain(
+        traces.flatMap((trace) => trace.points.map((point) => point.xNumber)),
+        false,
+        temporalX,
+      )
+      : null;
     const yDomain = paddedDomain(
       traces.flatMap((trace) => trace.points.map((point) => point.y)).concat(hasBars ? [0] : []),
       hasBars,
@@ -73,7 +82,7 @@
       "aria-label": layout.title || "Chart",
     });
 
-    drawFrame(svg, bounds, layout, yDomain, xDomain, categories, numericX, scales);
+    drawFrame(svg, bounds, layout, yDomain, xDomain, categories, numericX, temporalX, scales);
     drawSeries(svg, traces, bounds, scales, categories, hasBars, layout);
     drawLegend(svg, traces, bounds);
     drawTitle(svg, layout.title, bounds);
@@ -99,10 +108,12 @@
           }
           const xRaw = xValues[index] ?? index + 1;
           const xLabel = valueLabel(xRaw);
+          const xDateNumber = isoDateNumber(xRaw);
           points.push({
             xRaw,
             xLabel,
-            xNumber: toNumber(xRaw),
+            xNumber: xDateNumber ?? toNumber(xRaw),
+            xIsDate: xDateNumber !== null,
             y,
             label: valueLabel(valueAt(trace.text, index)) || `${xLabel}: ${formatNumber(y)}`,
             color: colorAt(trace.marker?.color, index) || baseColor,
@@ -111,18 +122,22 @@
             outlineColor: colorAt(trace.marker?.line?.color, index) || trace.marker?.line?.color || "#18202a",
           });
         }
+        if (trace.timeSeries) {
+          points.sort((left, right) => (left.xNumber ?? 0) - (right.xNumber ?? 0));
+        }
         return {
           type: trace.type || "scatter",
           mode: trace.mode || "markers",
           name: trace.name || "",
           color: baseColor,
           points,
+          timeSeries: trace.timeSeries === true,
         };
       })
       .filter((trace) => trace.points.length);
   }
 
-  function drawFrame(svg, bounds, layout, yDomain, xDomain, categories, numericX, scales) {
+  function drawFrame(svg, bounds, layout, yDomain, xDomain, categories, numericX, temporalX, scales) {
     const yTicks = ticks(yDomain[0], yDomain[1], 5);
     yTicks.forEach((tick) => {
       const y = scales.y(tick);
@@ -176,7 +191,9 @@
         y: bounds.bottom + 18,
         "text-anchor": "middle",
       });
-      label.textContent = numericX ? formatNumber(tick) : shorten(axisLabel(tick), 18);
+      label.textContent = numericX
+        ? temporalX ? formatDateTick(tick) : formatNumber(tick)
+        : shorten(axisLabel(tick), 18);
       svg.append(label);
     });
 
@@ -248,17 +265,22 @@
     }));
 
     if (trace.mode.includes("lines") && coordinates.length > 1) {
-      svg.append(svgElement("polyline", {
-        class: "chart-line",
-        points: coordinates.map((point) => `${point.x},${point.y}`).join(" "),
-        fill: "none",
-        stroke: trace.color,
-      }));
+      if (trace.timeSeries) {
+        drawTemporalSpline(svg, coordinates, trace);
+      } else {
+        svg.append(svgElement("polyline", {
+          class: "chart-line",
+          points: coordinates.map((point) => `${point.x},${point.y}`).join(" "),
+          fill: "none",
+          stroke: trace.color,
+        }));
+      }
     }
 
     if (trace.mode.includes("markers") || !trace.mode.includes("lines")) {
       coordinates.forEach(({ point, x, y }) => {
         const selected = point.outlineWidth > 1;
+        const activatable = typeof layout.onPointActivate === "function";
         const circle = svgElement("circle", {
           class: selected ? "chart-point is-selected" : "chart-point",
           cx: x,
@@ -270,9 +292,97 @@
           tabindex: "0",
         });
         circle.append(titleElement(pointTitle(trace, point, layout)));
+        if (activatable) {
+          circle.setAttribute("role", "button");
+          circle.setAttribute("aria-label", `Select snapshot date ${point.xLabel}`);
+          const activate = () => layout.onPointActivate(point.xLabel);
+          circle.addEventListener("click", activate);
+          circle.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              activate();
+            }
+          });
+        }
         svg.append(circle);
       });
     }
+  }
+
+  function drawTemporalSpline(svg, coordinates, trace) {
+    const tangents = monotoneTangents(coordinates);
+    for (let index = 1; index < coordinates.length; index += 1) {
+      const previous = coordinates[index - 1];
+      const current = coordinates[index];
+      const gap = current.point.xNumber - previous.point.xNumber > 24 * 60 * 60 * 1000;
+      svg.append(svgElement("path", {
+        class: gap ? "chart-line chart-line-gap" : "chart-line",
+        d: splineSegmentPath(previous, current, tangents[index - 1], tangents[index]),
+        fill: "none",
+        stroke: trace.color,
+      }));
+    }
+  }
+
+  function monotoneTangents(coordinates) {
+    if (coordinates.length < 2) {
+      return [0];
+    }
+    const widths = [];
+    const slopes = [];
+    for (let index = 0; index < coordinates.length - 1; index += 1) {
+      const width = coordinates[index + 1].x - coordinates[index].x;
+      widths.push(width);
+      slopes.push(width > 0 ? (coordinates[index + 1].y - coordinates[index].y) / width : 0);
+    }
+    const tangents = Array(coordinates.length).fill(0);
+    tangents[0] = slopes[0];
+    tangents[tangents.length - 1] = slopes[slopes.length - 1];
+    for (let index = 1; index < tangents.length - 1; index += 1) {
+      const leftSlope = slopes[index - 1];
+      const rightSlope = slopes[index];
+      if (leftSlope === 0 || rightSlope === 0 || leftSlope * rightSlope < 0) {
+        tangents[index] = 0;
+        continue;
+      }
+      const leftWidth = widths[index - 1];
+      const rightWidth = widths[index];
+      const firstWeight = 2 * rightWidth + leftWidth;
+      const secondWeight = rightWidth + 2 * leftWidth;
+      tangents[index] = (firstWeight + secondWeight) / (
+        firstWeight / leftSlope + secondWeight / rightSlope
+      );
+    }
+    slopes.forEach((slope, index) => {
+      if (slope === 0) {
+        tangents[index] = 0;
+        tangents[index + 1] = 0;
+        return;
+      }
+      const leftRatio = tangents[index] / slope;
+      const rightRatio = tangents[index + 1] / slope;
+      const sum = leftRatio ** 2 + rightRatio ** 2;
+      if (sum > 9) {
+        const scale = 3 / Math.sqrt(sum);
+        tangents[index] = scale * leftRatio * slope;
+        tangents[index + 1] = scale * rightRatio * slope;
+      }
+    });
+    return tangents;
+  }
+
+  function splineSegmentPath(from, to, fromTangent, toTangent) {
+    const width = to.x - from.x;
+    if (width <= 0) {
+      return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+    }
+    const controlWidth = width / 3;
+    return [
+      `M ${from.x} ${from.y}`,
+      `C ${from.x + controlWidth} ${from.y + fromTangent * controlWidth}`,
+      `${to.x - controlWidth} ${to.y - toTangent * controlWidth}`,
+      `${to.x} ${to.y}`,
+    ].join(" ");
   }
 
   function drawLegend(svg, traces, bounds) {
@@ -344,7 +454,18 @@
     return { top: 48, right: 22, bottom: 54, left: 58 };
   }
 
-  function paddedDomain(values, includeZero) {
+  function configuredDomain(range) {
+    if (!Array.isArray(range) || range.length !== 2) {
+      return null;
+    }
+    const values = range.map((value) => isoDateNumber(value) ?? toNumber(value));
+    if (values.some((value) => value === null) || values[0] === values[1]) {
+      return null;
+    }
+    return values[0] < values[1] ? values : [values[1], values[0]];
+  }
+
+  function paddedDomain(values, includeZero, temporal = false) {
     const numericValues = values.map(toNumber).filter((value) => value !== null);
     if (includeZero) {
       numericValues.push(0);
@@ -359,7 +480,7 @@
       max = Math.max(max, 0);
     }
     if (min === max) {
-      const pad = Math.abs(min || 1) * 0.2;
+      const pad = temporal ? 12 * 60 * 60 * 1000 : Math.abs(min || 1) * 0.2;
       return [min - pad, max + pad];
     }
     const pad = (max - min) * 0.08;
@@ -423,6 +544,27 @@
     }
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
+  }
+
+  function isoDateNumber(value) {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+      return null;
+    }
+    return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  }
+
+  function formatDateTick(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return formatNumber(value);
+    }
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${month}/${day}`;
   }
 
   function valueLabel(value) {

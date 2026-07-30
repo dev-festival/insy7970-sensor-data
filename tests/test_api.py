@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from insy_sensor_data.api.main import create_app
+from insy_sensor_data.artifact_views import _trend_coverage
 from insy_sensor_data.clustering.registry import build_cluster_model_grid
 from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
@@ -51,6 +52,9 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert 'id="snapshot-cluster-chart"' in response.text
     assert 'id="snapshot-events-detail"' in response.text
     assert 'id="snapshot-measurements-detail"' in response.text
+    assert 'id="metric-coverage"' in response.text
+    assert 'id="snapshot-diagnostics-head"' in response.text
+    assert 'id="snapshot-diagnostics-body"' in response.text
     assert 'data-view="cluster"' in response.text
     assert "/static/charts.js" in response.text
     assert "plotly" not in response.text.lower()
@@ -342,6 +346,67 @@ def test_snapshot_review_endpoint_composes_sensor_scope(tmp_path: Path) -> None:
     assert payload["events"]["rows"][0]["event_id"] == "9001"
     assert payload["measurements"]["row_count"] == 1
     assert "rms_vel_mean_x" in payload["measurements"]["columns"]
+    assert payload["measurements"]["snapshot_date"] == "2025-07-09"
+
+
+def test_snapshot_review_reports_selected_field_coverage_and_diagnostics(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+
+    response = client.get(
+        "/api/snapshot-review/2025-07-11"
+        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "&scope=sensor&installation_point_id=201305&metric=rms_vel&dimension=x"
+    )
+
+    assert response.status_code == 200
+    trend = response.json()["trend"]
+    assert trend["value_field"] == "rms_vel_mean_x"
+    assert trend["row_count"] == 3
+    assert trend["coverage"] == {
+        "value_field": "rms_vel_mean_x",
+        "expected_value_count": 3,
+        "observed_value_count": 2,
+        "coverage_percent": 66.7,
+        "sensors": [
+            {
+                "installation_point_id": "201305",
+                "sensor_name": "Motor - NDE",
+                "expected_value_count": 3,
+                "observed_value_count": 2,
+                "coverage_percent": 66.7,
+                "missing_dates": ["2025-07-10"],
+            }
+        ],
+    }
+
+
+def test_snapshot_review_coverage_counts_zero_as_an_observation() -> None:
+    coverage = _trend_coverage(
+        [
+            {"date": "2025-07-09", "installation_point_id": "sensor-a", "rms_vel_mean_x": 0},
+            {"date": "2025-07-10", "installation_point_id": "sensor-a", "rms_vel_mean_x": ""},
+        ],
+        "rms_vel_mean_x",
+    )
+
+    assert coverage["observed_value_count"] == 1
+    assert coverage["coverage_percent"] == 50.0
+    assert coverage["sensors"][0]["missing_dates"] == ["2025-07-10"]
+
+
+def test_snapshot_review_rejects_a_snapshot_date_outside_the_selected_range(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+
+    response = client.get(
+        "/api/snapshot-review/2025-07-11?source=mock&start_date=2025-07-09&end_date=2025-07-10"
+    )
+
+    assert response.status_code == 422
+    assert "snapshot date must be within" in response.json()["detail"]
 
 
 def test_snapshot_review_endpoint_composes_equipment_scope(tmp_path: Path) -> None:

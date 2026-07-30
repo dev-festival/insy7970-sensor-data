@@ -104,6 +104,38 @@ label span,
   text-transform: uppercase;
 }
 
+.metric-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.metric-coverage {
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1.1;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.metric-coverage.is-good {
+  background: #e2f3ec;
+  color: #176044;
+}
+
+.metric-coverage.is-partial {
+  background: #fff1d6;
+  color: #8c5b12;
+}
+
+.metric-coverage.is-sparse {
+  background: #fbe5e8;
+  color: #9e2f40;
+}
+
 select,
 input {
   width: 100%;
@@ -614,6 +646,26 @@ input {
   overflow: auto;
 }
 
+.snapshot-diagnostics {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid #edf1f4;
+  padding: 10px;
+}
+
+.snapshot-diagnostics h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.snapshot-diagnostics-table-shell {
+  max-height: 180px;
+  border: 1px solid #edf1f4;
+  border-radius: 4px;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(120px, 1fr));
@@ -704,6 +756,11 @@ input {
   stroke-width: 2;
   stroke-linejoin: round;
   stroke-linecap: round;
+}
+
+.chart-line.chart-line-gap {
+  opacity: 0.5;
+  stroke-dasharray: 4 4;
 }
 
 .chart-bar,

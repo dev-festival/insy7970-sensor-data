@@ -60,6 +60,7 @@ const elements = {
   kSelect: document.querySelector("#k-select"),
   dateControl: document.querySelector("#date-control"),
   metricControl: document.querySelector("#metric-control"),
+  metricCoverage: document.querySelector("#metric-coverage"),
   dimensionControl: document.querySelector("#dimension-control"),
   kControl: document.querySelector("#k-control"),
   statusLine: document.querySelector("#status-line"),
@@ -78,6 +79,8 @@ const elements = {
   snapshotMeasurementsStatus: document.querySelector("#snapshot-measurements-status"),
   snapshotMeasurementsHead: document.querySelector("#snapshot-measurements-head"),
   snapshotMeasurementsBody: document.querySelector("#snapshot-measurements-body"),
+  snapshotDiagnosticsHead: document.querySelector("#snapshot-diagnostics-head"),
+  snapshotDiagnosticsBody: document.querySelector("#snapshot-diagnostics-body"),
   summaryGrid: document.querySelector("#summary-grid"),
   reviewMain: document.querySelector(".review-main"),
   workspace: document.querySelector("#workspace"),
@@ -119,6 +122,7 @@ function bindEvents() {
   elements.sourceSelect.addEventListener("change", async () => {
     updateState({ source: elements.sourceSelect.value }, false);
     normalizeState();
+    resetSnapshotDateToRangeEnd();
     updateUrlFromState();
     updateControlsFromState();
     await loadEquipmentTree();
@@ -128,6 +132,7 @@ function bindEvents() {
   elements.startDateSelect.addEventListener("change", async () => {
     updateState({ startDate: elements.startDateSelect.value }, false);
     normalizeDateRange("start");
+    resetSnapshotDateToRangeEnd();
     updateUrlFromState();
     updateControlsFromState();
     await loadEquipmentTree();
@@ -137,6 +142,7 @@ function bindEvents() {
   elements.endDateSelect.addEventListener("change", async () => {
     updateState({ endDate: elements.endDateSelect.value }, false);
     normalizeDateRange("end");
+    resetSnapshotDateToRangeEnd();
     updateUrlFromState();
     updateControlsFromState();
     await loadEquipmentTree();
@@ -291,6 +297,10 @@ function normalizeDateRange(changedEdge) {
   } else {
     state.startDate = state.endDate;
   }
+}
+
+function resetSnapshotDateToRangeEnd() {
+  state.date = state.endDate || state.startDate || "";
 }
 
 function updateControlsFromState() {
@@ -527,7 +537,8 @@ async function renderSnapshotReview() {
   renderSnapshotTrendPanel(payload.trend || {});
   renderSnapshotClusterPanel(payload.cluster_context || {});
   renderSnapshotEventsPanel(payload.events || {});
-  renderSnapshotMeasurements(payload.measurements || {});
+  renderSnapshotMeasurements(payload.measurements || {}, payload.date);
+  renderSnapshotDiagnostics(payload.trend?.coverage || {});
 }
 
 function renderSnapshotContext(payload) {
@@ -538,7 +549,10 @@ function renderSnapshotContext(payload) {
   const heading = document.createElement("h2");
   heading.textContent = context.equipment_name || context.label || payload.scope?.label || "Snapshot review";
   const subheading = document.createElement("p");
-  subheading.textContent = context.sensor_name || `${context.sensor_count || 0} sensors`;
+  subheading.textContent = [
+    context.sensor_name || `${context.sensor_count || 0} sensors`,
+    payload.date ? `Snapshot date ${payload.date}` : "",
+  ].filter(Boolean).join(" | ");
   title.append(heading, subheading);
 
   const stats = document.createElement("div");
@@ -553,15 +567,22 @@ function renderSnapshotContext(payload) {
 }
 
 function renderSnapshotTrendPanel(trend) {
+  const coverage = trend.coverage || {};
   elements.snapshotTrendStatus.textContent = trend.status === "available"
-    ? `${trend.row_count || 0} scoped rows`
+    ? `${trend.row_count || 0} scoped rows | ${coverage.observed_value_count || 0} readings`
     : trend.message || "No trend data for this range";
+  renderMetricCoverage(trend.status === "available" ? coverage : null);
   const field = trend.value_field || metricField(selectedMetric(), "mean");
   const traces = snapshotTrendTraces(trend, field);
   plotInto(
     elements.snapshotTrendChart,
     traces,
-    { title: selectedMetric().label, xaxis: { title: "Date" }, yaxis: { title: selectedMetric().unit } },
+    {
+      title: selectedMetric().label,
+      xaxis: { title: "Date", range: [state.startDate, state.endDate] },
+      yaxis: { title: selectedMetric().unit },
+      onPointActivate: selectSnapshotDate,
+    },
   );
 }
 
@@ -611,17 +632,65 @@ function renderSnapshotEventsPanel(events) {
   );
 }
 
-function renderSnapshotMeasurements(measurements) {
-  elements.snapshotMeasurementsStatus.textContent = `${measurements.row_count || 0} measurement rows`;
+function renderSnapshotMeasurements(measurements, snapshotDate) {
+  const selectedDate = measurements.snapshot_date || snapshotDate;
+  elements.snapshotMeasurementsStatus.textContent = [
+    `${measurements.row_count || 0} measurement rows`,
+    selectedDate ? `Snapshot ${selectedDate}` : "",
+  ].filter(Boolean).join(" | ");
   renderTableInto(
     elements.snapshotMeasurementsHead,
     elements.snapshotMeasurementsBody,
     measurements.rows || [],
     measurements.columns || [],
+    { emptyText: "No data" },
   );
 }
 
+function renderSnapshotDiagnostics(coverage) {
+  const rows = (coverage.sensors || []).map((sensor) => ({
+    sensor_name: sensor.sensor_name || sensor.installation_point_id || "Unknown sensor",
+    observed_days: sensor.observed_value_count || 0,
+    expected_days: sensor.expected_value_count || 0,
+    coverage: `${formatCoveragePercent(sensor.coverage_percent)}%`,
+    missing_dates: (sensor.missing_dates || []).join(", ") || "None",
+  }));
+  renderTableInto(
+    elements.snapshotDiagnosticsHead,
+    elements.snapshotDiagnosticsBody,
+    rows,
+    ["sensor_name", "observed_days", "expected_days", "coverage", "missing_dates"],
+  );
+}
+
+function renderMetricCoverage(coverage) {
+  if (!elements.metricCoverage) {
+    return;
+  }
+  const expected = numeric(coverage?.expected_value_count);
+  const percent = numeric(coverage?.coverage_percent);
+  if (expected === null || expected <= 0 || percent === null) {
+    elements.metricCoverage.hidden = true;
+    elements.metricCoverage.textContent = "";
+    elements.metricCoverage.className = "metric-coverage";
+    return;
+  }
+  const stateName = percent >= 80 ? "good" : percent >= 50 ? "partial" : "sparse";
+  elements.metricCoverage.hidden = false;
+  elements.metricCoverage.textContent = `${formatCoveragePercent(percent)}% coverage`;
+  elements.metricCoverage.className = `metric-coverage is-${stateName}`;
+}
+
+function formatCoveragePercent(value) {
+  const percent = numeric(value);
+  if (percent === null) {
+    return "0";
+  }
+  return Number.isInteger(percent) ? String(percent) : percent.toFixed(1);
+}
+
 async function renderTrend() {
+  renderMetricCoverage(null);
   const params = scopedParams();
   params.set("start_date", state.startDate);
   params.set("end_date", state.endDate);
@@ -640,8 +709,12 @@ async function renderTrend() {
   ]);
   const aggregates = aggregateTrendRows(sensorRows, meanField);
   plotChart(
-    [lineTrace(aggregates, meanField, metric.label, "#287271")].filter(Boolean),
-    { title: `${metric.label} Trend`, xaxis: { title: "Date" }, yaxis: { title: metric.unit } },
+    [lineTrace(aggregates, meanField, metric.label, "#287271", { timeSeries: true })].filter(Boolean),
+    {
+      title: `${metric.label} Trend`,
+      xaxis: { title: "Date", range: [state.startDate, state.endDate] },
+      yaxis: { title: metric.unit },
+    },
   );
   renderTable(sensorRows, [
     "date",
@@ -849,6 +922,14 @@ function snapshotReviewParams() {
 
 function snapshotDate() {
   return state.date || state.endDate || state.startDate;
+}
+
+function selectSnapshotDate(selectedDate) {
+  if (state.view !== "snapshot" || !datesInRange().includes(selectedDate) || state.date === selectedDate) {
+    return;
+  }
+  updateState({ date: selectedDate });
+  renderActiveView();
 }
 
 function scopedParams() {
@@ -1361,9 +1442,10 @@ function renderTable(rows, columns) {
   renderTableInto(elements.tableHead, elements.tableBody, rows, columns);
 }
 
-function renderTableInto(head, body, rows, columns) {
+function renderTableInto(head, body, rows, columns, options = {}) {
   const visibleRows = rows.slice(0, 100);
   const visibleColumns = columns.filter((column) => visibleRows.some((row) => row[column] !== undefined));
+  const emptyText = options.emptyText ?? "";
   head.replaceChildren();
   body.replaceChildren();
   if (!visibleColumns.length) {
@@ -1381,7 +1463,7 @@ function renderTableInto(head, body, rows, columns) {
     const tr = document.createElement("tr");
     visibleColumns.forEach((column) => {
       const td = document.createElement("td");
-      td.textContent = formatCell(row[column]);
+      td.textContent = formatCell(row[column], emptyText);
       tr.append(td);
     });
     body.append(tr);
@@ -1458,6 +1540,9 @@ function clearView() {
   elements.snapshotMeasurementsStatus.textContent = "";
   elements.snapshotMeasurementsHead.replaceChildren();
   elements.snapshotMeasurementsBody.replaceChildren();
+  elements.snapshotDiagnosticsHead.replaceChildren();
+  elements.snapshotDiagnosticsBody.replaceChildren();
+  renderMetricCoverage(null);
 }
 
 function showSnapshotSurface(showSnapshot) {
@@ -1482,7 +1567,7 @@ function aggregateTrendRows(rows, field) {
     .map(([date, dateRows]) => ({ date, [field]: average(dateRows, field) }));
 }
 
-function lineTrace(rows, field, name, color) {
+function lineTrace(rows, field, name, color, options = {}) {
   if (!rows.some((row) => numeric(row[field]) !== null)) {
     return null;
   }
@@ -1493,6 +1578,14 @@ function lineTrace(rows, field, name, color) {
     x: rows.map((row) => row.date),
     y: rows.map((row) => numeric(row[field])),
     line: { color },
+    marker: {
+      size: rows.map((row) => row.date === options.selectedDate ? 12 : 8),
+      line: {
+        width: rows.map((row) => row.date === options.selectedDate ? 2 : 0),
+        color: "#18202a",
+      },
+    },
+    timeSeries: options.timeSeries === true,
   };
 }
 
@@ -1503,15 +1596,22 @@ function snapshotTrendTraces(trend, field) {
   const palette = ["#287271", "#5d7f9f", "#a64253", "#8a6f3d", "#59656f", "#3d8068"];
   if (["all", "asset_tree"].includes(state.scopeType) && trend.equipment_rows?.length) {
     const rows = aggregateTrendRows(trend.equipment_rows, field);
-    const trace = lineTrace(rows, field, "Equipment average", "#287271");
+    const trace = lineTrace(rows, field, "Equipment average", "#287271", {
+      selectedDate: state.date,
+      timeSeries: true,
+    });
     return trace ? [trace] : [];
   }
   const groups = groupBy(trend.sensor_rows || [], "installation_point_id");
   return Object.entries(groups)
     .slice(0, 12)
     .map(([installationId, rows], index) => {
-      const label = rows[0]?.installation_point_name || rows[0]?.sensor_id || installationId;
-      return lineTrace(rows, field, label, palette[index % palette.length]);
+      const chronologicalRows = rows.slice().sort((left, right) => String(left.date).localeCompare(String(right.date)));
+      const label = chronologicalRows[0]?.installation_point_name || chronologicalRows[0]?.sensor_id || installationId;
+      return lineTrace(chronologicalRows, field, label, palette[index % palette.length], {
+        selectedDate: state.date,
+        timeSeries: true,
+      });
     })
     .filter(Boolean);
 }
@@ -1609,12 +1709,15 @@ function formatNumber(value) {
   return parsed === null ? "n/a" : parsed.toFixed(3);
 }
 
-function formatCell(value) {
+function formatCell(value, emptyText = "") {
+  if (value === null || value === undefined || value === "") {
+    return emptyText;
+  }
   const parsed = numeric(value);
   if (parsed !== null && String(value).length > 8) {
     return parsed.toFixed(4);
   }
-  return value ?? "";
+  return value;
 }
 
 function escapeHtml(value) {

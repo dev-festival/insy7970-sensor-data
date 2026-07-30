@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from math import isfinite
 from pathlib import Path
 from typing import Any
 import re
@@ -610,6 +611,8 @@ def load_snapshot_review_view(
     effective_end = end_date or run_date
     if effective_end < effective_start:
         raise ValueError("end_date must be on or after start_date")
+    if run_date < effective_start or run_date > effective_end:
+        raise ValueError("snapshot date must be within the selected start_date and end_date range")
 
     payload = load_snapshot(settings, run_date)
     snapshot_source = str(payload["metadata"].get("source") or "")
@@ -672,6 +675,7 @@ def load_snapshot_review_view(
         ),
         "measurements": _snapshot_review_measurements(
             scoped_rows,
+            run_date=run_date,
             metric=selected_metric,
             dimension=selected_dimension,
             stat=selected_stat,
@@ -1003,6 +1007,7 @@ def _snapshot_review_trend(
             "status": "missing",
             "message": str(exc),
             "value_field": value_field,
+            "coverage": _trend_coverage([], value_field),
             "sensor_rows": [],
             "equipment_rows": [],
             "rows": [],
@@ -1013,6 +1018,7 @@ def _snapshot_review_trend(
         "status": "available",
         "value_field": value_field,
         "row_count": len(sensor_rows),
+        "coverage": _trend_coverage(sensor_rows, value_field),
         "sensor_rows": sensor_rows,
         "equipment_rows": equipment_rows,
         "rows": sensor_rows,
@@ -1177,6 +1183,7 @@ def _snapshot_maximo_events(
 
 def _snapshot_review_measurements(
     rows: list[dict[str, Any]],
+    run_date: date,
     metric: str,
     dimension: str,
     stat: str,
@@ -1196,10 +1203,78 @@ def _snapshot_review_measurements(
         measurement_rows.append(measurement)
     return {
         "status": "available",
+        "snapshot_date": run_date.isoformat(),
         "row_count": len(measurement_rows),
         "columns": columns,
         "rows": measurement_rows,
     }
+
+
+def _trend_coverage(rows: list[dict[str, Any]], value_field: str) -> dict[str, Any]:
+    expected_value_count = len(rows)
+    observed_value_count = sum(
+        1
+        for row in rows
+        if _finite_observation(row.get(value_field)) is not None
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        installation_point_id = _text_id(row.get("installation_point_id"))
+        sensor_key = installation_point_id or _text_id(row.get("sensor_id")) or "unknown"
+        grouped.setdefault(sensor_key, []).append(row)
+
+    sensors = []
+    for sensor_key, sensor_rows in sorted(grouped.items()):
+        expected_sensor_count = len(sensor_rows)
+        observed_sensor_count = sum(
+            1
+            for row in sensor_rows
+            if _finite_observation(row.get(value_field)) is not None
+        )
+        missing_dates = sorted(
+            _text_id(row.get("date"))
+            for row in sensor_rows
+            if _finite_observation(row.get(value_field)) is None and _text_id(row.get("date"))
+        )
+        first = sensor_rows[0] if sensor_rows else {}
+        sensors.append(
+            {
+                "installation_point_id": _text_id(first.get("installation_point_id")),
+                "sensor_name": (
+                    first.get("installation_point_name")
+                    or first.get("sensor_name")
+                    or sensor_key
+                ),
+                "expected_value_count": expected_sensor_count,
+                "observed_value_count": observed_sensor_count,
+                "coverage_percent": _coverage_percent(observed_sensor_count, expected_sensor_count),
+                "missing_dates": missing_dates,
+            }
+        )
+
+    return {
+        "value_field": value_field,
+        "expected_value_count": expected_value_count,
+        "observed_value_count": observed_value_count,
+        "coverage_percent": _coverage_percent(observed_value_count, expected_value_count),
+        "sensors": sensors,
+    }
+
+
+def _finite_observation(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if isfinite(numeric) else None
+
+
+def _coverage_percent(observed_count: int, expected_count: int) -> float:
+    if not expected_count:
+        return 0.0
+    return round((observed_count / expected_count) * 100, 1)
 
 
 def _filter_rows_for_review_scope(

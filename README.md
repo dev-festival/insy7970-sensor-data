@@ -6,12 +6,13 @@ The project is intentionally built around small, composable tools. The CLI is th
 
 ## Current Capabilities
 
-Sprint `0.5.0` adds bounded Maximo work-order history to the Snapshot review workspace over the SQLite trend and registered-model layers:
+Sprint `0.5.1` adds sparse-data-aware Snapshot trends over the bounded Maximo work-order history, SQLite trend, and registered-model layers:
 
 - uv-managed Python package
 - Typer CLI entry point
 - FastAPI app factory and `/health`
 - static browser review dashboard
+- chronological Snapshot trends with continuous dashed gap connections, point-selected Snapshot dates, coverage badges, and per-sensor diagnostics
 - `.env.example` configuration contract
 - pytest harness
 - mock Waites fixtures
@@ -195,7 +196,7 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing daily snapshots, optional trend artifacts, registered SQLite cluster models, and bounded Maximo work-order lookups in sprint `0.5.0`. Build snapshots first; the Trend tab reads from `sensor_daily_snapshots` on request and falls back to trend artifacts only when SQLite daily rows are unavailable. Maximo is queried only when an Asset Tree, equipment, or sensor is selected; All Equipment never initiates a Maximo query. Run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser.
+The web and API are read-only over existing daily snapshots, optional trend artifacts, registered SQLite cluster models, and bounded Maximo work-order lookups in sprint `0.5.1`. Snapshot trend coverage reports finite values for the selected metric field without imputing missing values; clicking an observed trend point selects that Snapshot date. Build snapshots first; the Trend tab reads from `sensor_daily_snapshots` on request and falls back to trend artifacts only when SQLite daily rows are unavailable. Maximo is queried only when an Asset Tree, equipment, or sensor is selected; All Equipment never initiates a Maximo query. Run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser.
 
 ## Source API
 

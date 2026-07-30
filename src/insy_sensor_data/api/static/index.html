@@ -64,7 +64,10 @@
                 <select id="date-select"></select>
               </label>
               <label id="metric-control">
-                <span>Metric</span>
+                <span class="metric-label-row">
+                  <span>Metric</span>
+                  <output id="metric-coverage" class="metric-coverage" hidden></output>
+                </span>
                 <select id="metric-select"></select>
               </label>
               <label id="dimension-control">
@@ -125,6 +128,15 @@
                       <tbody id="snapshot-measurements-body"></tbody>
                     </table>
                   </div>
+                  <section class="snapshot-diagnostics" aria-labelledby="snapshot-diagnostics-heading">
+                    <h3 id="snapshot-diagnostics-heading">Snapshot Diagnostics</h3>
+                    <div class="snapshot-table-shell snapshot-diagnostics-table-shell">
+                      <table>
+                        <thead id="snapshot-diagnostics-head"></thead>
+                        <tbody id="snapshot-diagnostics-body"></tbody>
+                      </table>
+                    </div>
+                  </section>
                 </details>
               </div>
             </div>

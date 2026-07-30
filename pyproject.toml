@@ -1,11 +1,12 @@
 [project]
 name = "insy7970-sensor-data"
-version = "0.5.0a0"
+version = "0.5.1a0"
 description = "Lightweight vibration monitoring service for Waites sensor data and Maximo maintenance history."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115,<1.0",
+    "pdoc>=16.0.0",
     "pyodbc>=5.2,<6.0",
     "truststore>=0.10.4",
     "typer>=0.16,<1.0",
