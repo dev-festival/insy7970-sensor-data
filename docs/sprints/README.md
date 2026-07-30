@@ -34,10 +34,47 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.4.x](0.4.x-on-demand-source-drilldown.md) | On-demand source drilldown | Temporary live source detail for selected dashboard points without permanent raw storage |
 | [0.5.0](0.5.0-maximo-integration.md) | Maximo integration | Asset maintenance records aligned to Waites equipment by asset number |
 | [0.5.1](0.5.1-snapshot-trend-debugging.md) | Snapshot trend debugging | Chronological sparse-data trends, point-selected snapshots, coverage, and diagnostics |
+| [0.6.0](0.6.0-web-path-containment.md) | Web path containment | Compact server-scoped responses, explicit readiness, and immediate protection of durable Waites events |
+| [0.6.1](0.6.1-durable-facts-and-query-boundary.md) | Durable facts and query boundary | SQLite-backed operational repositories with explicit availability and no silent file fallback |
+| [0.6.2](0.6.2-single-operational-store.md) | Single operational store | Fixed daily schema, direct durable-fact ingestion, and explicit exports instead of routine file mirrors |
+| [0.6.3](0.6.3-registered-model-convergence.md) | Registered model convergence | One store-backed model pipeline with versioned readiness and gap-tolerant drift |
+| [0.6.4](0.6.4-web-workflow-reshaping.md) | Web workflow reshaping | Review, Fleet Trends, and Drift workflows over reduced browser state |
+| [0.6.5](0.6.5-admin-cli-contraction.md) | Admin CLI contraction | Five operator-oriented commands for serving, synchronization, rebuild, diagnosis, and export |
+| [0.6.6](0.6.6-legacy-retirement-and-release-hardening.md) | Legacy retirement and release hardening | Recoverable removal of redundant storage, code, commands, and documentation |
+
+## 0.6.x Reshaping Phase
+
+The `0.6.x` sequence is an ordered migration, not seven independent feature sprints:
+
+```text
+contain the live web path
+  -> establish durable query boundaries
+  -> consolidate operational writes
+  -> converge registered models
+  -> reshape browser workflows
+  -> contract the admin CLI
+  -> retire compatibility paths
+```
+
+Each sprint keeps the legacy path needed to roll back until its replacement has
+passed parity. Historical files and tables are not deleted before `0.6.6`, and that
+cleanup is dry-run-first, manifest-driven, backed up, and explicitly confirmed.
+
+The phase deliberately defers user profiles, authentication, scheduling, caching,
+and deployment expansion. Adding those features before the data and request paths
+are consolidated would make the migration harder and preserve the wrong
+abstractions.
 
 ## Sprint Style
 
-Each sprint should leave the repo runnable by someone else. Prefer CLI commands, plain files, fixture-backed tests, and narrow modules over large coupled flows.
+Each sprint should leave the repo runnable by someone else. Prefer fixture-backed
+tests, narrow modules, observable state, and recoverable migrations over large
+coupled flows.
+
+From `0.6.0` forward, FastAPI and the browser are the primary product surface. The
+CLI is a supporting administration, repair, diagnosis, and export surface. SQLite
+is the operational data authority; plain files remain appropriate for temporary raw
+evidence and explicitly requested exports, not parallel application state.
 
 The named sprints are stable milestones. Smaller `0.1.x` or `0.2.x` implementation checkpoints are expected when contracts, fixtures, or tests need hardening before the next milestone. Live data should enter first as a narrow canary, while mock data remains the default test substrate.
 

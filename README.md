@@ -276,3 +276,4 @@ Tests should run in mock mode without API keys, ODBC drivers, DB2 access, or pla
 - [Grand Design](docs/GRAND_DESIGN.md)
 - [Mock Data Contract](docs/MOCK_DATA_CONTRACT.md)
 - [Sprint Plan](docs/sprints/README.md)
+- [0.6.x Reshaping Phase](docs/sprints/README.md#06x-reshaping-phase)

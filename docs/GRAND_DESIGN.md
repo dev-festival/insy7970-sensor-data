@@ -2,6 +2,14 @@
 
 This document keeps the project centered as implementation moves across sprints, chats, and development sessions. When a design choice is unclear, prefer the option that keeps the system small, observable, file-friendly, and easy to run from the command line.
 
+> **0.6.x roadmap note:** The [0.6.x Reshaping Phase](sprints/README.md#06x-reshaping-phase)
+> makes FastAPI and the browser the primary product surface, SQLite the operational
+> data authority, and the CLI a supporting administration surface. Where the
+> `0.6.0` through `0.6.6` sprint specifications conflict with the earlier
+> CLI-canonical or artifact-backbone guidance below, the reshaping specifications
+> govern the migration. This document will be fully reconciled in sprint `0.6.6`
+> after compatibility paths have been retired.
+
 ## Product Aim
 
 Build a lightweight vibration monitoring service that combines Waites sensor readings with Maximo maintenance history. The system should help users review vibration trends by equipment and sensor, cluster sensors by measured behavior, inspect maintenance records for aligned assets, and snapshot cluster drift over time.
