@@ -23,3 +23,4 @@ app.db
 
 #Dev
 .coverage
+/docs/api
