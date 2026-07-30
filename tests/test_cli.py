@@ -384,9 +384,10 @@ def test_cli_store_load_waites_and_sqlite_snapshot(tmp_path: Path) -> None:
         ],
     )
     assert purge_result.exit_code == 0
-    assert json.loads(purge_result.stdout)["rows_deleted"] == 57
+    assert json.loads(purge_result.stdout)["rows_deleted"] == 53
     assert _sqlite_count(data_dir, "waites_rms_observations") == 0
     assert _sqlite_count(data_dir, "waites_installation_points") == 0
+    assert _sqlite_count(data_dir, "waites_action_items") == 4
     assert _sqlite_count(data_dir, "sensor_daily_snapshots") == 9
     assert _sqlite_count(data_dir, "waites_installation_point_reference") == 8
 

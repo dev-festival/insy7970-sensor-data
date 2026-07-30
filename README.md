@@ -2,16 +2,25 @@
 
 Lightweight vibration monitoring service for Waites sensor data and Maximo maintenance history.
 
-The project is intentionally built around small, composable tools. The CLI is the canonical automation surface, FastAPI is the canonical service surface, and both should use the same core modules.
+The project is intentionally built around small, composable tools. FastAPI and the
+static browser are the canonical product surface. The CLI is a secondary maintenance
+surface for data updates, patches, and automation, and both use the same core
+modules.
 
 ## Current Capabilities
 
-Sprint `0.5.1` adds sparse-data-aware Snapshot trends over the bounded Maximo work-order history, SQLite trend, and registered-model layers:
+Sprint `0.6.0` contains the primary web read path with compact server-scoped trend
+responses, bounded details, explicit Snapshot/model readiness, and durable Waites
+events:
 
 - uv-managed Python package
 - Typer CLI entry point
 - FastAPI app factory and `/health`
 - static browser review dashboard
+- compact, projected Trend and Snapshot Review responses with server-produced chart series
+- independently bounded trend detail rows through `limit` and `offset`
+- per-date Snapshot and registered-model readiness
+- Waites action items retained through release-mode ingestion
 - chronological Snapshot trends with continuous dashed gap connections, point-selected Snapshot dates, coverage badges, and per-sensor diagnostics
 - `.env.example` configuration contract
 - pytest harness
@@ -196,7 +205,20 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing daily snapshots, optional trend artifacts, registered SQLite cluster models, and bounded Maximo work-order lookups in sprint `0.5.1`. Snapshot trend coverage reports finite values for the selected metric field without imputing missing values; clicking an observed trend point selects that Snapshot date. Build snapshots first; the Trend tab reads from `sensor_daily_snapshots` on request and falls back to trend artifacts only when SQLite daily rows are unavailable. Maximo is queried only when an Asset Tree, equipment, or sensor is selected; All Equipment never initiates a Maximo query. Run `cluster registry build-grid` before selecting cluster or drift feature-space parameters in the browser.
+The web and API are read-only over existing daily snapshots, optional trend artifacts,
+registered SQLite cluster models, retained Waites events, and bounded Maximo
+work-order lookups in sprint `0.6.0`. Snapshot trend coverage reports finite values
+for the selected metric field without imputing missing values; clicking an observed
+trend point selects that Snapshot date. Build snapshots first; the Trend tab reads
+projected, already-scoped rows from `sensor_daily_snapshots`, receives chart series
+aggregated by the server, and falls back to trend artifacts only when SQLite daily
+rows are unavailable. `/api/trends` bounds its detail collection with `limit`
+(default `500`, maximum `2000`) and `offset`. Snapshot readiness is independent of
+registered-model readiness, so a model-missing date can still render Snapshot,
+Trend, Events, and Measurements. Maximo is queried only when an Asset Tree,
+equipment, or sensor is selected; All Equipment never initiates a Maximo query.
+Run `cluster registry build-grid` before selecting cluster or drift feature-space
+parameters in the browser.
 
 ## Source API
 
@@ -234,7 +256,7 @@ Live Waites canary ingestion writes the same raw paths:
 data/raw/waites/date=YYYY-MM-DD/
 ```
 
-Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations. Routine web trend reads use `/api/trends` directly over `sensor_daily_snapshots` and do not write CSV artifacts.
+Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, and `waites_installation_point_reference` tables. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. Release-mode retention removes high-frequency and replay-only staging rows after verification but preserves `waites_action_items` for the web Events pane. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations. Routine web trend reads use `/api/trends` directly over `sensor_daily_snapshots` and do not write CSV artifacts.
 
 ## Maximo History
 

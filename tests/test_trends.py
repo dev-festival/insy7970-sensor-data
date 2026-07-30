@@ -110,11 +110,19 @@ def test_query_sqlite_trends_reads_daily_snapshots_without_artifacts(tmp_path: P
     assert payload["input"] == "sqlite"
     assert payload["metadata"]["skipped_dates"] == []
     assert len(payload["sensor_rows"]) == 27
-    assert len(payload["equipment_rows"]) >= 1
-    assert "rms_accel_mean_x" in payload["sensor_rows"][0]
-    assert "rms_cf_std_z" in payload["sensor_rows"][0]
-    assert "rms_vel_mean_x" in payload["equipment_rows"][0]
-    assert "rms_vel_mean_x_avg" in payload["equipment_rows"][0]
+    assert payload["metadata"]["equipment_record_count"] >= 1
+    assert set(payload["sensor_rows"][0]) == {
+        "date",
+        "installation_point_id",
+        "installation_point_name",
+        "equipment_id",
+        "equipment_name",
+        "sensor_id",
+        "customer_asset_id",
+        "rms_vel_min_x",
+        "rms_vel_mean_x",
+        "rms_vel_max_x",
+    }
     assert not (
         tmp_path
         / "data"

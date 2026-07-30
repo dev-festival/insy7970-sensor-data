@@ -228,8 +228,8 @@ def test_native_purge_requires_snapshot_and_keeps_ledger(tmp_path: Path) -> None
     )
     assert dry_run["dry_run"] is True
     assert dry_run["candidates"][0]["delete_ready"] is True
-    assert dry_run["candidates"][0]["native_row_count"] == 57
-    assert dry_run["candidates"][0]["timestamp_native_row_count"] == 43
+    assert dry_run["candidates"][0]["native_row_count"] == 53
+    assert dry_run["candidates"][0]["timestamp_native_row_count"] == 39
 
     purged = purge_waites_native_observations(
         settings=settings,
@@ -238,14 +238,14 @@ def test_native_purge_requires_snapshot_and_keeps_ledger(tmp_path: Path) -> None
         dry_run=False,
         confirm_delete=True,
     )
-    assert purged["rows_deleted"] == 57
+    assert purged["rows_deleted"] == 53
     assert purged["purged_dates"] == ["2025-07-09"]
     assert _table_count(settings, "waites_equipment") == 0
     assert _table_count(settings, "waites_installation_points") == 0
     assert _table_count(settings, "waites_rms_observations") == 0
     assert _table_count(settings, "waites_temperature_observations") == 0
     assert _table_count(settings, "waites_impact_observations") == 0
-    assert _table_count(settings, "waites_action_items") == 0
+    assert _table_count(settings, "waites_action_items") == 4
     assert _table_count(settings, "sensor_daily_snapshots") == 9
     assert _table_count(settings, "waites_asset_tree_reference") == 3
     assert _table_count(settings, "waites_equipment_reference") == 6

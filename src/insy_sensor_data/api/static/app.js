@@ -588,9 +588,13 @@ function renderSnapshotTrendPanel(trend) {
 
 function renderSnapshotClusterPanel(clusterContext) {
   const modelLabel = clusterContext.feature_space ? `${featureSpaceLabel(clusterContext.feature_space)} | ` : "";
+  const readiness = readinessForDate(state.date);
+  const missingMessage = readiness && !readiness.registered_model_ready
+    ? "Registered model is not ready for this Snapshot date"
+    : clusterContext.message || "No cluster data for this date";
   elements.snapshotClusterStatus.textContent = clusterContext.status === "available"
     ? `${clusterContext.row_count || 0} scoped points | ${modelLabel}k=${clusterContext.k}`
-    : clusterContext.message || "No cluster artifact for this date";
+    : missingMessage;
   const selectedIds = new Set(clusterContext.selected_ids || []);
   const grouped = groupBy(clusterContext.points || [], "cluster");
   const traces = Object.entries(grouped).map(([cluster, rows]) => ({
@@ -697,19 +701,18 @@ async function renderTrend() {
   const payload = await fetchJson(`/api/trends?${params}`);
   const metric = selectedMetric();
   const meanField = metricField(metric, "mean");
-  const sensorRows = filterRowsForScope(payload.sensor_rows || []);
-  const equipmentRows = filterRowsForScope(payload.equipment_rows || []);
+  const sensorRows = payload.sensor_rows || [];
   setStatus(`Trend ${payload.source} ${payload.start_date} to ${payload.end_date}`);
   renderSummary([
-    { label: "Sensor Rows", value: sensorRows.length },
-    { label: "Equipment Rows", value: equipmentRows.length },
+    { label: "Scoped Rows", value: payload.sensor_row_count || 0 },
+    { label: "Detail Rows", value: sensorRows.length },
+    { label: "Series", value: payload.series_count || 0 },
     { label: "Metric", value: metric.label },
     { label: "Input", value: payload.input || payload.input_mode || payload.metadata?.input_mode || "artifact" },
     { label: "Scope", value: scopeLabel() },
   ]);
-  const aggregates = aggregateTrendRows(sensorRows, meanField);
   plotChart(
-    [lineTrace(aggregates, meanField, metric.label, "#287271", { timeSeries: true })].filter(Boolean),
+    trendSeriesTraces(payload.series || [], meanField),
     {
       title: `${metric.label} Trend`,
       xaxis: { title: "Date", range: [state.startDate, state.endDate] },
@@ -1093,17 +1096,23 @@ async function fetchJson(path) {
 
 function availableDates() {
   const source = state.source;
-  return unique([
-    ...(state.artifacts?.snapshots || [])
+  const readinessDates = (state.artifacts?.readiness || [])
+    .filter((row) => row.snapshot_ready && (!source || row.source === source))
+    .map((row) => row.date);
+  if (readinessDates.length) {
+    return unique(readinessDates);
+  }
+  return unique(
+    (state.artifacts?.snapshots || [])
       .filter((row) => !source || row.source === source)
       .map((row) => row.date),
-    ...(state.artifacts?.clusters || [])
-      .filter((row) => !source || row.source === source)
-      .map((row) => row.date),
-    ...(state.artifacts?.cluster_models || [])
-      .filter((row) => !source || row.source === source)
-      .map((row) => row.date || row.source_date),
-  ]);
+  );
+}
+
+function readinessForDate(selectedDate) {
+  return (state.artifacts?.readiness || []).find(
+    (row) => row.source === state.source && row.date === selectedDate,
+  ) || null;
 }
 
 function datesInRange() {
@@ -1560,13 +1569,6 @@ function setStatus(message) {
   elements.statusLine.textContent = message;
 }
 
-function aggregateTrendRows(rows, field) {
-  const byDate = groupBy(rows, "date");
-  return Object.entries(byDate)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([date, dateRows]) => ({ date, [field]: average(dateRows, field) }));
-}
-
 function lineTrace(rows, field, name, color, options = {}) {
   if (!rows.some((row) => numeric(row[field]) !== null)) {
     return null;
@@ -1593,23 +1595,19 @@ function snapshotTrendTraces(trend, field) {
   if (trend.status !== "available") {
     return [];
   }
+  return trendSeriesTraces(trend.series || [], field, state.date);
+}
+
+function trendSeriesTraces(series, field, selectedDate = "") {
   const palette = ["#287271", "#5d7f9f", "#a64253", "#8a6f3d", "#59656f", "#3d8068"];
-  if (["all", "asset_tree"].includes(state.scopeType) && trend.equipment_rows?.length) {
-    const rows = aggregateTrendRows(trend.equipment_rows, field);
-    const trace = lineTrace(rows, field, "Equipment average", "#287271", {
-      selectedDate: state.date,
-      timeSeries: true,
-    });
-    return trace ? [trace] : [];
-  }
-  const groups = groupBy(trend.sensor_rows || [], "installation_point_id");
-  return Object.entries(groups)
+  return series
     .slice(0, 12)
-    .map(([installationId, rows], index) => {
-      const chronologicalRows = rows.slice().sort((left, right) => String(left.date).localeCompare(String(right.date)));
-      const label = chronologicalRows[0]?.installation_point_name || chronologicalRows[0]?.sensor_id || installationId;
-      return lineTrace(chronologicalRows, field, label, palette[index % palette.length], {
-        selectedDate: state.date,
+    .map((item, index) => {
+      const chronologicalRows = (item.rows || [])
+        .slice()
+        .sort((left, right) => String(left.date).localeCompare(String(right.date)));
+      return lineTrace(chronologicalRows, field, item.label || item.id || `Series ${index + 1}`, palette[index % palette.length], {
+        selectedDate,
         timeSeries: true,
       });
     })

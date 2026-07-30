@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from insy_sensor_data.artifact_views import load_trend_view
 
@@ -26,6 +26,8 @@ def read_trends(
     metric: str = "rms_vel",
     dimension: str = "x",
     stat: str = "mean",
+    limit: int = Query(500, ge=1, le=2_000),
+    offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
     try:
         start = date.fromisoformat(start_date)
@@ -44,6 +46,8 @@ def read_trends(
             metric=metric,
             dimension=dimension,
             stat=stat,
+            detail_limit=limit,
+            detail_offset=offset,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

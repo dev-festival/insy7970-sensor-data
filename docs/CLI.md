@@ -245,7 +245,12 @@ uv run sensor-data store purge-native --source api --date 2026-07-19 --confirm-d
 uv run sensor-data store purge-native --source api --start-date 2026-07-13 --end-date 2026-07-15 --confirm-delete
 ```
 
-Deletes date-scoped SQLite staging rows only after the matching ingestion ledger and SQLite daily snapshot rows exist and validate. It removes the selected date/range from `waites_equipment`, `waites_installation_points`, RMS, temperature, ImpactVue, action items, and derived rollups. It keeps the one-row reference tables, daily snapshot table, ledger, snapshot CSV, metadata, manifest, and validation report.
+Deletes releasable date-scoped SQLite staging rows only after the matching ingestion
+ledger and SQLite daily snapshot rows exist and validate. It removes the selected
+date/range from `waites_equipment`, `waites_installation_points`, RMS, temperature,
+ImpactVue, and derived rollups. It preserves `waites_action_items` as durable event
+facts, along with the one-row reference tables, daily snapshot table, ledger,
+snapshot CSV, metadata, manifest, and validation report.
 
 ### Build Sensor Snapshot
 
@@ -386,9 +391,16 @@ uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-reten
 uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-retention keep --keep-native
 ```
 
-`keep` preserves raw endpoint files, timestamp-native SQLite rows, and date-scoped source metadata copies for inspection. `compress` gzips endpoint payloads and keeps SQLite staging rows. `release` deletes endpoint payloads and purges date-scoped SQLite staging rows after snapshot and ledger persistence are verified. Live `api-day` defaults to `release`; mock workflows default to `keep`.
+`keep` preserves raw endpoint files, timestamp-native SQLite rows, and date-scoped
+source metadata copies for inspection. `compress` gzips endpoint payloads and keeps
+SQLite staging rows. `release` deletes endpoint payloads and purges releasable
+date-scoped SQLite staging rows after snapshot and ledger persistence are verified;
+compact `waites_action_items` event facts remain queryable. Live `api-day` defaults
+to `release`; mock workflows default to `keep`.
 
-In release mode, `waites_installation_point_reference` remains one row per sensor while `waites_installation_points` is cleared for that source date.
+In release mode, `waites_installation_point_reference` remains one row per sensor
+while `waites_installation_points` is cleared for that source date. Waites action
+items also remain available to the web Events pane.
 
 Each workflow supports `--json` when a script wants the combined structured result:
 

@@ -1,9 +1,11 @@
+from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 from insy_sensor_data.api.main import create_app
-from insy_sensor_data.artifact_views import _trend_coverage
+from insy_sensor_data.artifact_views import _trend_coverage, _trend_series
 from insy_sensor_data.clustering.registry import build_cluster_model_grid
 from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
@@ -12,7 +14,7 @@ from insy_sensor_data.observations import connect_observation_store
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
-from datetime import date
+from insy_sensor_data.workflows import run_mock_day_workflow
 
 
 def test_health_endpoint_returns_shared_health_payload(tmp_path: Path) -> None:
@@ -190,6 +192,19 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     assert artifacts["sources"] == ["mock"]
     assert artifacts["dimensions"] == ["x"]
     assert artifacts["ks"] == [4]
+    assert artifacts["latest_readiness"]["mock"] == {
+        "snapshot_date": "2025-07-11",
+        "registered_model_date": None,
+        "fully_ready_date": None,
+    }
+    assert [
+        (row["date"], row["snapshot_ready"], row["registered_model_ready"])
+        for row in artifacts["readiness"]
+    ] == [
+        ("2025-07-09", True, False),
+        ("2025-07-10", True, False),
+        ("2025-07-11", True, False),
+    ]
 
     equipment_response = client.get("/api/equipment?source=mock")
     assert equipment_response.status_code == 200
@@ -291,6 +306,17 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     assert models["complete_count"] == 3
     assert models["feature_spaces"] == ["x_accel"]
     assert models["ks"] == [5]
+    readiness = client.get("/api/artifacts").json()
+    assert readiness["latest_readiness"]["mock"] == {
+        "snapshot_date": "2025-07-11",
+        "registered_model_date": "2025-07-11",
+        "fully_ready_date": "2025-07-11",
+    }
+    assert all(
+        row["snapshot_ready"] and row["registered_model_ready"]
+        for row in readiness["readiness"]
+        if row["source"] == "mock"
+    )
 
     registered_cluster_response = client.get(
         "/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel&k=5"
@@ -394,6 +420,24 @@ def test_snapshot_review_coverage_counts_zero_as_an_observation() -> None:
     assert coverage["observed_value_count"] == 1
     assert coverage["coverage_percent"] == 50.0
     assert coverage["sensors"][0]["missing_dates"] == ["2025-07-10"]
+
+
+def test_all_equipment_series_preserves_unassigned_equipment_bucket() -> None:
+    series = _trend_series(
+        [
+            {"date": "2025-07-09", "equipment_id": "10", "rms_vel_mean_x": 1.0},
+            {"date": "2025-07-09", "equipment_id": "10", "rms_vel_mean_x": 3.0},
+            {"date": "2025-07-09", "equipment_id": "20", "rms_vel_mean_x": 8.0},
+            {"date": "2025-07-09", "equipment_id": "", "rms_vel_mean_x": 20.0},
+        ],
+        {"type": "all"},
+        "rms_vel_mean_x",
+    )
+
+    assert series[0]["aggregation"] == "mean_of_equipment_means"
+    assert series[0]["rows"] == [
+        {"date": "2025-07-09", "rms_vel_mean_x": 10.0}
+    ]
 
 
 def test_snapshot_review_rejects_a_snapshot_date_outside_the_selected_range(tmp_path: Path) -> None:
@@ -531,7 +575,9 @@ def test_snapshot_review_endpoint_handles_missing_trend_and_cluster_artifacts(tm
     build_sensor_snapshot(settings=settings, run_date=run_date)
 
     response = client.get(
-        "/api/snapshot-review/2025-07-09?source=mock&scope=sensor&installation_point_id=201300"
+        "/api/snapshot-review/2025-07-09"
+        "?source=mock&scope=sensor&installation_point_id=201300"
+        "&feature_space=x_accel&k=5"
     )
 
     assert response.status_code == 200
@@ -577,9 +623,11 @@ def test_snapshot_and_trend_endpoints_support_source_and_sensor_filters(tmp_path
     )
     assert trend_response.status_code == 200
     trend = trend_response.json()
-    assert trend["sensor_row_count"] == 27
+    assert trend["sensor_row_count"] == 3
     assert trend["filtered_sensor_row_count"] == 3
     assert {row["installation_point_id"] for row in trend["sensor_rows"]} == {"201300"}
+    assert trend["series_count"] == 1
+    assert trend["detail"]["truncated"] is False
 
     scoped_response = client.get(
         "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11"
@@ -589,7 +637,146 @@ def test_snapshot_and_trend_endpoints_support_source_and_sensor_filters(tmp_path
     scoped = scoped_response.json()
     assert scoped["scope"]["type"] == "asset_tree"
     assert scoped["value_field"] == "rms_accel_mean_x"
-    assert 0 < scoped["filtered_sensor_row_count"] < scoped["sensor_row_count"]
+    assert 0 < scoped["sensor_row_count"] < 27
+    assert scoped["filtered_sensor_row_count"] == scoped["sensor_row_count"]
+    assert scoped["series"][0]["aggregation"] == "mean_of_equipment_means"
+
+
+@pytest.mark.parametrize(
+    ("scope_query", "scope_type", "expected_row_count", "aggregation"),
+    [
+        ("", "all", 27, "mean_of_equipment_means"),
+        ("&scope=asset_tree&asset_tree_id=12440", "asset_tree", 15, "mean_of_equipment_means"),
+        ("&scope=equipment&equipment_id=55576", "equipment", 6, "sensor"),
+        (
+            "&scope=sensor&installation_point_id=201300",
+            "sensor",
+            3,
+            "sensor",
+        ),
+    ],
+)
+def test_trend_endpoint_projects_and_bounds_each_scope(
+    tmp_path: Path,
+    scope_query: str,
+    scope_type: str,
+    expected_row_count: int,
+    aggregation: str,
+) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+
+    response = client.get(
+        "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "&metric=rms_accel&dimension=x&limit=2"
+        f"{scope_query}"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scope"]["type"] == scope_type
+    assert payload["sensor_row_count"] == expected_row_count
+    assert payload["detail"] == {
+        "limit": 2,
+        "offset": 0,
+        "row_count": 2,
+        "total_row_count": expected_row_count,
+        "truncated": True,
+    }
+    assert len(payload["sensor_rows"]) == 2
+    assert payload["series"][0]["aggregation"] == aggregation
+    assert set(payload["sensor_rows"][0]) == {
+        "date",
+        "installation_point_id",
+        "installation_point_name",
+        "equipment_id",
+        "equipment_name",
+        "sensor_id",
+        "customer_asset_id",
+        "rms_accel_mean_x",
+        "rms_accel_max_x",
+        "rms_accel_min_x",
+    }
+    assert "equipment_rows" not in payload
+
+
+def test_trend_endpoint_validates_detail_bounds(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+
+    assert client.get(
+        "/api/trends?start_date=2025-07-09&end_date=2025-07-11&limit=0"
+    ).status_code == 422
+    assert client.get(
+        "/api/trends?start_date=2025-07-09&end_date=2025-07-11&offset=-1"
+    ).status_code == 422
+
+
+def test_release_workflow_preserves_waites_events_for_snapshot_review(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    run_date = date(2025, 7, 9)
+    run_mock_day_workflow(
+        settings=settings,
+        run_date=run_date,
+        raw_retention="release",
+    )
+    client = TestClient(create_app(settings=settings))
+
+    response = client.get(
+        "/api/snapshot-review/2025-07-09"
+        "?source=mock&start_date=2025-07-09&end_date=2025-07-09"
+        "&scope=sensor&installation_point_id=201300"
+    )
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert events["input"] == "sqlite"
+    assert events["providers"]["waites"]["row_count"] == 4
+    assert events["row_count"] == 1
+    assert events["rows"][0]["event_id"] == "9001"
+
+
+def test_representative_web_payloads_stay_within_response_budget(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+    _seed_representative_sqlite_window(
+        settings=settings,
+        start_date=date(2025, 7, 9),
+        day_count=22,
+        sensor_count=120,
+    )
+
+    trend_response = client.get(
+        "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-30"
+        "&metric=rms_vel&dimension=x"
+    )
+    snapshot_response = client.get(
+        "/api/snapshot-review/2025-07-09"
+        "?source=mock&start_date=2025-07-09&end_date=2025-07-30"
+        "&metric=rms_vel&dimension=x&k=4"
+    )
+
+    assert trend_response.status_code == 200
+    assert snapshot_response.status_code == 200
+    assert len(trend_response.content) < 2_000_000
+    assert len(snapshot_response.content) < 2_000_000
+    assert trend_response.json()["detail"]["truncated"] is True
+    assert "rows" not in snapshot_response.json()["trend"]
+    assert set(trend_response.json()["sensor_rows"][0]) < {
+        "date",
+        "installation_point_id",
+        "installation_point_name",
+        "equipment_id",
+        "equipment_name",
+        "sensor_id",
+        "customer_asset_id",
+        "rms_vel_mean_x",
+        "rms_vel_max_x",
+        "rms_vel_min_x",
+        "unexpected_sentinel",
+    }
 
 
 def _prepare_mock_window(settings: AppSettings) -> None:
@@ -600,3 +787,52 @@ def _prepare_mock_window(settings: AppSettings) -> None:
         build_sensor_snapshot(settings=settings, run_date=run_date)
     build_trends(settings=settings, start_date=start, end_date=end)
     build_cluster_window(settings=settings, start_date=start, end_date=end, source="mock", dimension="x", k=4)
+
+
+def _seed_representative_sqlite_window(
+    settings: AppSettings,
+    start_date: date,
+    day_count: int,
+    sensor_count: int,
+) -> None:
+    with connect_observation_store(settings) as connection:
+        connection.row_factory = None
+        columns = [
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(sensor_daily_snapshots)")
+        ]
+        base = connection.execute(
+            f"""
+            SELECT {", ".join(f'"{column}"' for column in columns)}
+            FROM sensor_daily_snapshots
+            WHERE source = ? AND source_date = ?
+            LIMIT 1
+            """,
+            ("mock", start_date.isoformat()),
+        ).fetchone()
+        assert base is not None
+        indexes = {column: index for index, column in enumerate(columns)}
+        rows = []
+        for day_offset in range(day_count):
+            source_date = (start_date + timedelta(days=day_offset)).isoformat()
+            for sensor_offset in range(sensor_count):
+                values = list(base)
+                installation_id = str(300_000 + sensor_offset)
+                equipment_id = str(400_000 + sensor_offset // 4)
+                values[indexes["source_date"]] = source_date
+                values[indexes["installation_point_id"]] = installation_id
+                values[indexes["installation_point_name"]] = f"Budget Sensor {sensor_offset}"
+                values[indexes["sensor_id"]] = str(500_000 + sensor_offset)
+                values[indexes["equipment_id"]] = equipment_id
+                values[indexes["equipment_name"]] = f"Budget Equipment {sensor_offset // 4}"
+                rows.append(values)
+        placeholders = ", ".join("?" for _column in columns)
+        quoted_columns = ", ".join(f'"{column}"' for column in columns)
+        connection.executemany(
+            f"""
+            INSERT OR REPLACE INTO sensor_daily_snapshots ({quoted_columns})
+            VALUES ({placeholders})
+            """,
+            rows,
+        )
+        connection.commit()

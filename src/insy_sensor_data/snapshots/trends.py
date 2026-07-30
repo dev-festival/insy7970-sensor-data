@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Iterable
 
 from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
-from insy_sensor_data.observations import load_sensor_daily_snapshots
+from insy_sensor_data.observations import connect_observation_store, load_sensor_daily_snapshots
+from insy_sensor_data.snapshots.build import SNAPSHOT_FIELDS
 from insy_sensor_data.storage import get_storage_paths
 
 
@@ -63,6 +64,19 @@ TREND_IDENTIFIER_FIELDS = {
     "installation_customer_asset_id",
     "equipment_customer_asset_id",
 }
+SQLITE_TREND_IDENTIFIER_FIELDS = [
+    "installation_point_id",
+    "installation_point_name",
+    "equipment_id",
+    "equipment_name",
+    "sensor_id",
+    "customer_asset_id",
+]
+DEFAULT_SQLITE_TREND_VALUE_FIELDS = [
+    "rms_vel_min_x",
+    "rms_vel_mean_x",
+    "rms_vel_max_x",
+]
 
 
 def build_trends(
@@ -164,44 +178,93 @@ def query_sqlite_trends(
     start_date: date,
     end_date: date,
     source: str = "mock",
+    value_fields: Iterable[str] | None = None,
+    equipment_ids: Iterable[str] | None = None,
+    installation_point_ids: Iterable[str] | None = None,
+    sensor_id: str | None = None,
+    customer_asset_id: str | None = None,
 ) -> dict[str, Any]:
     if source not in {"mock", "api"}:
         raise ValueError("source must be one of: api, mock")
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
 
-    sensor_rows: list[dict[str, Any]] = []
-    skipped_dates: list[str] = []
-    for run_date in _date_range(start_date, end_date):
-        try:
-            snapshot_rows = _sqlite_snapshot_rows(settings, run_date, source)
-        except FileNotFoundError:
-            skipped_dates.append(run_date.isoformat())
-            continue
-        for row in snapshot_rows:
-            sensor_rows.append(
-                {
-                    "date": run_date.isoformat(),
-                    "source": source,
-                    **_sqlite_sensor_trend_row(row),
-                }
-            )
+    selected_value_fields = _validate_sqlite_trend_fields(
+        value_fields or DEFAULT_SQLITE_TREND_VALUE_FIELDS
+    )
+    selected_columns = [*SQLITE_TREND_IDENTIFIER_FIELDS, *selected_value_fields]
+    clauses = [
+        "source = ?",
+        "source_date >= ?",
+        "source_date <= ?",
+    ]
+    params: list[Any] = [source, start_date.isoformat(), end_date.isoformat()]
+    _append_id_filter(clauses, params, "equipment_id", equipment_ids)
+    _append_id_filter(
+        clauses,
+        params,
+        "installation_point_id",
+        installation_point_ids,
+    )
+    if sensor_id not in (None, ""):
+        clauses.append("sensor_id = ?")
+        params.append(str(sensor_id))
+    if customer_asset_id not in (None, ""):
+        clauses.append("customer_asset_id = ?")
+        params.append(str(customer_asset_id))
 
-    if not sensor_rows:
+    quoted_columns = ", ".join(f'"{field}"' for field in selected_columns)
+    with connect_observation_store(settings) as connection:
+        available_date_rows = connection.execute(
+            """
+            SELECT DISTINCT source_date
+            FROM sensor_daily_snapshots
+            WHERE source = ? AND source_date >= ? AND source_date <= ?
+            ORDER BY source_date
+            """,
+            (source, start_date.isoformat(), end_date.isoformat()),
+        ).fetchall()
+        rows = connection.execute(
+            f"""
+            SELECT source_date AS date, {quoted_columns}
+            FROM sensor_daily_snapshots
+            WHERE {" AND ".join(clauses)}
+            ORDER BY
+                source_date,
+                CAST(installation_point_id AS INTEGER),
+                installation_point_id
+            """,
+            tuple(params),
+        ).fetchall()
+    sensor_rows = [dict(row) for row in rows]
+
+    if not available_date_rows:
         raise FileNotFoundError(
             f"No SQLite daily snapshots found for source {source} in the requested trend range."
         )
 
-    equipment_rows = _equipment_trends(sensor_rows)
+    present_dates = {str(row["source_date"]) for row in available_date_rows}
+    skipped_dates = [
+        run_date.isoformat()
+        for run_date in _date_range(start_date, end_date)
+        if run_date.isoformat() not in present_dates
+    ]
+    equipment_record_count = len(
+        {
+            (str(row.get("date") or ""), str(row.get("equipment_id") or ""))
+            for row in sensor_rows
+        }
+    )
     metadata = {
         "source": source,
         "input_mode": "sqlite",
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "sensor_record_count": len(sensor_rows),
-        "equipment_record_count": len(equipment_rows),
+        "equipment_record_count": equipment_record_count,
         "skipped_dates": skipped_dates,
         "source_mismatch_dates": [],
+        "selected_fields": selected_columns,
     }
     return {
         "source": source,
@@ -211,7 +274,6 @@ def query_sqlite_trends(
         "end_date": end_date.isoformat(),
         "metadata": metadata,
         "sensor_rows": sensor_rows,
-        "equipment_rows": equipment_rows,
     }
 
 
@@ -271,6 +333,37 @@ def _sensor_trend_row(row: dict[str, str]) -> dict[str, str]:
 
 def _sqlite_sensor_trend_row(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key not in {"date", "source"}}
+
+
+def _validate_sqlite_trend_fields(fields: Iterable[str]) -> list[str]:
+    allowed = set(SNAPSHOT_FIELDS)
+    selected: list[str] = []
+    for field in fields:
+        value = str(field)
+        if value not in allowed or value in TREND_IDENTIFIER_FIELDS:
+            raise ValueError(f"Unsupported SQLite trend field: {value}")
+        if value not in selected:
+            selected.append(value)
+    if not selected:
+        raise ValueError("At least one SQLite trend value field is required")
+    return selected
+
+
+def _append_id_filter(
+    clauses: list[str],
+    params: list[Any],
+    field: str,
+    values: Iterable[str] | None,
+) -> None:
+    if values is None:
+        return
+    selected = sorted({str(value) for value in values if str(value)})
+    if not selected:
+        clauses.append("1 = 0")
+        return
+    placeholders = ", ".join("?" for _value in selected)
+    clauses.append(f'"{field}" IN ({placeholders})')
+    params.extend(selected)
 
 
 def _equipment_trends(sensor_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

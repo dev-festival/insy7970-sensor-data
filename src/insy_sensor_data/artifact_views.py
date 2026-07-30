@@ -60,6 +60,17 @@ SNAPSHOT_REVIEW_BASE_COLUMNS = [
     "impact_mean",
     "temp_sensor_mean",
 ]
+DEFAULT_TREND_DETAIL_LIMIT = 500
+MAX_TREND_DETAIL_LIMIT = 2_000
+TREND_DETAIL_IDENTIFIER_FIELDS = [
+    "date",
+    "installation_point_id",
+    "installation_point_name",
+    "equipment_id",
+    "equipment_name",
+    "sensor_id",
+    "customer_asset_id",
+]
 
 
 def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
@@ -70,6 +81,7 @@ def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
     drift = _drift_artifacts(storage.drift_dir)
     cluster_windows = _cluster_window_artifacts(storage.cluster_windows_dir)
     cluster_models = list_registered_cluster_models(settings)["models"]
+    readiness, latest_readiness = _artifact_readiness(snapshots, cluster_models)
     sources = sorted(
         {
             str(row["source"])
@@ -112,6 +124,8 @@ def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
         "cluster_models": cluster_models,
         "drift": drift,
         "cluster_windows": cluster_windows,
+        "readiness": readiness,
+        "latest_readiness": latest_readiness,
         "counts": {
             "snapshots": len(snapshots),
             "trends": len(trends),
@@ -121,6 +135,85 @@ def discover_artifacts(settings: AppSettings) -> dict[str, Any]:
             "cluster_windows": len(cluster_windows),
         },
     }
+
+
+def _artifact_readiness(
+    snapshots: list[dict[str, Any]],
+    cluster_models: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str | None]]]:
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for snapshot in snapshots:
+        source = _text_id(snapshot.get("source"))
+        snapshot_date = _text_id(snapshot.get("date"))
+        if not source or not snapshot_date:
+            continue
+        by_key[(source, snapshot_date)] = {
+            "source": source,
+            "date": snapshot_date,
+            "snapshot_ready": True,
+            "registered_model_ready": False,
+            "complete_model_count": 0,
+            "feature_spaces": [],
+            "ks": [],
+        }
+
+    for model in cluster_models:
+        if model.get("status") != "complete":
+            continue
+        source = _text_id(model.get("source"))
+        model_date = _text_id(model.get("date") or model.get("source_date"))
+        if not source or not model_date:
+            continue
+        row = by_key.setdefault(
+            (source, model_date),
+            {
+                "source": source,
+                "date": model_date,
+                "snapshot_ready": False,
+                "registered_model_ready": False,
+                "complete_model_count": 0,
+                "feature_spaces": [],
+                "ks": [],
+            },
+        )
+        row["registered_model_ready"] = True
+        row["complete_model_count"] += 1
+        feature_space = _text_id(model.get("feature_space"))
+        if feature_space and feature_space not in row["feature_spaces"]:
+            row["feature_spaces"].append(feature_space)
+        if model.get("k") is not None:
+            selected_k = int(model["k"])
+            if selected_k not in row["ks"]:
+                row["ks"].append(selected_k)
+
+    readiness = sorted(
+        by_key.values(),
+        key=lambda row: (row["source"], row["date"]),
+    )
+    for row in readiness:
+        row["feature_spaces"].sort()
+        row["ks"].sort()
+
+    latest: dict[str, dict[str, str | None]] = {}
+    for source in sorted({row["source"] for row in readiness}):
+        source_rows = [row for row in readiness if row["source"] == source]
+        snapshot_dates = [row["date"] for row in source_rows if row["snapshot_ready"]]
+        model_dates = [
+            row["date"]
+            for row in source_rows
+            if row["registered_model_ready"]
+        ]
+        fully_ready_dates = [
+            row["date"]
+            for row in source_rows
+            if row["snapshot_ready"] and row["registered_model_ready"]
+        ]
+        latest[source] = {
+            "snapshot_date": max(snapshot_dates, default=None),
+            "registered_model_date": max(model_dates, default=None),
+            "fully_ready_date": max(fully_ready_dates, default=None),
+        }
+    return readiness, latest
 
 
 def list_equipment_view(
@@ -356,21 +449,52 @@ def load_trend_view(
     metric: str = "rms_vel",
     dimension: str = "x",
     stat: str = "mean",
+    detail_limit: int = DEFAULT_TREND_DETAIL_LIMIT,
+    detail_offset: int = 0,
+    _scope_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_mode = _optional_source(source)
     resolved_source = source_mode or settings.source_mode
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
+    selected_limit = _validate_trend_detail_limit(detail_limit)
+    selected_offset = _validate_trend_detail_offset(detail_offset)
     selected_metric = _normalize_metric(metric)
     selected_dimension = _normalize_dimension_for_metric(selected_metric, dimension)
     selected_stat = _normalize_stat(stat)
     value_field = _metric_field(selected_metric, selected_stat, selected_dimension)
+    value_fields = _trend_value_fields(
+        selected_metric,
+        selected_dimension,
+        selected_stat,
+    )
+    scope_context = _scope_context or _resolve_review_scope(
+        settings=settings,
+        source=resolved_source,
+        start_date=start_date,
+        end_date=end_date,
+        scope=scope,
+        asset_tree_id=asset_tree_id,
+        equipment_id=equipment_id,
+        installation_point_id=installation_point_id,
+        sensor_id=sensor_id,
+    )
+    query_equipment_ids, query_installation_ids = _trend_query_scope_ids(
+        scope_context,
+        equipment_id=equipment_id,
+        installation_point_id=installation_point_id,
+    )
     try:
         payload = query_sqlite_trends(
             settings=settings,
             start_date=start_date,
             end_date=end_date,
             source=resolved_source,
+            value_fields=value_fields,
+            equipment_ids=query_equipment_ids,
+            installation_point_ids=query_installation_ids,
+            sensor_id=sensor_id,
+            customer_asset_id=customer_asset_id,
         )
         trend_source = resolved_source
         input_mode = "sqlite"
@@ -384,44 +508,33 @@ def load_trend_view(
             )
         resolved_source = trend_source or resolved_source
         input_mode = "artifact_fallback"
-
-    scope_context = _resolve_review_scope(
-        settings=settings,
-        source=resolved_source,
-        start_date=start_date,
-        end_date=end_date,
-        scope=scope,
-        asset_tree_id=asset_tree_id,
-        equipment_id=equipment_id,
-        installation_point_id=installation_point_id,
-        sensor_id=sensor_id,
-    )
-    trend_source = str(payload["metadata"].get("source") or "")
-    sensor_base_rows = _filter_rows_for_review_scope(payload["sensor_rows"], scope_context)
-    equipment_base_rows = _filter_rows_for_review_scope(payload["equipment_rows"], scope_context)
-    sensor_rows = _filter_rows(
-        sensor_base_rows,
-        equipment_id=equipment_id,
-        installation_point_id=installation_point_id,
-        sensor_id=sensor_id,
-        customer_asset_id=customer_asset_id,
-    )
-    equipment_rows = _filter_rows(
-        equipment_base_rows,
-        equipment_id=equipment_id,
-        customer_asset_id=customer_asset_id,
-    )
-    if installation_point_id or sensor_id:
-        selected_equipment_dates = {
-            (str(row.get("date") or ""), str(row.get("equipment_id") or ""))
-            for row in sensor_rows
-            if row.get("date") and row.get("equipment_id")
+        fallback_rows = _filter_rows_for_review_scope(
+            payload.get("sensor_rows", []),
+            scope_context,
+        )
+        fallback_rows = _filter_rows(
+            fallback_rows,
+            equipment_id=equipment_id,
+            installation_point_id=installation_point_id,
+            sensor_id=sensor_id,
+            customer_asset_id=customer_asset_id,
+        )
+        payload = {
+            **payload,
+            "sensor_rows": _compact_trend_rows(fallback_rows, value_fields),
         }
-        equipment_rows = [
-            row
-            for row in equipment_rows
-            if (str(row.get("date") or ""), str(row.get("equipment_id") or "")) in selected_equipment_dates
-        ]
+
+    trend_source = str(payload.get("metadata", {}).get("source") or "")
+    scoped_rows = payload.get("sensor_rows", [])
+    detail_rows = scoped_rows[selected_offset : selected_offset + selected_limit]
+    series = _trend_series(scoped_rows, scope_context, value_field)
+    equipment_record_count = len(
+        {
+            (str(row.get("date") or ""), str(row.get("equipment_id") or ""))
+            for row in scoped_rows
+            if row.get("date") not in (None, "")
+        }
+    )
     metadata = {
         **payload.get("metadata", {}),
         "input_mode": input_mode,
@@ -430,9 +543,14 @@ def load_trend_view(
         "dimension": selected_dimension,
         "stat": selected_stat,
         "value_field": value_field,
+        "sensor_record_count": len(scoped_rows),
+        "equipment_record_count": equipment_record_count,
+        "detail_limit": selected_limit,
+        "detail_offset": selected_offset,
     }
     return {
-        **payload,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "source": trend_source or resolved_source,
         "input": input_mode,
         "input_mode": input_mode,
@@ -442,10 +560,20 @@ def load_trend_view(
         "value_field": value_field,
         "metadata": metadata,
         "scope": _public_scope(scope_context),
-        "sensor_row_count": len(payload["sensor_rows"]),
-        "filtered_sensor_row_count": len(sensor_rows),
-        "equipment_row_count": len(payload["equipment_rows"]),
-        "filtered_equipment_row_count": len(equipment_rows),
+        "coverage": _trend_coverage(scoped_rows, value_field),
+        "sensor_row_count": len(scoped_rows),
+        "filtered_sensor_row_count": len(scoped_rows),
+        "equipment_row_count": equipment_record_count,
+        "filtered_equipment_row_count": equipment_record_count,
+        "series_count": len(series),
+        "series": series,
+        "detail": {
+            "limit": selected_limit,
+            "offset": selected_offset,
+            "row_count": len(detail_rows),
+            "total_row_count": len(scoped_rows),
+            "truncated": selected_offset + len(detail_rows) < len(scoped_rows),
+        },
         "filters": _filters(
             source=source_mode,
             scope=scope,
@@ -455,8 +583,7 @@ def load_trend_view(
             sensor_id=sensor_id,
             customer_asset_id=customer_asset_id,
         ),
-        "sensor_rows": sensor_rows,
-        "equipment_rows": equipment_rows,
+        "sensor_rows": detail_rows,
     }
 
 
@@ -1001,6 +1128,15 @@ def _snapshot_review_trend(
             start_date=start_date,
             end_date=end_date,
             source=source,
+            scope=scope_context["type"],
+            asset_tree_id=scope_context.get("asset_tree_id"),
+            equipment_id=scope_context.get("equipment_id"),
+            installation_point_id=scope_context.get("installation_point_id"),
+            sensor_id=scope_context.get("sensor_id"),
+            metric=metric,
+            dimension=dimension,
+            stat=stat,
+            _scope_context=scope_context,
         )
     except FileNotFoundError as exc:
         return {
@@ -1009,19 +1145,17 @@ def _snapshot_review_trend(
             "value_field": value_field,
             "coverage": _trend_coverage([], value_field),
             "sensor_rows": [],
-            "equipment_rows": [],
-            "rows": [],
+            "series": [],
         }
-    sensor_rows = _filter_rows_for_review_scope(payload.get("sensor_rows", []), scope_context)
-    equipment_rows = _filter_rows_for_review_scope(payload.get("equipment_rows", []), scope_context)
     return {
         "status": "available",
         "value_field": value_field,
-        "row_count": len(sensor_rows),
-        "coverage": _trend_coverage(sensor_rows, value_field),
-        "sensor_rows": sensor_rows,
-        "equipment_rows": equipment_rows,
-        "rows": sensor_rows,
+        "row_count": payload["sensor_row_count"],
+        "coverage": payload["coverage"],
+        "series": payload["series"],
+        "series_count": payload["series_count"],
+        "sensor_rows": payload["sensor_rows"],
+        "detail": payload["detail"],
         "skipped_dates": payload.get("metadata", {}).get("skipped_dates", []),
     }
 
@@ -1259,6 +1393,155 @@ def _trend_coverage(rows: list[dict[str, Any]], value_field: str) -> dict[str, A
         "coverage_percent": _coverage_percent(observed_value_count, expected_value_count),
         "sensors": sensors,
     }
+
+
+def _trend_value_fields(metric: str, dimension: str, stat: str) -> list[str]:
+    fields = [
+        _metric_field(metric, selected_stat, dimension)
+        for selected_stat in [stat, "mean", "max", "min"]
+    ]
+    return list(dict.fromkeys(fields))
+
+
+def _trend_query_scope_ids(
+    scope_context: dict[str, Any],
+    equipment_id: str | None,
+    installation_point_id: str | None,
+) -> tuple[list[str] | None, list[str] | None]:
+    if scope_context["type"] == "all":
+        equipment_ids: set[str] | None = None
+        installation_ids: set[str] | None = None
+    else:
+        equipment_ids = set(scope_context.get("equipment_ids", set()))
+        installation_ids = set(scope_context.get("installation_point_ids", set()))
+
+    if equipment_id not in (None, ""):
+        selected_equipment_id = str(equipment_id)
+        equipment_ids = (
+            {selected_equipment_id}
+            if equipment_ids is None
+            else equipment_ids & {selected_equipment_id}
+        )
+    if installation_point_id not in (None, ""):
+        selected_installation_id = str(installation_point_id)
+        installation_ids = (
+            {selected_installation_id}
+            if installation_ids is None
+            else installation_ids & {selected_installation_id}
+        )
+
+    return (
+        sorted(equipment_ids) if equipment_ids is not None else None,
+        sorted(installation_ids) if installation_ids is not None else None,
+    )
+
+
+def _compact_trend_rows(
+    rows: list[dict[str, Any]],
+    value_fields: list[str],
+) -> list[dict[str, Any]]:
+    fields = [*TREND_DETAIL_IDENTIFIER_FIELDS, *value_fields]
+    return [
+        {
+            field: row.get(field)
+            for field in fields
+        }
+        for row in rows
+    ]
+
+
+def _trend_series(
+    rows: list[dict[str, Any]],
+    scope_context: dict[str, Any],
+    value_field: str,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    if scope_context["type"] in {"all", "asset_tree"}:
+        equipment_values: dict[tuple[str, str], list[float]] = {}
+        available_dates: set[str] = set()
+        for row in rows:
+            raw_date = _text_id(row.get("date"))
+            equipment_id = _text_id(row.get("equipment_id")) or "__unassigned__"
+            if not raw_date:
+                continue
+            available_dates.add(raw_date)
+            value = _finite_observation(row.get(value_field))
+            if value is not None:
+                equipment_values.setdefault((raw_date, equipment_id), []).append(value)
+        date_equipment_means: dict[str, list[float]] = {}
+        for (raw_date, _equipment_id), values in equipment_values.items():
+            date_equipment_means.setdefault(raw_date, []).append(sum(values) / len(values))
+        return [
+            {
+                "id": "scope",
+                "label": "Equipment average",
+                "aggregation": "mean_of_equipment_means",
+                "rows": [
+                    {
+                        "date": raw_date,
+                        value_field: _mean_or_none(date_equipment_means.get(raw_date, [])),
+                    }
+                    for raw_date in sorted(available_dates)
+                ],
+            }
+        ]
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        installation_id = _text_id(row.get("installation_point_id"))
+        if installation_id:
+            grouped.setdefault(installation_id, []).append(row)
+    series = []
+    for installation_id, sensor_rows in sorted(
+        grouped.items(),
+        key=lambda item: _sort_key(item[0]),
+    ):
+        chronological_rows = sorted(
+            sensor_rows,
+            key=lambda row: _text_id(row.get("date")),
+        )
+        first = chronological_rows[0]
+        series.append(
+            {
+                "id": installation_id,
+                "label": (
+                    first.get("installation_point_name")
+                    or first.get("sensor_id")
+                    or installation_id
+                ),
+                "aggregation": "sensor",
+                "rows": [
+                    {
+                        "date": row.get("date"),
+                        "installation_point_id": installation_id,
+                        value_field: row.get(value_field),
+                    }
+                    for row in chronological_rows
+                ],
+            }
+        )
+    return series
+
+
+def _mean_or_none(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _validate_trend_detail_limit(limit: int) -> int:
+    if limit < 1 or limit > MAX_TREND_DETAIL_LIMIT:
+        raise ValueError(
+            f"detail_limit must be between 1 and {MAX_TREND_DETAIL_LIMIT}"
+        )
+    return limit
+
+
+def _validate_trend_detail_offset(offset: int) -> int:
+    if offset < 0:
+        raise ValueError("detail_offset must be zero or greater")
+    return offset
 
 
 def _finite_observation(value: Any) -> float | None:

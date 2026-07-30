@@ -49,14 +49,12 @@ WAITES_DATE_SCOPED_RELEASE_TABLES = [
     "waites_rms_observations",
     "waites_temperature_observations",
     "waites_impact_observations",
-    "waites_action_items",
 ]
 
 WAITES_NATIVE_TABLES = [
     "waites_rms_observations",
     "waites_temperature_observations",
     "waites_impact_observations",
-    "waites_action_items",
 ]
 
 WAITES_TABLES = [
