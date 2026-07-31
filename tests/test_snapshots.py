@@ -1,17 +1,15 @@
 from datetime import date
 from pathlib import Path
-import csv
-import json
-
 import pytest
 
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.observations import load_sensor_daily_snapshots
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.waites.client import WaitesApiResponse
 from insy_sensor_data.waites.fetch import fetch_waites
 
 
-def test_build_sensor_snapshot_writes_joined_converted_stats(tmp_path: Path) -> None:
+def test_build_sensor_snapshot_stores_joined_converted_stats_without_artifacts(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     run_date = date(2025, 7, 9)
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
@@ -21,10 +19,13 @@ def test_build_sensor_snapshot_writes_joined_converted_stats(tmp_path: Path) -> 
     assert summary["record_count"] == 9
     snapshot_path = tmp_path / "data" / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv"
     metadata_path = tmp_path / "data" / "processed" / "snapshots" / "date=2025-07-09" / "metadata.json"
-    assert snapshot_path.exists()
-    assert metadata_path.exists()
+    assert not snapshot_path.exists()
+    assert not metadata_path.exists()
 
-    rows = _rows_by_installation_id(snapshot_path)
+    rows = {
+        str(row["installation_point_id"]): row
+        for row in load_sensor_daily_snapshots(settings, run_date)
+    }
     row = rows["201300"]
     assert row["installation_point_name"] == "Bottom Shaft - NDE"
     assert row["equipment_name"] == "BL - Aluminium Pinch Roll"
@@ -36,15 +37,15 @@ def test_build_sensor_snapshot_writes_joined_converted_stats(tmp_path: Path) -> 
     assert float(row["temp_sensor_mean"]) == pytest.approx(((35.92 + 36.10) / 2) * 1.8 + 32)
 
     orphan = rows["201999"]
-    assert orphan["equipment_id"] == ""
-    assert orphan["customer_asset_id"] == ""
-    assert orphan["rms_accel_mean_x"] != ""
+    assert orphan["equipment_id"] is None
+    assert orphan["customer_asset_id"] is None
+    assert orphan["rms_accel_mean_x"] is not None
 
     temp_only = rows["201307"]
-    assert temp_only["temp_sensor_mean"] != ""
-    assert temp_only["rms_accel_mean_x"] == ""
+    assert temp_only["temp_sensor_mean"] is not None
+    assert temp_only["rms_accel_mean_x"] is None
 
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata = summary["metadata"]
     assert metadata["unit_conversions"]["rms.velocity"] == "mm/s to in/s using divisor 25.4"
     assert metadata["raw_record_counts"]["readings-rms"] == 21
 
@@ -74,19 +75,16 @@ def test_build_sensor_snapshot_reads_api_raw_after_validation(tmp_path: Path) ->
     assert summary["validation_status"] in {"valid", "valid_with_warnings"}
     snapshot_path = tmp_path / "data" / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv"
     metadata_path = tmp_path / "data" / "processed" / "snapshots" / "date=2025-07-09" / "metadata.json"
-    rows = _rows_by_installation_id(snapshot_path)
+    rows = {
+        str(row["installation_point_id"]): row
+        for row in load_sensor_daily_snapshots(settings, run_date, source="api")
+    }
     assert rows["201300"]["customer_asset_id"] == "LEVF412TS"
 
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata = summary["metadata"]
     assert metadata["source"] == "api"
     assert metadata["validation"]["status"] in {"valid", "valid_with_warnings"}
     assert metadata["validation"]["path"].endswith("validation.json")
-
-
-def _rows_by_installation_id(path: Path) -> dict[str, dict[str, str]]:
-    with path.open(newline="", encoding="utf-8") as csv_file:
-        return {row["installation_point_id"]: row for row in csv.DictReader(csv_file)}
-
 
 class _FakeWaitesClient:
     def __init__(self, payloads: dict[str, dict[str, object]]) -> None:

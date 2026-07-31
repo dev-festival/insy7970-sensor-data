@@ -96,7 +96,7 @@ def fetch_waites(
     manifest_path = run_dir / "manifest.json"
     _write_json(manifest_path, manifest)
     refresh_waites_manifest_artifacts(settings=settings, run_date=run_date)
-    reference_outputs = write_waites_reference_tables(storage, raw_envelopes)
+    reference_outputs: dict[str, str] = {}
 
     return {
         "source": source,

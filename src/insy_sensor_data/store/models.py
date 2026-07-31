@@ -16,6 +16,7 @@ from insy_sensor_data.store.errors import (
     StoreNotFoundError,
 )
 from insy_sensor_data.store.revision import data_revision
+from insy_sensor_data.store.schema import resolve_configured_source
 
 
 def list_models(
@@ -25,12 +26,11 @@ def list_models(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> dict[str, Any]:
-    resolved_source = source or settings.source_mode
+    resolved_source = resolve_configured_source(settings, source)
     with read_store(
         settings,
         required_tables=(
             "cluster_model_runs",
-            "sensor_daily_snapshots",
             "waites_ingestion_ledger",
         ),
     ) as connection:
@@ -139,7 +139,7 @@ def _revision_for_dates(
 ) -> dict[str, Any]:
     with read_store(
         settings,
-        required_tables=("sensor_daily_snapshots", "waites_ingestion_ledger"),
+        required_tables=("waites_ingestion_ledger",),
     ) as connection:
         return data_revision(
             connection,

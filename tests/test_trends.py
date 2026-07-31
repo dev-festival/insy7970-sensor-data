@@ -11,7 +11,7 @@ from insy_sensor_data.snapshots.trends import build_trends, query_sqlite_trends
 from insy_sensor_data.waites.fetch import fetch_waites
 
 
-def test_build_trends_writes_sensor_and_equipment_outputs(tmp_path: Path) -> None:
+def test_build_trends_returns_counts_without_routine_outputs(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     run_date = date(2025, 7, 9)
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
@@ -25,35 +25,15 @@ def test_build_trends_writes_sensor_and_equipment_outputs(tmp_path: Path) -> Non
     sensor_path = trend_dir / "sensor_trends.csv"
     equipment_path = trend_dir / "equipment_trends.csv"
     metadata_path = trend_dir / "metadata.json"
-    assert sensor_path.exists()
-    assert equipment_path.exists()
-    assert metadata_path.exists()
-
-    with sensor_path.open(newline="", encoding="utf-8") as csv_file:
-        sensor_rows = list(csv.DictReader(csv_file))
-    with equipment_path.open(newline="", encoding="utf-8") as csv_file:
-        equipment_rows = list(csv.DictReader(csv_file))
-
-    assert len(sensor_rows) == 9
-    assert {
-        "date",
-        "installation_point_id",
-        "impact_min",
-        "impact_mean",
-        "impact_max",
-        "temp_sensor_min",
-        "temp_sensor_mean",
-        "temp_sensor_max",
-    } <= set(sensor_rows[0])
-    assert {"date", "equipment_id", "sensor_count", "impact_mean_avg"} <= set(equipment_rows[0])
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert metadata["skipped_dates"] == []
+    assert not sensor_path.exists()
+    assert not equipment_path.exists()
+    assert not metadata_path.exists()
 
 
 def test_build_trends_requires_at_least_one_snapshot(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
 
-    with pytest.raises(FileNotFoundError, match="No snapshot artifacts"):
+    with pytest.raises(FileNotFoundError, match="No SQLite daily snapshots"):
         build_trends(
             settings=settings,
             start_date=date(2025, 7, 9),
@@ -72,9 +52,15 @@ def test_build_trends_with_multi_day_mock_data_shows_movement(tmp_path: Path) ->
     summary = build_trends(settings=settings, start_date=start_date, end_date=end_date)
 
     assert summary["skipped_dates"] == []
-    trend_path = tmp_path / "data" / "processed" / "trends" / "start=2025-07-09_end=2025-07-11"
-    with (trend_path / "sensor_trends.csv").open(newline="", encoding="utf-8") as csv_file:
-        rows = list(csv.DictReader(csv_file))
+    rows = query_sqlite_trends(
+        settings,
+        start_date,
+        end_date,
+        value_fields=[
+            "rms_vel_min_x", "rms_vel_mean_x", "rms_vel_max_x",
+            "impact_mean", "temp_sensor_mean",
+        ],
+    )["sensor_rows"]
 
     rising = [_metric(rows, raw_date, "201300", "rms_vel_mean_x") for raw_date in _trend_dates()]
     stable = [_metric(rows, raw_date, "201301", "rms_vel_mean_x") for raw_date in _trend_dates()]
@@ -89,7 +75,7 @@ def test_build_trends_with_multi_day_mock_data_shows_movement(tmp_path: Path) ->
     assert normalizing[0] > normalizing[1] > normalizing[2]
     assert temp_spike[1] > temp_spike[0]
     assert temp_spike[1] > temp_spike[2]
-    assert _row(rows, "2025-07-10", "201305")["rms_vel_mean_x"] == ""
+    assert _row(rows, "2025-07-10", "201305")["rms_vel_mean_x"] is None
 
 
 def test_query_sqlite_trends_reads_daily_snapshots_without_artifacts(tmp_path: Path) -> None:
@@ -156,7 +142,7 @@ def test_query_sqlite_trends_requires_matching_source_rows(tmp_path: Path) -> No
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
     build_sensor_snapshot(settings=settings, run_date=run_date)
 
-    with pytest.raises(FileNotFoundError, match="source api"):
+    with pytest.raises(ValueError, match="configured for source"):
         query_sqlite_trends(settings=settings, start_date=run_date, end_date=run_date, source="api")
 
 
@@ -176,27 +162,13 @@ def test_build_trends_reports_missing_snapshot_dates(tmp_path: Path) -> None:
     assert summary["sensor_record_count"] == 18
 
 
-def test_build_trends_reads_api_source_snapshots_only(tmp_path: Path) -> None:
-    settings = AppSettings(data_dir=tmp_path / "data")
-    run_date = date(2025, 7, 9)
-    fetch_waites(settings=settings, run_date=run_date, facility_id=679)
-    build_sensor_snapshot(settings=settings, run_date=run_date)
-    _rewrite_snapshot_source(tmp_path / "data", "2025-07-09", "api")
-
-    summary = build_trends(settings=settings, start_date=run_date, end_date=run_date, source="api")
-
-    assert summary["source"] == "api"
-    assert summary["sensor_record_count"] == 9
-    assert summary["source_mismatch_dates"] == []
-
-
 def test_build_trends_skips_snapshot_source_mismatches(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     run_date = date(2025, 7, 9)
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
     build_sensor_snapshot(settings=settings, run_date=run_date)
 
-    with pytest.raises(FileNotFoundError, match="source api"):
+    with pytest.raises(FileNotFoundError, match="No SQLite daily snapshots"):
         build_trends(settings=settings, start_date=run_date, end_date=run_date, source="api")
 
 
@@ -219,10 +191,3 @@ def _metric(
     metric: str,
 ) -> float:
     return float(_row(rows, raw_date, installation_point_id)[metric])
-
-
-def _rewrite_snapshot_source(data_dir: Path, raw_date: str, source: str) -> None:
-    metadata_path = data_dir / "processed" / "snapshots" / f"date={raw_date}" / "metadata.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["source"] = source
-    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")

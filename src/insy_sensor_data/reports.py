@@ -11,6 +11,8 @@ import subprocess
 from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import connect_observation_store, observation_db_path
+from insy_sensor_data.observations import load_sensor_daily_snapshots
+from insy_sensor_data.snapshots.trends import SENSOR_TREND_FIELDS, query_sqlite_trends
 from insy_sensor_data.storage import get_storage_paths
 
 
@@ -34,29 +36,6 @@ def build_mock_trend_report(
 
     dates = _date_range(start_date, end_date)
     storage = get_storage_paths(settings.data_dir)
-    trend_dir = storage.trend_dir(start_date.isoformat(), end_date.isoformat())
-    trend_metadata_path = trend_dir / "metadata.json"
-    sensor_trends_path = trend_dir / "sensor_trends.csv"
-    equipment_trends_path = trend_dir / "equipment_trends.csv"
-    _require_report_input(
-        trend_metadata_path,
-        "Missing mock trend metadata",
-        start_date,
-        end_date,
-    )
-    _require_report_input(
-        sensor_trends_path,
-        "Missing mock sensor trend rows",
-        start_date,
-        end_date,
-    )
-    _require_report_input(
-        equipment_trends_path,
-        "Missing mock equipment trend rows",
-        start_date,
-        end_date,
-    )
-
     report_dir = _mock_trend_report_dir(settings, start_date, end_date)
     samples_dir = report_dir / "samples"
     charts_dir = report_dir / "charts"
@@ -66,9 +45,27 @@ def build_mock_trend_report(
     raw_counts = _raw_counts(settings, dates)
     sqlite_loads = _sqlite_loads(settings, dates)
     snapshot_counts = _snapshot_counts(settings, dates)
-    trend_metadata = read_json(trend_metadata_path)
-    sensor_trend_rows = read_csv_rows(sensor_trends_path)
-    equipment_trend_rows = read_csv_rows(equipment_trends_path)
+    identifier_fields = {
+        "date", "installation_point_id", "installation_point_name",
+        "equipment_id", "equipment_name", "sensor_id", "customer_asset_id",
+    }
+    trend_payload = query_sqlite_trends(
+        settings,
+        start_date,
+        end_date,
+        source="mock",
+        value_fields=[
+            field for field in SENSOR_TREND_FIELDS if field not in identifier_fields
+        ],
+    )
+    trend_metadata = trend_payload["metadata"]
+    sensor_trend_rows = trend_payload["sensor_rows"]
+    equipment_record_count = len(
+        {
+            (str(row.get("date") or ""), str(row.get("equipment_id") or ""))
+            for row in sensor_trend_rows
+        }
+    )
     trend_counts = [
         {
             "start_date": start_date.isoformat(),
@@ -76,7 +73,7 @@ def build_mock_trend_report(
             "sensor_record_count": trend_metadata.get("sensor_record_count", len(sensor_trend_rows)),
             "equipment_record_count": trend_metadata.get(
                 "equipment_record_count",
-                len(equipment_trend_rows),
+                equipment_record_count,
             ),
             "input_mode": trend_metadata.get("input_mode", "snapshots"),
         }
@@ -196,7 +193,7 @@ def _sqlite_loads(settings: AppSettings, dates: list[date]) -> list[dict[str, An
     date_values = [run_date.isoformat() for run_date in dates]
     placeholders = ", ".join("?" for _date in date_values)
     with connect_observation_store(settings) as connection:
-        rows = [
+        ledger_rows = [
             dict(row)
             for row in connection.execute(
                 f"""
@@ -204,22 +201,33 @@ def _sqlite_loads(settings: AppSettings, dates: list[date]) -> list[dict[str, An
                     source_date,
                     source,
                     facility_id,
-                    equipment_count,
-                    installation_point_count,
-                    rms_count,
-                    impact_count,
-                    temperature_count,
-                    action_item_count,
-                    rollup_count,
-                    loaded_at,
+                    endpoint_counts_json,
+                    snapshot_row_count,
+                    updated_at,
                     manifest_sha256
-                FROM waites_loads
+                FROM waites_ingestion_ledger
                 WHERE source = 'mock' AND source_date IN ({placeholders})
                 ORDER BY source_date
                 """,
                 tuple(date_values),
             )
         ]
+    rows = []
+    for ledger in ledger_rows:
+        counts = json.loads(ledger.pop("endpoint_counts_json"))
+        rows.append(
+            {
+                **ledger,
+                "equipment_count": counts.get("equipment", 0),
+                "installation_point_count": counts.get("installation-points", 0),
+                "rms_count": counts.get("readings-rms", 0),
+                "impact_count": counts.get("readings-impact-vue", 0),
+                "temperature_count": counts.get("readings-temperature", 0),
+                "action_item_count": counts.get("action-items", 0),
+                "rollup_count": 0,
+                "loaded_at": ledger.get("updated_at"),
+            }
+        )
 
     loaded_dates = {row["source_date"] for row in rows}
     missing = [raw_date for raw_date in date_values if raw_date not in loaded_dates]
@@ -233,22 +241,16 @@ def _sqlite_loads(settings: AppSettings, dates: list[date]) -> list[dict[str, An
 
 
 def _snapshot_counts(settings: AppSettings, dates: list[date]) -> list[dict[str, Any]]:
-    storage = get_storage_paths(settings.data_dir)
     rows: list[dict[str, Any]] = []
     for run_date in dates:
-        snapshot_dir = storage.snapshot_dir(run_date.isoformat())
-        metadata_path = snapshot_dir / "metadata.json"
-        snapshot_path = snapshot_dir / "sensor_snapshot.csv"
-        _require_report_input(metadata_path, "Missing snapshot metadata", dates[0], dates[-1])
-        _require_report_input(snapshot_path, "Missing sensor snapshot", dates[0], dates[-1])
-        metadata = read_json(metadata_path)
+        snapshot_rows = load_sensor_daily_snapshots(settings, run_date, source="mock")
         rows.append(
             {
                 "date": run_date.isoformat(),
-                "source": metadata.get("source"),
-                "input_mode": metadata.get("input_mode", "raw"),
-                "record_count": metadata.get("record_count", 0),
-                "snapshot_path": snapshot_path.as_posix(),
+                "source": "mock",
+                "input_mode": "sqlite",
+                "record_count": len(snapshot_rows),
+                "snapshot_path": "sqlite",
             }
         )
     return rows
@@ -544,11 +546,9 @@ def _native_observation_sample(
 
 
 def _snapshot_sample(settings: AppSettings, dates: list[date]) -> list[dict[str, str]]:
-    storage = get_storage_paths(settings.data_dir)
     rows: list[dict[str, str]] = []
     for run_date in dates:
-        snapshot_path = storage.snapshot_dir(run_date.isoformat()) / "sensor_snapshot.csv"
-        for row in read_csv_rows(snapshot_path)[:5]:
+        for row in load_sensor_daily_snapshots(settings, run_date, source="mock")[:5]:
             rows.append(
                 {
                     "date": run_date.isoformat(),

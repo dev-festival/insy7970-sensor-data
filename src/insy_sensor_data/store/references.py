@@ -8,11 +8,11 @@ from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.store.connection import read_store
 from insy_sensor_data.store.errors import StoreNotFoundError
 from insy_sensor_data.store.revision import data_revision
+from insy_sensor_data.store.schema import active_snapshot_table, resolve_configured_source
 
 
 VALID_SCOPE_TYPES = {"all", "asset_tree", "equipment", "sensor"}
 REFERENCE_TABLES = (
-    "sensor_daily_snapshots",
     "waites_asset_tree_reference",
     "waites_equipment_reference",
     "waites_installation_point_reference",
@@ -30,6 +30,7 @@ def list_equipment(
     resolved_source = _resolve_source(settings, source)
     _validate_range(start_date, end_date)
     with read_store(settings, required_tables=REFERENCE_TABLES) as connection:
+        table = active_snapshot_table(connection)
         clauses, params = _snapshot_range_clauses(
             resolved_source,
             start_date,
@@ -45,7 +46,7 @@ def list_equipment(
                 COUNT(DISTINCT installation_point_id) AS sensor_count,
                 GROUP_CONCAT(DISTINCT installation_point_id) AS installation_point_ids,
                 GROUP_CONCAT(DISTINCT source_date) AS dates
-            FROM sensor_daily_snapshots
+            FROM {table}
             WHERE {" AND ".join(clauses)}
             GROUP BY source, COALESCE(equipment_id, '')
             ORDER BY
@@ -102,6 +103,7 @@ def list_equipment_tree(
     resolved_source = _resolve_source(settings, source)
     _validate_range(start_date, end_date)
     with read_store(settings, required_tables=REFERENCE_TABLES) as connection:
+        table = active_snapshot_table(connection)
         asset_refs = _reference_index(
             connection.execute(
                 """
@@ -168,7 +170,7 @@ def list_equipment_tree(
                 MAX(COALESCE(sensor_id, '')) AS sensor_id,
                 MAX(COALESCE(customer_asset_id, '')) AS customer_asset_id,
                 GROUP_CONCAT(DISTINCT source_date) AS dates
-            FROM sensor_daily_snapshots
+            FROM {table}
             WHERE {" AND ".join(clauses)}
             GROUP BY COALESCE(equipment_id, ''), installation_point_id
             ORDER BY
@@ -439,6 +441,7 @@ def _resolve_sensor_scope(
         tuple(params),
     ).fetchone()
     if sensor is None:
+        table = active_snapshot_table(connection)
         snapshot_clauses = [
             "source = ?",
             "source_date >= ?",
@@ -463,7 +466,7 @@ def _resolve_sensor_scope(
                 equipment_id,
                 sensor_id,
                 customer_asset_id
-            FROM sensor_daily_snapshots
+            FROM {table}
             WHERE {" AND ".join(snapshot_clauses)}
             LIMIT 1
             """,
@@ -515,10 +518,11 @@ def _active_scope_ids(
     if not equipment_ids:
         return set(), set()
     placeholders = ", ".join("?" for _value in equipment_ids)
+    table = active_snapshot_table(connection)
     rows = connection.execute(
         f"""
         SELECT DISTINCT equipment_id, installation_point_id
-        FROM sensor_daily_snapshots
+        FROM {table}
         WHERE source = ?
           AND source_date >= ?
           AND source_date <= ?
@@ -628,11 +632,7 @@ def _validate_range(start_date: date | None, end_date: date | None) -> None:
 
 
 def _resolve_source(settings: AppSettings, source: str | None) -> str:
-    selected = (source or settings.source_mode).strip().lower()
-    if selected not in VALID_SOURCE_MODES:
-        allowed = ", ".join(sorted(VALID_SOURCE_MODES))
-        raise ValueError(f"source must be one of: {allowed}")
-    return selected
+    return resolve_configured_source(settings, source)
 
 
 def _asset_tree_name(asset_tree_id: str, row: dict[str, Any]) -> str:

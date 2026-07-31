@@ -17,7 +17,7 @@ from insy_sensor_data.observations import (
     query_daily_metric_rollups,
 )
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
-from insy_sensor_data.snapshots.trends import build_trends
+from insy_sensor_data.snapshots.trends import build_trends, query_sqlite_trends
 from insy_sensor_data.waites.fetch import fetch_waites
 
 
@@ -30,7 +30,7 @@ def test_load_waites_observations_creates_schema_and_records_counts(tmp_path: Pa
 
     assert observation_db_path(settings).exists()
     assert summary["source"] == "mock"
-    assert summary["schema_version"] == 6
+    assert summary["schema_version"] == 7
     assert summary["row_counts"] == {
         "asset_trees": 3,
         "equipment": 6,
@@ -159,10 +159,8 @@ def test_build_sensor_snapshot_reads_sqlite_observations(tmp_path: Path) -> None
     assert ledger["snapshot_row_count"] == 9
     assert ledger["snapshot_store_status"] == "stored"
     assert ledger["endpoint_counts"]["readings-rms"] == 21
-    rows = _rows_by_installation_id(
-        tmp_path / "data" / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv"
-    )
-    assert float(rows["201300"]["rms_vel_mean_x"]) == pytest.approx(((1.70 + 1.72 + 1.74) / 3) / 25.4)
+    rows = {str(row["installation_point_id"]): row for row in stored_rows}
+    assert rows["201300"]["rms_vel_mean_x"] == pytest.approx(((1.70 + 1.72 + 1.74) / 3) / 25.4)
 
 
 def test_build_trends_reads_sqlite_observations(tmp_path: Path) -> None:
@@ -190,15 +188,18 @@ def test_build_trends_reads_sqlite_observations(tmp_path: Path) -> None:
 
     assert summary["input_mode"] == "sqlite"
     assert summary["sensor_record_count"] == 27
-    trend_path = tmp_path / "data" / "processed" / "trends" / "start=2025-07-09_end=2025-07-11"
-    with (trend_path / "sensor_trends.csv").open(newline="", encoding="utf-8") as csv_file:
-        rows = list(csv.DictReader(csv_file))
+    rows = query_sqlite_trends(
+        settings,
+        start_date,
+        end_date,
+        value_fields=["rms_vel_mean_x"],
+    )["sensor_rows"]
 
     rising = [_metric(rows, raw_date, "201300", "rms_vel_mean_x") for raw_date in _trend_dates()]
     assert rising[0] < rising[1] < rising[2]
     assert _table_count(settings, "waites_rms_observations") == 0
     assert _table_count(settings, "waites_installation_points") == 0
-    assert _table_count(settings, "sensor_daily_snapshots") == 27
+    assert _table_count(settings, "sensor_daily_facts") == 27
     assert _table_count(settings, "waites_asset_tree_reference") == 3
     assert _table_count(settings, "waites_installation_point_reference") == 8
 
@@ -246,7 +247,7 @@ def test_native_purge_requires_snapshot_and_keeps_ledger(tmp_path: Path) -> None
     assert _table_count(settings, "waites_temperature_observations") == 0
     assert _table_count(settings, "waites_impact_observations") == 0
     assert _table_count(settings, "waites_action_items") == 4
-    assert _table_count(settings, "sensor_daily_snapshots") == 9
+    assert _table_count(settings, "sensor_daily_facts") == 9
     assert _table_count(settings, "waites_asset_tree_reference") == 3
     assert _table_count(settings, "waites_equipment_reference") == 6
     assert _table_count(settings, "waites_installation_point_reference") == 8

@@ -7,6 +7,7 @@ from typing import Any
 
 from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.observations import load_sensor_daily_snapshots
 from insy_sensor_data.storage import get_storage_paths
 
 
@@ -61,22 +62,11 @@ def build_feature_preview(
         raise ValueError("min_non_null_ratio must be between 0 and 1")
 
     storage = get_storage_paths(settings.data_dir)
-    snapshot_dir = storage.snapshot_dir(run_date.isoformat())
-    snapshot_path = snapshot_dir / "sensor_snapshot.csv"
-    metadata_path = snapshot_dir / "metadata.json"
-    if not snapshot_path.exists() or not metadata_path.exists():
-        raise FileNotFoundError(
-            f"Missing snapshot artifacts for {run_date.isoformat()}; "
-            "run `uv run sensor-data snapshot build` first."
-        )
-
-    snapshot_metadata = read_json(metadata_path)
-    if snapshot_metadata.get("source") != source_mode:
-        raise ValueError(
-            f"Snapshot source {snapshot_metadata.get('source')!r} does not match requested source {source_mode!r}."
-        )
-
-    rows = read_csv_rows(snapshot_path)
+    rows = load_sensor_daily_snapshots(
+        settings=settings,
+        run_date=run_date,
+        source=source_mode,
+    )
     output_dir = storage.feature_dir(run_date.isoformat(), source_mode)
     output_dir.mkdir(parents=True, exist_ok=True)
     dimensions = DIMENSIONS if dimension_mode == "all" else (dimension_mode,)
@@ -106,7 +96,7 @@ def build_feature_preview(
         "min_non_null_ratio": min_non_null_ratio,
         "min_rows": min_rows,
         "min_features": min_features,
-        "input_snapshot": snapshot_path.as_posix(),
+        "input_snapshot": "sqlite",
         "outputs": outputs,
         "dimensions": dimension_summaries,
     }

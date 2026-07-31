@@ -9,9 +9,11 @@ modules.
 
 ## Current Capabilities
 
-Sprint `0.6.1` makes SQLite the operational read authority behind the compact
-`0.6.0` web contracts. It adds explicit store failures, cross-day durable Waites
-event identity, and a maintenance backfill for older action-item dates:
+Sprint `0.6.2` makes fixed-schema SQLite the single operational authority behind
+the compact `0.6.0` web contracts. Validated raw payloads now become references,
+events, daily facts, revisions, and ingestion state in one transaction. Routine
+processing no longer coordinates through snapshot, trend, reference, or registered
+model files:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -30,10 +32,10 @@ event identity, and a maintenance backfill for older action-item dates:
 - pytest harness
 - mock Waites fixtures
 - raw evidence capture under `data/raw/waites/`
-- processed Waites reference tables under `data/processed/waites/reference/`
+- compact Waites reference tables in SQLite
 - raw-run visibility through FastAPI
-- daily sensor snapshots under `data/processed/snapshots/`
-- trend-ready outputs under `data/processed/trends/`
+- fixed typed daily sensor facts in SQLite
+- explicit snapshot and trend exports to operator-selected destinations
 - snapshot and trend visibility through FastAPI
 - artifact discovery, equipment lookup, equipment tree, cluster, drift, and cluster-window visibility through FastAPI
 - controlled mock trend dates for `2025-07-09` through `2025-07-11`
@@ -67,9 +69,9 @@ event identity, and a maintenance backfill for older action-item dates:
 - `cluster registry build-grid` for prebuilding feature-space models and adjacent-date drift
 - `workflow mock-range --cluster-models` and `workflow api-range --cluster-models`
 - `workflow mock-range` and `workflow api-range` for date-window orchestration
-- SQLite daily snapshot store mirrored from `sensor_snapshot.csv`
-- on-demand `/api/trends` reads over `sensor_daily_snapshots`
-- trend artifact fallback for export/report compatibility
+- versioned `sensor_daily_facts` without duplicate row JSON or runtime schema changes
+- on-demand `/api/trends` reads over the active SQLite snapshot authority
+- reversible, audited side-by-side snapshot migration
 - Waites ingestion ledger with endpoint counts, validation status, checksums, and retention status
 - workflow raw-retention modes: `keep`, `compress`, and `release`
 - date-scoped staging purge after snapshot and ledger persistence are verified
@@ -115,12 +117,13 @@ uv run sensor-data raw verify --source waites --date 2025-07-09
 uv run sensor-data raw compress --source waites --date 2025-07-09
 uv run sensor-data store load-waites --source mock --date 2025-07-09
 uv run sensor-data store backfill-events --source mock
+uv run sensor-data store migrate-snapshots --source mock
 uv run sensor-data snapshot build --source mock --date 2025-07-09
 uv run sensor-data snapshot build --source mock --date 2025-07-09 --input sqlite
-uv run sensor-data snapshot store --source mock --date 2025-07-09
+uv run sensor-data snapshot export --source mock --date 2025-07-09 --destination exports/snapshot.csv
 uv run sensor-data store purge-native --source mock --date 2025-07-09 --dry-run
 uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
-uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11 --input sqlite
+uv run sensor-data trend export --source mock --start-date 2025-07-09 --end-date 2025-07-11 --destination exports/trend
 uv run sensor-data workflow mock-day --date 2025-07-09
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
 uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
@@ -150,7 +153,13 @@ uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-reten
 uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --cluster-models
 ```
 
-The live workflow reads `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`, saves raw responses under `data/raw/waites/`, writes validation reports beside the raw run, stores the daily snapshot in CSV and SQLite, records a compact ingestion ledger, and defaults to releasing bulky raw/native/date-scoped staging rows after snapshot success. Use `--raw-retention keep --keep-native` when you need inspection/replay. Keep `.env` and `data/` out of Git.
+The live workflow reads `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`,
+saves temporary raw responses under `data/raw/waites/`, validates them, and commits
+references, events, fixed daily facts, revisions, and ingestion state atomically to
+SQLite. It defaults to releasing bulky raw/high-frequency data after success. Use
+`--raw-retention keep --keep-native` when you need inspection or replay, and use the
+explicit export commands when a CSV is actually needed. Keep `.env` and `data/` out
+of Git.
 
 For a visible mock trend, fetch and build snapshots for each supported mock trend date first:
 
@@ -210,14 +219,15 @@ Then open:
 - `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5`
 - `http://127.0.0.1:8000/docs`
 
-The web and API are read-only over existing daily snapshots, optional trend artifacts,
-registered SQLite cluster models, retained Waites events, and bounded Maximo
-work-order lookups in sprint `0.6.0`. Snapshot trend coverage reports finite values
+The web and API are read-only over fixed SQLite daily facts, registered SQLite
+cluster models, retained Waites events, and bounded Maximo work-order lookups.
+Each service instance is bound to one configured source; start the live data
+directory with `uv run sensor-data serve --source api`. A source mismatch or an
+incomplete store migration is rejected at startup. Snapshot trend coverage reports finite values
 for the selected metric field without imputing missing values; clicking an observed
 trend point selects that Snapshot date. Build snapshots first; the Trend tab reads
-projected, already-scoped rows from `sensor_daily_snapshots`, receives chart series
-aggregated by the server, and falls back to trend artifacts only when SQLite daily
-rows are unavailable. `/api/trends` bounds its detail collection with `limit`
+projected, already-scoped rows from the active SQLite snapshot table and receives
+chart series aggregated by the server. `/api/trends` bounds its detail collection with `limit`
 (default `500`, maximum `2000`) and `offset`. Snapshot readiness is independent of
 registered-model readiness, so a model-missing date can still render Snapshot,
 Trend, Events, and Measurements. Maximo is queried only when an Asset Tree,
@@ -240,20 +250,15 @@ GET /readings/rms?facility[]=679&start_date=YYYY-MM-DDT00:00:00Z&end_date=YYYY-M
 
 The response contains timestamped sensor readings keyed by `installation_point_id`, axis, facility, and metric values. Raw responses are saved under `data/raw/`; processed outputs are saved under `data/processed/`.
 
-Mock Waites ingestion writes:
+Routine mock and API ingestion uses:
 
 ```text
 data/raw/waites/date=YYYY-MM-DD/
-data/processed/waites/reference/
-data/processed/snapshots/date=YYYY-MM-DD/
-data/processed/trends/start=YYYY-MM-DD_end=YYYY-MM-DD/
-data/processed/features/date=YYYY-MM-DD_source=SOURCE/
-data/processed/clusters/date=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
-data/processed/drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
-data/processed/cluster_windows/start=YYYY-MM-DD_end=YYYY-MM-DD_source=SOURCE_dimension=DIMENSION_k=K/
-data/processed/cluster_models/date=YYYY-MM-DD_source=SOURCE_feature_space=FEATURE_SPACE_k=K/
-data/processed/cluster_model_drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_feature_space=FEATURE_SPACE_k=K/
+data/processed/observations.sqlite
 ```
+
+Legacy feature, cluster, drift, and report commands may still create explicitly
+requested investigation outputs. They are no longer routine coordination state.
 
 Live Waites canary ingestion writes the same raw paths:
 
@@ -261,7 +266,15 @@ Live Waites canary ingestion writes the same raw paths:
 data/raw/waites/date=YYYY-MM-DD/
 ```
 
-Live response shape validation writes `validation.json` beside the raw files. Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run prune old raw runs. `store load-waites` loads validated raw runs into SQLite date-scoped staging tables while preserving source timestamps, and also upserts compact `waites_asset_tree_reference`, `waites_equipment_reference`, `waites_installation_point_reference`, and cross-day `waites_events` facts. Snapshot builds write both `sensor_snapshot.csv` and `sensor_daily_snapshots` in `observations.sqlite`; `waites_ingestion_ledger` keeps endpoint counts, checksums, validation status, snapshot row count, and retention status. Release-mode retention removes high-frequency and replay-only staging rows after verification while preserving durable Events facts. API-source trend builds only consume snapshots whose metadata source is `api`; `--input sqlite` reads the daily snapshot store, not timestamp-native observations. Normal web reads use SQLite repositories and never silently fall back to CSV or JSON; raw-run and legacy artifact readers remain explicit diagnostics and migration inputs.
+Live response shape validation writes `validation.json` beside temporary raw files.
+Raw lifecycle commands can verify checksums, gzip endpoint JSON files, and dry-run
+prune old raw runs. The normal snapshot workflow aggregates validated payloads
+directly and atomically upserts compact references, cross-day `waites_events`, fixed
+`sensor_daily_facts`, snapshot revisions, and the ingestion ledger. The optional
+`store load-waites` path retains native timestamps for inspection or replay. Normal
+web reads use SQLite repositories and never silently fall back to CSV or JSON;
+raw-run and legacy artifact readers remain explicit diagnostics and migration
+inputs.
 
 ## Maximo History
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 from datetime import date
+from dataclasses import replace
 import json
 import os
 
@@ -38,6 +39,14 @@ from insy_sensor_data.snapshots.build import build_sensor_snapshot, store_existi
 from insy_sensor_data.snapshots.trends import VALID_TREND_INPUT_MODES
 from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.store.events import backfill_waites_events
+from insy_sensor_data.store.errors import StoreMigrationRequiredError
+from insy_sensor_data.store.exports import export_snapshot_csv, export_trend_csvs
+from insy_sensor_data.store.schema import (
+    FIXED_SNAPSHOT_TABLE,
+    LEGACY_SNAPSHOT_TABLE,
+    migrate_snapshot_store,
+    set_snapshot_authority,
+)
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.client import WaitesApiError
 from insy_sensor_data.waites.validate import validate_waites_raw, validation_summary
@@ -330,6 +339,45 @@ def store_load_waites(
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
+@store_app.command("migrate-snapshots")
+def store_migrate_snapshots(
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Single operational source to migrate: mock or api."),
+    ],
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Copy, verify, and activate the fixed 0.6.2 snapshot table."""
+    source_mode = _validate_source(source)
+    settings = _settings_for_source(AppSettings.from_env(env_file=env_file), source_mode)
+    try:
+        summary = migrate_snapshot_store(settings, source_mode)
+    except (FileNotFoundError, ValueError, StoreMigrationRequiredError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
+@store_app.command("snapshot-authority")
+def store_snapshot_authority(
+    authority: Annotated[
+        str,
+        typer.Option("--authority", help="Read authority: fixed or legacy."),
+    ],
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Select the verified fixed table or retained legacy rollback table."""
+    selected = authority.strip().lower()
+    mapping = {"fixed": FIXED_SNAPSHOT_TABLE, "legacy": LEGACY_SNAPSHOT_TABLE}
+    if selected not in mapping:
+        raise typer.BadParameter("authority must be one of: fixed, legacy")
+    settings = AppSettings.from_env(env_file=env_file)
+    try:
+        summary = set_snapshot_authority(settings, mapping[selected])
+    except (FileNotFoundError, ValueError, StoreMigrationRequiredError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
 @store_app.command("backfill-events")
 def store_backfill_events(
     source: Annotated[
@@ -456,6 +504,28 @@ def snapshot_store(
     typer.echo(json.dumps(summary, sort_keys=True))
 
 
+@snapshot_app.command("export")
+def snapshot_export(
+    snapshot_date: Annotated[str, typer.Option("--date", help="Snapshot date in YYYY-MM-DD format.")],
+    destination: Annotated[Path, typer.Option("--destination", help="Explicit output CSV path.")],
+    source: Annotated[str, typer.Option("--source", help="Source mode: mock or api.")] = "mock",
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Export one store-backed daily snapshot to an explicit CSV path."""
+    source_mode = _validate_source(source)
+    settings = _settings_for_source(AppSettings.from_env(env_file=env_file), source_mode)
+    try:
+        summary = export_snapshot_csv(
+            settings,
+            run_date=_parse_run_date(snapshot_date),
+            source=source_mode,
+            destination=destination,
+        )
+    except (FileNotFoundError, ValueError, StoreMigrationRequiredError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
 @trend_app.command("build")
 def trend_build(
     start_date: Annotated[
@@ -473,7 +543,7 @@ def trend_build(
     input_mode: Annotated[
         str,
         typer.Option("--input", help="Trend input mode: snapshots or sqlite."),
-    ] = "snapshots",
+    ] = "sqlite",
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
     """Build lightweight trend-ready outputs from processed snapshots."""
@@ -489,6 +559,30 @@ def trend_build(
             input_mode=trend_input,
         )
     except (FileNotFoundError, NotImplementedError, ValueError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
+
+
+@trend_app.command("export")
+def trend_export(
+    start_date: Annotated[str, typer.Option("--start-date", help="Trend start date in YYYY-MM-DD format.")],
+    end_date: Annotated[str, typer.Option("--end-date", help="Trend end date in YYYY-MM-DD format.")],
+    destination: Annotated[Path, typer.Option("--destination", help="Explicit output directory.")],
+    source: Annotated[str, typer.Option("--source", help="Source mode: mock or api.")] = "mock",
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Export store-backed sensor and equipment trends to an explicit directory."""
+    source_mode = _validate_source(source)
+    settings = _settings_for_source(AppSettings.from_env(env_file=env_file), source_mode)
+    try:
+        summary = export_trend_csvs(
+            settings,
+            start_date=_parse_run_date(start_date),
+            end_date=_parse_run_date(end_date),
+            source=source_mode,
+            destination=destination,
+        )
+    except (FileNotFoundError, ValueError, StoreMigrationRequiredError) as exc:
         _fail(str(exc))
     typer.echo(json.dumps(summary, sort_keys=True))
 
@@ -550,7 +644,7 @@ def workflow_mock_trend(
     input_mode: Annotated[
         str,
         typer.Option("--input", help="Trend input mode: snapshots or sqlite."),
-    ] = "snapshots",
+    ] = "sqlite",
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Print the combined workflow summary as JSON."),
@@ -723,7 +817,7 @@ def workflow_api_day(
 ) -> None:
     """Run the friendly one-day live Waites canary workflow."""
     retention_mode = _validate_input_mode(raw_retention, VALID_RAW_RETENTION_MODES, "raw retention")
-    settings = AppSettings.from_env(env_file=env_file)
+    settings = _settings_for_source(AppSettings.from_env(env_file=env_file), "api")
     try:
         summary = run_api_day_workflow(
             settings=settings,
@@ -825,7 +919,7 @@ def workflow_api_range(
     cluster_dimensions = _parse_dimensions(dimension, dimensions)
     registry_feature_spaces = _parse_feature_spaces(feature_spaces)
     registry_ks = _parse_ks(ks)
-    settings = AppSettings.from_env(env_file=env_file)
+    settings = _settings_for_source(AppSettings.from_env(env_file=env_file), "api")
     try:
         summary = run_api_range_workflow(
             settings=settings,
@@ -1191,6 +1285,10 @@ def _validate_source(source: str) -> str:
         allowed = ", ".join(sorted(VALID_SOURCE_MODES))
         raise typer.BadParameter(f"source must be one of: {allowed}")
     return source_mode
+
+
+def _settings_for_source(settings: AppSettings, source: str) -> AppSettings:
+    return settings if settings.source_mode == source else replace(settings, source_mode=source)
 
 
 def _validate_raw_source(source: str) -> str:

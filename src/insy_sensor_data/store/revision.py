@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Any
+import hashlib
 import sqlite3
 
 from insy_sensor_data.store.connection import schema_version
@@ -38,6 +39,27 @@ def data_revision(
         """,
         tuple(params),
     ).fetchone()
+    snapshot_revision = None
+    revision_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'snapshot_revisions'"
+    ).fetchone()
+    if revision_table is not None:
+        revisions = connection.execute(
+            f"""
+            SELECT source_date, snapshot_revision
+            FROM snapshot_revisions
+            WHERE {where}
+            ORDER BY source_date
+            """,
+            tuple(params),
+        ).fetchall()
+        if len(revisions) == 1:
+            snapshot_revision = str(revisions[0]["snapshot_revision"])
+        elif revisions:
+            joined = "\n".join(
+                f"{row['source_date']}:{row['snapshot_revision']}" for row in revisions
+            )
+            snapshot_revision = "range:" + hashlib.sha256(joined.encode("utf-8")).hexdigest()[:20]
     return {
         "store": "sqlite",
         "schema_version": schema_version(connection),
@@ -48,4 +70,5 @@ def data_revision(
         "last_date": ledger["last_date"],
         "snapshot_built_at": ledger["snapshot_built_at"],
         "ingestion_completed_at": ledger["ingestion_completed_at"],
+        "snapshot_revision": snapshot_revision,
     }

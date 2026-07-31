@@ -13,6 +13,7 @@ from insy_sensor_data.store.errors import (
     StoreNotFoundError,
     StoreUnavailableError,
 )
+from insy_sensor_data.store.schema import validate_service_source
 
 
 def store_path(settings: AppSettings) -> Path:
@@ -39,6 +40,7 @@ def read_store(
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        validate_service_source(connection, settings.source_mode)
         if required_tables:
             _require_tables(connection, required_tables)
         yield connection

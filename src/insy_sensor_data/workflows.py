@@ -30,7 +30,7 @@ def run_mock_day_workflow(
     settings: AppSettings,
     run_date: date,
     facility_id: int = 679,
-    snapshot_input: str = "sqlite",
+    snapshot_input: str = "raw",
     raw_retention: str = "keep",
     keep_native: bool = False,
 ) -> dict[str, Any]:
@@ -42,13 +42,18 @@ def run_mock_day_workflow(
         source="mock",
     )
     validation_report = validate_waites_raw(settings=settings, run_date=run_date, source="mock")
-    load_summary = load_waites_observations(settings=settings, run_date=run_date, source="mock")
+    load_summary = (
+        load_waites_observations(settings=settings, run_date=run_date, source="mock")
+        if snapshot_input == "sqlite"
+        else None
+    )
     snapshot_summary = build_sensor_snapshot(
         settings=settings,
         run_date=run_date,
         source="mock",
         input_mode=snapshot_input,
     )
+    load_summary = load_summary or snapshot_summary["metadata"]["store_load"]
     retention_summary = _apply_retention(
         settings=settings,
         run_date=run_date,
@@ -95,8 +100,8 @@ def run_mock_trend_workflow(
     start_date: date,
     end_date: date,
     facility_id: int = 679,
-    trend_input: str = "snapshots",
-    snapshot_input: str = "sqlite",
+    trend_input: str = "sqlite",
+    snapshot_input: str = "raw",
     raw_retention: str = "keep",
     keep_native: bool = False,
 ) -> dict[str, Any]:
@@ -154,7 +159,7 @@ def run_mock_range_workflow(
     end_date: date,
     facility_id: int = 679,
     trend_input: str = "sqlite",
-    snapshot_input: str = "sqlite",
+    snapshot_input: str = "raw",
     raw_retention: str = "keep",
     keep_native: bool = False,
     dimensions: list[str] | None = None,
@@ -193,7 +198,7 @@ def run_api_day_workflow(
     settings: AppSettings,
     run_date: date,
     facility_id: int = 679,
-    snapshot_input: str = "sqlite",
+    snapshot_input: str = "raw",
     raw_retention: str = "release",
     keep_native: bool = False,
 ) -> dict[str, Any]:
@@ -206,13 +211,18 @@ def run_api_day_workflow(
     )
     validation_report = validate_waites_raw(settings=settings, run_date=run_date, source="api")
     verify_summary = verify_raw_waites(settings=settings, run_date=run_date)
-    load_summary = load_waites_observations(settings=settings, run_date=run_date, source="api")
+    load_summary = (
+        load_waites_observations(settings=settings, run_date=run_date, source="api")
+        if snapshot_input == "sqlite"
+        else None
+    )
     snapshot_summary = build_sensor_snapshot(
         settings=settings,
         run_date=run_date,
         source="api",
         input_mode=snapshot_input,
     )
+    load_summary = load_summary or snapshot_summary["metadata"]["store_load"]
     retention_summary = _apply_retention(
         settings=settings,
         run_date=run_date,
@@ -259,7 +269,7 @@ def run_api_range_workflow(
     end_date: date,
     facility_id: int = 679,
     trend_input: str = "sqlite",
-    snapshot_input: str = "sqlite",
+    snapshot_input: str = "raw",
     raw_retention: str = "release",
     keep_native: bool = False,
     dimensions: list[str] | None = None,
@@ -722,13 +732,18 @@ def _run_existing_raw_day_workflow(
 ) -> dict[str, Any]:
     validation_report = validate_waites_raw(settings=settings, run_date=run_date, source=source)
     verify_summary = verify_raw_waites(settings=settings, run_date=run_date)
-    load_summary = load_waites_observations(settings=settings, run_date=run_date, source=source)
+    load_summary = (
+        load_waites_observations(settings=settings, run_date=run_date, source=source)
+        if snapshot_input == "sqlite"
+        else None
+    )
     snapshot_summary = build_sensor_snapshot(
         settings=settings,
         run_date=run_date,
         source=source,
         input_mode=snapshot_input,
     )
+    load_summary = load_summary or snapshot_summary["metadata"]["store_load"]
     retention_summary = _apply_retention(
         settings=settings,
         run_date=run_date,
@@ -763,30 +778,20 @@ def _run_existing_raw_day_workflow(
 
 
 def _reusable_snapshot(settings: AppSettings, run_date: date, source: str) -> dict[str, Any] | None:
-    storage = get_storage_paths(settings.data_dir)
-    snapshot_dir = storage.snapshot_dir(run_date.isoformat())
-    snapshot_path = snapshot_dir / "sensor_snapshot.csv"
-    metadata_path = snapshot_dir / "metadata.json"
-    if not snapshot_path.exists() or not metadata_path.exists():
-        return None
-    metadata = read_json(metadata_path)
-    if metadata.get("source") != source:
-        return None
-    expected_count = int(metadata.get("record_count") or 0)
     verification = verify_sensor_daily_snapshot(
         settings=settings,
         run_date=run_date,
         source=source,
-        expected_row_count=expected_count,
     )
     if verification["error_count"]:
         return None
+    expected_count = int(verification["row_count"])
     return {
         "source": source,
         "date": run_date.isoformat(),
-        "input_mode": metadata.get("input_mode"),
-        "snapshot_path": snapshot_path.as_posix(),
-        "metadata_path": metadata_path.as_posix(),
+        "input_mode": "sqlite",
+        "snapshot_path": None,
+        "metadata_path": None,
         "record_count": expected_count,
         "snapshot_store": verification,
     }

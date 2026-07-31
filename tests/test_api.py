@@ -163,7 +163,7 @@ def test_trend_endpoint_reports_missing_store_facts_without_artifact_fallback(
         build_sensor_snapshot(settings=settings, run_date=run_date)
     build_trends(settings=settings, start_date=start, end_date=end)
     with connect_observation_store(settings) as connection:
-        connection.execute("DELETE FROM sensor_daily_snapshots")
+        connection.execute("DELETE FROM sensor_daily_facts")
         connection.commit()
 
     response = client.get("/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11")
@@ -804,12 +804,12 @@ def _seed_representative_sqlite_window(
         connection.row_factory = None
         columns = [
             str(row[1])
-            for row in connection.execute("PRAGMA table_info(sensor_daily_snapshots)")
+            for row in connection.execute("PRAGMA table_info(sensor_daily_facts)")
         ]
         base = connection.execute(
             f"""
             SELECT {", ".join(f'"{column}"' for column in columns)}
-            FROM sensor_daily_snapshots
+            FROM sensor_daily_facts
             WHERE source = ? AND source_date = ?
             LIMIT 1
             """,
@@ -835,7 +835,7 @@ def _seed_representative_sqlite_window(
         quoted_columns = ", ".join(f'"{column}"' for column in columns)
         connection.executemany(
             f"""
-            INSERT OR REPLACE INTO sensor_daily_snapshots ({quoted_columns})
+            INSERT OR REPLACE INTO sensor_daily_facts ({quoted_columns})
             VALUES ({placeholders})
             """,
             rows,

@@ -6,15 +6,24 @@ from pathlib import Path
 from statistics import stdev
 from typing import Any, Iterable
 
-from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
+from insy_sensor_data.artifacts import read_csv_rows, read_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import (
     record_waites_ingestion_ledger,
+    persist_validated_waites_day,
     store_sensor_daily_snapshots,
     load_waites_snapshot_inputs,
 )
+from insy_sensor_data.snapshots.schema import (
+    IMPACT_FIELDS,
+    RMS_FIELDS,
+    SNAPSHOT_FIELDS,
+    SNAPSHOT_METADATA_FIELDS,
+    TEMP_FIELDS,
+)
 from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.waites.validate import ensure_waites_raw_valid
+from insy_sensor_data.waites.asset_tree import asset_tree_records_from_payload
 
 
 ACCELERATION_G_TO_MPS2 = 9.8
@@ -29,29 +38,6 @@ RMS_METRICS = {
 AXES = ("x", "y", "z")
 STATS = ("mean", "std", "max", "min")
 
-SNAPSHOT_METADATA_FIELDS = [
-    "installation_point_id",
-    "installation_point_name",
-    "equipment_id",
-    "equipment_name",
-    "sensor_id",
-    "facility_id",
-    "customer_asset_id",
-    "installation_customer_asset_id",
-    "equipment_customer_asset_id",
-]
-
-IMPACT_FIELDS = [f"impact_{stat}" for stat in STATS]
-RMS_FIELDS = [
-    f"{prefix}_{stat}_{axis}"
-    for _metric, (prefix, _factor) in RMS_METRICS.items()
-    for stat in STATS
-    for axis in AXES
-]
-TEMP_FIELDS = [f"temp_sensor_{stat}" for stat in STATS] + [
-    f"temp_ambient_{stat}" for stat in STATS
-]
-SNAPSHOT_FIELDS = SNAPSHOT_METADATA_FIELDS + IMPACT_FIELDS + RMS_FIELDS + TEMP_FIELDS
 VALID_SNAPSHOT_INPUT_MODES = {"raw", "sqlite"}
 
 
@@ -69,7 +55,6 @@ def build_sensor_snapshot(
 
     storage = get_storage_paths(settings.data_dir)
     raw_dir = storage.raw_waites_run_dir(run_date.isoformat())
-    output_dir = storage.snapshot_dir(run_date.isoformat())
     inputs = _load_snapshot_inputs(settings, run_date, source, input_mode)
     rows = build_sensor_snapshot_rows(
         equipment=inputs["equipment"],
@@ -79,38 +64,56 @@ def build_sensor_snapshot(
         temperature=inputs["temperature"],
     )
 
-    snapshot_path = output_dir / "sensor_snapshot.csv"
-    metadata_path = output_dir / "metadata.json"
     built_at = _utc_now()
-    write_csv_rows(snapshot_path, rows, SNAPSHOT_FIELDS)
-    snapshot_store = store_sensor_daily_snapshots(
-        settings=settings,
-        run_date=run_date,
-        source=source,
-        rows=rows,
-        fieldnames=SNAPSHOT_FIELDS,
-        snapshot_csv_path=snapshot_path,
-        built_at=built_at,
-    )
-    ledger = _record_snapshot_ledger(
-        settings=settings,
-        run_date=run_date,
-        source=source,
-        raw_dir=raw_dir,
-        inputs=inputs,
-        snapshot_row_count=len(rows),
-        built_at=built_at,
-    )
+    if input_mode == "raw":
+        durable = persist_validated_waites_day(
+            settings=settings,
+            run_date=run_date,
+            source=source,
+            payloads=inputs["payloads"],
+            snapshot_rows=rows,
+            validation_report=inputs["validation"],
+            manifest_path=raw_dir / "manifest.json",
+            built_at=built_at,
+        )
+        snapshot_store = durable["snapshot_store"]
+        ledger = durable["ledger"]
+        store_load = {
+            "database_path": durable["database_path"],
+            "row_counts": durable["row_counts"],
+            "staging_row_count": durable["staging_row_count"],
+            "ingestion_state": durable["ingestion_state"],
+        }
+    else:
+        snapshot_store = store_sensor_daily_snapshots(
+            settings=settings,
+            run_date=run_date,
+            source=source,
+            rows=rows,
+            fieldnames=SNAPSHOT_FIELDS,
+            built_at=built_at,
+        )
+        ledger = _record_snapshot_ledger(
+            settings=settings,
+            run_date=run_date,
+            source=source,
+            raw_dir=raw_dir,
+            inputs=inputs,
+            snapshot_row_count=len(rows),
+            built_at=built_at,
+            snapshot_revision_value=snapshot_store["snapshot_revision"],
+        )
+        store_load = inputs.get("load")
     metadata = {
         "source": source,
         "input_mode": input_mode,
         "date": run_date.isoformat(),
         "built_at": built_at,
         "input_dir": raw_dir.as_posix() if input_mode == "raw" else None,
-        "store_load": inputs.get("load"),
+        "store_load": store_load,
         "outputs": {
-            "sensor_snapshot": snapshot_path.as_posix(),
-            "metadata": metadata_path.as_posix(),
+            "sensor_snapshot": None,
+            "metadata": None,
             "sensor_daily_snapshots": snapshot_store,
             "ingestion_ledger": ledger,
         },
@@ -131,19 +134,18 @@ def build_sensor_snapshot(
             "temperature.ambient": "C to F",
         },
     }
-    write_json(metadata_path, metadata)
-
     return {
         "source": source,
         "input_mode": input_mode,
         "date": run_date.isoformat(),
-        "snapshot_path": snapshot_path.as_posix(),
-        "metadata_path": metadata_path.as_posix(),
+        "snapshot_path": None,
+        "metadata_path": None,
         "record_count": len(rows),
         "validation_status": inputs["validation"]["status"],
         "validation_warning_count": inputs["validation"]["warning_count"],
         "snapshot_store": snapshot_store,
         "ingestion_ledger": ledger,
+        "metadata": metadata,
     }
 
 
@@ -267,13 +269,24 @@ def _load_snapshot_inputs(
     validation_report = _with_validation_path_alias(
         ensure_waites_raw_valid(settings=settings, run_date=run_date, source=source)
     )
+    asset_tree_payload = read_json(raw_dir / "asset-tree.json")
+    payloads = {
+        "asset-tree": asset_tree_records_from_payload(asset_tree_payload),
+        "equipment": read_json(raw_dir / "equipment.json")["list"],
+        "installation-points": read_json(raw_dir / "installation-points.json")["list"],
+        "readings-rms": read_json(raw_dir / "readings-rms.json")["list"],
+        "readings-impact-vue": read_json(raw_dir / "readings-impact-vue.json")["list"],
+        "readings-temperature": read_json(raw_dir / "readings-temperature.json")["list"],
+        "action-items": read_json(raw_dir / "action-items.json")["list"],
+    }
     return {
         "load": None,
-        "equipment": read_json(raw_dir / "equipment.json")["list"],
-        "installation_points": read_json(raw_dir / "installation-points.json")["list"],
-        "rms": read_json(raw_dir / "readings-rms.json")["list"],
-        "impact": read_json(raw_dir / "readings-impact-vue.json")["list"],
-        "temperature": read_json(raw_dir / "readings-temperature.json")["list"],
+        "equipment": payloads["equipment"],
+        "installation_points": payloads["installation-points"],
+        "rms": payloads["readings-rms"],
+        "impact": payloads["readings-impact-vue"],
+        "temperature": payloads["readings-temperature"],
+        "payloads": payloads,
         "validation": validation_report,
     }
 
@@ -286,6 +299,7 @@ def _record_snapshot_ledger(
     inputs: dict[str, Any],
     snapshot_row_count: int,
     built_at: str,
+    snapshot_revision_value: str | None = None,
 ) -> dict[str, Any]:
     manifest_path = _manifest_path(raw_dir, inputs)
     manifest = read_json(manifest_path)
@@ -303,6 +317,7 @@ def _record_snapshot_ledger(
         raw_retention_status="kept",
         native_retention_status="kept" if inputs.get("load") else "not_loaded",
         snapshot_built_at=built_at,
+        snapshot_revision_value=snapshot_revision_value,
     )
 
 

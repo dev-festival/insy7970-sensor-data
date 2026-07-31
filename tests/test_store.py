@@ -231,16 +231,10 @@ def test_event_backfill_distinguishes_import_refetch_and_empty_dates(
     assert events["coverage"]["incomplete_dates"] == ["2025-07-09"]
 
 
-def test_equipment_tree_repository_matches_legacy_semantics(tmp_path: Path) -> None:
+def test_equipment_tree_repository_uses_direct_store_references(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     _prepare_operational_window(settings)
 
-    legacy = list_equipment_tree_view(
-        settings,
-        source="mock",
-        start_date=date(2025, 7, 9),
-        end_date=date(2025, 7, 11),
-    )
     operational = list_equipment_tree(
         settings,
         source="mock",
@@ -248,16 +242,9 @@ def test_equipment_tree_repository_matches_legacy_semantics(tmp_path: Path) -> N
         end_date=date(2025, 7, 11),
     )
 
-    assert operational["asset_tree_count"] == legacy["asset_tree_count"]
-    assert operational["equipment_count"] == legacy["equipment_count"]
-    assert operational["sensor_count"] == legacy["sensor_count"]
-    assert [
-        (row["asset_tree_id"], row["asset_tree_name"], row["sensor_count"])
-        for row in operational["asset_trees"]
-    ] == [
-        (row["asset_tree_id"], row["asset_tree_name"], row["sensor_count"])
-        for row in legacy["asset_trees"]
-    ]
+    assert operational["asset_tree_count"] == 4
+    assert operational["equipment_count"] == 7
+    assert operational["sensor_count"] == 9
 
 
 def test_operational_routes_do_not_read_legacy_artifacts(
@@ -340,7 +327,7 @@ def test_operational_scope_queries_use_covering_indexes(tmp_path: Path) -> None:
             """
             EXPLAIN QUERY PLAN
             SELECT installation_point_id
-            FROM sensor_daily_snapshots
+            FROM sensor_daily_facts
             WHERE source = ?
               AND source_date >= ?
               AND source_date <= ?
@@ -352,7 +339,7 @@ def test_operational_scope_queries_use_covering_indexes(tmp_path: Path) -> None:
             """
             EXPLAIN QUERY PLAN
             SELECT rms_vel_mean_x
-            FROM sensor_daily_snapshots
+            FROM sensor_daily_facts
             WHERE source = ?
               AND source_date >= ?
               AND source_date <= ?
@@ -373,8 +360,8 @@ def test_operational_scope_queries_use_covering_indexes(tmp_path: Path) -> None:
             ("mock", "2025-07-09", "2025-07-09", "55576"),
         ).fetchall()
 
-    assert "idx_sensor_daily_snapshots_equipment_scope" in _plan_text(equipment_plan)
-    assert "idx_sensor_daily_snapshots_installation_scope" in _plan_text(sensor_plan)
+    assert "idx_sensor_daily_facts_equipment_scope" in _plan_text(equipment_plan)
+    assert "idx_sensor_daily_facts_installation_scope" in _plan_text(sensor_plan)
     assert "idx_waites_events_equipment_scope" in _plan_text(event_plan)
 
 

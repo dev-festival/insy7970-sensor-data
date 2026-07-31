@@ -15,6 +15,7 @@ from insy_sensor_data.store.errors import (
     StoreNotFoundError,
     StoreUnavailableError,
 )
+from insy_sensor_data.store.connection import read_store, store_path
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -22,6 +23,14 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 def create_app(settings: AppSettings | None = None) -> FastAPI:
     app_settings = settings or AppSettings.from_env()
+    if store_path(app_settings).is_file():
+        try:
+            with read_store(app_settings):
+                pass
+        except StoreMigrationRequiredError:
+            raise
+        except (StoreCorruptError, StoreUnavailableError):
+            pass
     app = FastAPI(
         title=app_settings.app_name,
         version=__version__,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from math import isfinite, sqrt
+from statistics import median
 from pathlib import Path
 from typing import Any, Iterable
 import hashlib
@@ -22,8 +23,6 @@ from insy_sensor_data.clustering.model import (
     _cluster_metrics,
     _cluster_summary_fields,
     _cluster_summary_rows,
-    _feature_columns,
-    _feature_matrix_path,
     _float,
     _kmeans,
     _numeric_matrix,
@@ -31,12 +30,13 @@ from insy_sensor_data.clustering.model import (
     _pca_rows,
     _sensor_cluster_rows,
     _standard_scale,
-    _ensure_feature_matrix,
 )
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import connect_observation_store, observation_db_path
+from insy_sensor_data.observations import load_sensor_daily_snapshots
 from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.store.connection import read_store
+from insy_sensor_data.store.schema import snapshot_revision
 
 
 REGISTRY_SCHEMA_VERSION = 1
@@ -290,21 +290,15 @@ def build_cluster_model_run(
         random_seed=random_seed,
         max_iterations=max_iterations,
     )
-    artifact_dir = _write_model_artifacts(settings, computed)
+    artifact_dir = "sqlite"
     completed_at = _utc_now()
     metrics = {
         **computed["metrics"],
-        "outputs": {
-            "sensor_clusters": (artifact_dir / "sensor_clusters.csv").as_posix(),
-            "cluster_summary": (artifact_dir / "cluster_summary.csv").as_posix(),
-            "pca_coordinates": (artifact_dir / "pca_coordinates.csv").as_posix(),
-            "metrics": (artifact_dir / "metrics.json").as_posix(),
-        },
+        "outputs": {},
     }
-    write_json(artifact_dir / "metrics.json", metrics)
     computed = {
         **computed,
-        "artifact_dir": artifact_dir.as_posix(),
+        "artifact_dir": artifact_dir,
         "metrics": metrics,
         "completed_at": completed_at,
     }
@@ -373,16 +367,7 @@ def build_registered_cluster_drift(
         aligned_changed_count=aligned_changed_count,
         warnings=warnings,
     )
-    artifact_dir = _write_drift_artifacts(
-        settings=settings,
-        from_date=from_date,
-        to_date=to_date,
-        source=source_mode,
-        feature_space=spec.name,
-        k=k,
-        drift_rows=drift_rows,
-        alignment_rows=alignment_rows,
-    )
+    artifact_dir = "sqlite"
     metrics = {
         "schema_version": REGISTRY_SCHEMA_VERSION,
         "source": source_mode,
@@ -402,15 +387,10 @@ def build_registered_cluster_drift(
         "warning_count": len(warnings),
         "warnings": warnings,
         "interpretation": interpretation,
-        "artifact_dir": artifact_dir.as_posix(),
-        "outputs": {
-            "aligned_cluster_drift": (artifact_dir / "aligned_cluster_drift.csv").as_posix(),
-            "centroid_alignment": (artifact_dir / "centroid_alignment.csv").as_posix(),
-            "aligned_metrics": (artifact_dir / "aligned_metrics.json").as_posix(),
-        },
+        "artifact_dir": artifact_dir,
+        "outputs": {},
         "built_at": _utc_now(),
     }
-    write_json(artifact_dir / "aligned_metrics.json", metrics)
     _persist_complete_drift_run(
         settings=settings,
         drift_run_id=drift_run_id,
@@ -706,16 +686,12 @@ def _compute_feature_space_model(
     random_seed: int,
     max_iterations: int,
 ) -> dict[str, Any]:
-    feature_summary = _ensure_feature_matrix(
+    snapshot_rows = load_sensor_daily_snapshots(
         settings=settings,
         run_date=run_date,
         source=source,
-        dimension=spec.dimension,
     )
-    feature_matrix_path = _feature_matrix_path(settings, run_date, source, spec.dimension)
-    feature_rows_all = read_csv_rows(feature_matrix_path)
-    all_feature_columns = _feature_columns(feature_rows_all)
-    feature_columns = _feature_space_columns(all_feature_columns, spec)
+    feature_rows_all, feature_columns = _store_feature_rows(snapshot_rows, spec)
     if not feature_rows_all:
         raise ValueError("feature matrix has no rows")
     if not feature_columns:
@@ -750,7 +726,7 @@ def _compute_feature_space_model(
         k=k,
     )
     pca_rows = _pca_rows(feature_rows, kmeans, pca)
-    snapshot_path = get_storage_paths(settings.data_dir).snapshot_dir(run_date.isoformat()) / "sensor_snapshot.csv"
+    input_revision = snapshot_revision(source, run_date.isoformat(), snapshot_rows)
     built_at = _utc_now()
     model_run_id = cluster_model_run_id(
         source=source,
@@ -774,7 +750,7 @@ def _compute_feature_space_model(
         "feature_policy_version": FEATURE_POLICY_VERSION,
         "scaler_policy": SCALER_POLICY,
         "feature_columns": feature_columns,
-        "input_snapshot_hash": _sha256(snapshot_path) if snapshot_path.exists() else None,
+        "input_snapshot_hash": input_revision,
         "input_snapshot_row_count": len(feature_rows_all),
         "feature_row_count": len(feature_rows),
         "feature_count": len(feature_columns),
@@ -798,10 +774,10 @@ def _compute_feature_space_model(
             "feature_policy_version": FEATURE_POLICY_VERSION,
             "scaler_policy": SCALER_POLICY,
             "built_at": built_at,
-            "feature_matrix_path": feature_matrix_path.as_posix(),
-            "feature_summary_path": feature_summary.get("summary_path"),
-            "feature_status": feature_summary.get("status"),
-            "input_snapshot_hash": _sha256(snapshot_path) if snapshot_path.exists() else None,
+            "feature_matrix_path": None,
+            "feature_summary_path": None,
+            "feature_status": "store_backed",
+            "input_snapshot_hash": input_revision,
             "input_snapshot_row_count": len(feature_rows_all),
             "row_count": len(feature_rows),
             "feature_row_count": len(feature_rows),
@@ -1509,6 +1485,43 @@ def _feature_space_columns(columns: list[str], spec: FeatureSpaceSpec) -> list[s
         for column in columns
         if column.startswith(spec.prefix) and column.endswith(suffix)
     ]
+
+
+def _store_feature_rows(
+    snapshot_rows: list[dict[str, Any]],
+    spec: FeatureSpaceSpec,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if not snapshot_rows:
+        return [], []
+    candidates = _feature_space_columns(list(snapshot_rows[0]), spec)
+    feature_columns: list[str] = []
+    imputation: dict[str, float] = {}
+    minimum_non_null = max(1, int(len(snapshot_rows) * 0.2 + 0.999999))
+    for field in candidates:
+        values = [
+            float(row[field])
+            for row in snapshot_rows
+            if row.get(field) not in (None, "") and isfinite(float(row[field]))
+        ]
+        if len(values) < minimum_non_null:
+            continue
+        feature_columns.append(field)
+        imputation[field] = float(median(values))
+    rows = [
+        {
+            **{field: row.get(field, "") for field in IDENTIFIER_FIELDS},
+            **{
+                field: (
+                    float(row[field])
+                    if row.get(field) not in (None, "") and isfinite(float(row[field]))
+                    else imputation[field]
+                )
+                for field in feature_columns
+            },
+        }
+        for row in snapshot_rows
+    ]
+    return rows, feature_columns
 
 
 def _model_warnings(row_count: int, feature_count: int, k: int, metrics: dict[str, Any]) -> list[dict[str, Any]]:

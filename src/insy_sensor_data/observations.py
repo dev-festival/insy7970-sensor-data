@@ -11,6 +11,21 @@ import sqlite3
 from insy_sensor_data.artifacts import read_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import get_storage_paths
+from insy_sensor_data.snapshots.schema import (
+    SNAPSHOT_FIELDS,
+    SNAPSHOT_TEXT_FIELDS,
+    snapshot_column_value,
+)
+from insy_sensor_data.store.errors import StoreMigrationRequiredError
+from insy_sensor_data.store.schema import (
+    FIXED_SNAPSHOT_TABLE,
+    OPERATIONAL_SCHEMA_VERSION,
+    active_snapshot_table,
+    claim_configured_source,
+    initialize_operational_schema,
+    snapshot_revision,
+    _replace_fixed_rows,
+)
 from insy_sensor_data.store.events import (
     initialize_event_schema,
     record_waites_event_coverage,
@@ -24,7 +39,7 @@ from insy_sensor_data.waites.client import ENDPOINT_FILENAMES
 from insy_sensor_data.waites.validate import ensure_waites_raw_valid
 
 
-OBSERVATION_SCHEMA_VERSION = 6
+OBSERVATION_SCHEMA_VERSION = OPERATIONAL_SCHEMA_VERSION
 VALID_OBSERVATION_SOURCES = {"mock", "api"}
 VALID_RAW_RETENTION_MODES = {"release", "compress", "keep"}
 
@@ -34,18 +49,6 @@ DAILY_SNAPSHOT_INTERNAL_FIELDS = {
     "built_at",
     "snapshot_csv_path",
     "snapshot_json",
-}
-
-SNAPSHOT_TEXT_FIELDS = {
-    "installation_point_id",
-    "installation_point_name",
-    "equipment_id",
-    "equipment_name",
-    "sensor_id",
-    "facility_id",
-    "customer_asset_id",
-    "installation_customer_asset_id",
-    "equipment_customer_asset_id",
 }
 
 WAITES_DATE_SCOPED_RELEASE_TABLES = [
@@ -450,6 +453,7 @@ def initialize_observation_store(connection: sqlite3.Connection) -> None:
     )
     initialize_event_schema(connection)
     _ensure_snapshot_scope_indexes(connection)
+    initialize_operational_schema(connection)
     connection.execute(
         """
         INSERT OR IGNORE INTO observation_schema (version, applied_at)
@@ -614,6 +618,205 @@ def load_waites_snapshot_inputs(
         }
 
 
+def persist_validated_waites_day(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+    payloads: dict[str, list[dict[str, Any]]],
+    snapshot_rows: list[dict[str, Any]],
+    validation_report: dict[str, Any],
+    manifest_path: Path,
+    built_at: str | None = None,
+    failure_point: str | None = None,
+) -> dict[str, Any]:
+    """Atomically publish one validated date without native-observation staging."""
+    valid_failure_points = {
+        None,
+        "after_validation",
+        "after_references",
+        "after_events",
+        "after_snapshots",
+    }
+    if failure_point not in valid_failure_points:
+        raise ValueError(f"Unsupported ingestion failure point: {failure_point}")
+    source_mode = _validate_source(source)
+    source_date = run_date.isoformat()
+    manifest = read_json(manifest_path)
+    facility_id = _as_int(manifest.get("facility_id")) or settings.waites_facility_id
+    stored_at = built_at or _utc_now()
+    revision = snapshot_revision(source_mode, source_date, snapshot_rows)
+    started_at = _utc_now()
+
+    with connect_observation_store(settings) as connection:
+        table = active_snapshot_table(connection)
+        if table != FIXED_SNAPSHOT_TABLE:
+            raise StoreMigrationRequiredError(
+                "Direct durable ingestion requires the verified fixed snapshot table."
+            )
+        _set_ingestion_run_state(
+            connection,
+            source=source_mode,
+            source_date=source_date,
+            facility_id=facility_id,
+            state="started",
+            started_at=started_at,
+        )
+        connection.commit()
+        _set_ingestion_run_state(
+            connection,
+            source=source_mode,
+            source_date=source_date,
+            facility_id=facility_id,
+            state="validated",
+            started_at=started_at,
+        )
+        connection.commit()
+        try:
+            if failure_point == "after_validation":
+                raise RuntimeError("Injected ingestion failure after validation")
+            connection.execute("BEGIN IMMEDIATE")
+            claim_configured_source(connection, source_mode)
+            reference_counts = _upsert_durable_waites_references(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                loaded_at=stored_at,
+                payloads=payloads,
+            )
+            if failure_point == "after_references":
+                raise RuntimeError("Injected ingestion failure after references")
+            event_count = upsert_waites_events(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                observed_at=stored_at,
+                rows=payloads.get("action-items", []),
+            )
+            record_waites_event_coverage(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                state="imported" if event_count else "genuinely_empty",
+                input_mode="direct_raw",
+                event_observation_count=event_count,
+                checked_at=stored_at,
+            )
+            if failure_point == "after_events":
+                raise RuntimeError("Injected ingestion failure after events")
+            connection.execute(
+                f"DELETE FROM {FIXED_SNAPSHOT_TABLE} WHERE source = ? AND source_date = ?",
+                (source_mode, source_date),
+            )
+            _replace_fixed_rows(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                built_at=stored_at,
+                revision=revision,
+                rows=snapshot_rows,
+            )
+            if failure_point == "after_snapshots":
+                raise RuntimeError("Injected ingestion failure after snapshots")
+            _write_ingestion_ledger_row(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                facility_id=facility_id,
+                manifest_path=manifest_path,
+                manifest=manifest,
+                validation_report=validation_report,
+                snapshot_row_count=len(snapshot_rows),
+                snapshot_revision_value=revision,
+                snapshot_built_at=stored_at,
+            )
+            stored_count = int(
+                connection.execute(
+                    f"""
+                    SELECT COUNT(*) FROM {FIXED_SNAPSHOT_TABLE}
+                    WHERE source = ? AND source_date = ?
+                    """,
+                    (source_mode, source_date),
+                ).fetchone()[0]
+            )
+            if stored_count != len(snapshot_rows):
+                raise RuntimeError(
+                    f"Snapshot verification failed: expected {len(snapshot_rows)}, stored {stored_count}."
+                )
+            _set_ingestion_run_state(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                facility_id=facility_id,
+                state="stored",
+                started_at=started_at,
+                snapshot_revision_value=revision,
+                snapshot_row_count=stored_count,
+            )
+            _set_ingestion_run_state(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                facility_id=facility_id,
+                state="complete",
+                started_at=started_at,
+                snapshot_revision_value=revision,
+                snapshot_row_count=stored_count,
+            )
+            connection.commit()
+        except Exception as exc:
+            connection.rollback()
+            _set_ingestion_run_state(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                facility_id=facility_id,
+                state="failed",
+                started_at=started_at,
+                error=str(exc),
+            )
+            connection.commit()
+            raise
+
+    row_counts = {
+        **reference_counts,
+        "rms": 0,
+        "impact": 0,
+        "temperature": 0,
+        "action_items": event_count,
+    }
+    return {
+        "source": source_mode,
+        "date": source_date,
+        "facility_id": facility_id,
+        "database_path": observation_db_path(settings).as_posix(),
+        "schema_version": OBSERVATION_SCHEMA_VERSION,
+        "ingestion_state": "complete",
+        "snapshot_revision": revision,
+        "snapshot_row_count": len(snapshot_rows),
+        "staging_row_count": 0,
+        "row_counts": row_counts,
+        "snapshot_store": {
+            "source": source_mode,
+            "date": source_date,
+            "table": FIXED_SNAPSHOT_TABLE,
+            "row_count": len(snapshot_rows),
+            "stored_at": stored_at,
+            "snapshot_revision": revision,
+            "snapshot_csv_path": None,
+        },
+        "ledger": {
+            "source": source_mode,
+            "date": source_date,
+            "facility_id": facility_id,
+            "table": "waites_ingestion_ledger",
+            "snapshot_row_count": len(snapshot_rows),
+            "snapshot_revision": revision,
+            "snapshot_store_status": "stored",
+            "ingestion_state": "complete",
+        },
+    }
+
+
 def query_daily_metric_rollups(
     settings: AppSettings,
     run_date: date,
@@ -663,73 +866,57 @@ def store_sensor_daily_snapshots(
     run_date: date,
     source: str,
     rows: list[dict[str, Any]],
-    fieldnames: list[str],
-    snapshot_csv_path: Path,
+    fieldnames: list[str] | None = None,
+    snapshot_csv_path: Path | None = None,
     built_at: str | None = None,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
     source_date = run_date.isoformat()
     stored_at = built_at or _utc_now()
 
-    if "installation_point_id" not in fieldnames:
+    selected_fields = fieldnames or SNAPSHOT_FIELDS
+    if "installation_point_id" not in selected_fields:
         raise ValueError("daily snapshot rows must include installation_point_id")
+    if selected_fields != SNAPSHOT_FIELDS:
+        raise ValueError("daily snapshot writes must use the fixed snapshot schema")
 
     with connect_observation_store(settings) as connection:
-        _ensure_daily_snapshot_columns(connection, fieldnames)
-        snapshot_columns = [
-            field
-            for field in fieldnames
-            if field not in DAILY_SNAPSHOT_INTERNAL_FIELDS
-        ]
-        insert_columns = [
-            "source",
-            "source_date",
-            "installation_point_id",
-            "built_at",
-            "snapshot_csv_path",
-            "snapshot_json",
-            *snapshot_columns,
-        ]
-        placeholders = ", ".join("?" for _field in insert_columns)
-        quoted_columns = ", ".join(_quote_identifier(field) for field in insert_columns)
-
+        table = active_snapshot_table(connection)
+        if table != FIXED_SNAPSHOT_TABLE:
+            raise StoreMigrationRequiredError(
+                "Daily snapshot writes are blocked while the legacy snapshot table is active. "
+                "Run the 0.6.2 snapshot migration first."
+            )
+        connection.execute("BEGIN IMMEDIATE")
+        claim_configured_source(connection, source_mode)
+        revision = snapshot_revision(source_mode, source_date, rows)
         connection.execute(
-            """
-            DELETE FROM sensor_daily_snapshots
-            WHERE source = ? AND source_date = ?
-            """,
+            f"DELETE FROM {FIXED_SNAPSHOT_TABLE} WHERE source = ? AND source_date = ?",
             (source_mode, source_date),
         )
         for row in rows:
             installation_point_id = row.get("installation_point_id")
             if installation_point_id in (None, ""):
                 raise ValueError("daily snapshot row is missing installation_point_id")
-            values = [
-                source_mode,
-                source_date,
-                str(installation_point_id),
-                stored_at,
-                snapshot_csv_path.as_posix(),
-                json.dumps({field: row.get(field) for field in fieldnames}, sort_keys=True),
-                *[_snapshot_column_value(field, row.get(field)) for field in snapshot_columns],
-            ]
-            connection.execute(
-                f"""
-                INSERT OR REPLACE INTO sensor_daily_snapshots ({quoted_columns})
-                VALUES ({placeholders})
-                """,
-                values,
-            )
+        _replace_fixed_rows(
+            connection,
+            source=source_mode,
+            source_date=source_date,
+            built_at=stored_at,
+            revision=revision,
+            rows=rows,
+        )
         connection.commit()
 
     return {
         "source": source_mode,
         "date": source_date,
         "database_path": observation_db_path(settings).as_posix(),
-        "table": "sensor_daily_snapshots",
+        "table": FIXED_SNAPSHOT_TABLE,
         "row_count": len(rows),
         "stored_at": stored_at,
-        "snapshot_csv_path": snapshot_csv_path.as_posix(),
+        "snapshot_revision": revision,
+        "snapshot_csv_path": snapshot_csv_path.as_posix() if snapshot_csv_path else None,
     }
 
 
@@ -741,11 +928,12 @@ def load_sensor_daily_snapshots(
     source_mode = _validate_source(source)
     source_date = run_date.isoformat()
     with connect_observation_store(settings) as connection:
+        table = active_snapshot_table(connection)
         rows = _query_dicts(
             connection,
-            """
+            f"""
             SELECT *
-            FROM sensor_daily_snapshots
+            FROM {table}
             WHERE source = ? AND source_date = ?
             ORDER BY CAST(installation_point_id AS INTEGER), installation_point_id
             """,
@@ -767,7 +955,7 @@ def load_sensor_daily_snapshots(
             {
                 field: value
                 for field, value in row.items()
-                if field not in DAILY_SNAPSHOT_INTERNAL_FIELDS
+                if field in SNAPSHOT_FIELDS
             }
         )
     return loaded
@@ -782,11 +970,12 @@ def verify_sensor_daily_snapshot(
     source_mode = _validate_source(source)
     source_date = run_date.isoformat()
     with connect_observation_store(settings) as connection:
+        table = active_snapshot_table(connection)
         row_count = int(
             connection.execute(
-                """
+                f"""
                 SELECT COUNT(*)
-                FROM sensor_daily_snapshots
+                FROM {table}
                 WHERE source = ? AND source_date = ?
                 """,
                 (source_mode, source_date),
@@ -810,7 +999,7 @@ def verify_sensor_daily_snapshot(
         "source": source_mode,
         "date": source_date,
         "database_path": observation_db_path(settings).as_posix(),
-        "table": "sensor_daily_snapshots",
+        "table": table,
         "row_count": row_count,
         "expected_row_count": expected_row_count,
         "status": "invalid" if error_count else "valid",
@@ -832,6 +1021,7 @@ def record_waites_ingestion_ledger(
     raw_retention_status: str = "kept",
     native_retention_status: str = "kept",
     snapshot_built_at: str | None = None,
+    snapshot_revision_value: str | None = None,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
     retention_mode = _validate_raw_retention(raw_retention_mode)
@@ -862,9 +1052,11 @@ def record_waites_ingestion_ledger(
                 raw_retention_mode,
                 raw_retention_status,
                 native_retention_status,
-                updated_at
+                updated_at,
+                ingestion_state,
+                snapshot_revision
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source_mode,
@@ -885,6 +1077,8 @@ def record_waites_ingestion_ledger(
                 raw_retention_status,
                 native_retention_status,
                 updated_at,
+                "complete",
+                snapshot_revision_value,
             ),
         )
         connection.commit()
@@ -903,6 +1097,8 @@ def record_waites_ingestion_ledger(
         "raw_retention_status": raw_retention_status,
         "native_retention_status": native_retention_status,
         "updated_at": updated_at,
+        "ingestion_state": "complete",
+        "snapshot_revision": snapshot_revision_value,
     }
 
 
@@ -1044,6 +1240,186 @@ def purge_waites_native_observations(
         "purged_dates": purged_dates,
         "candidates": candidates,
     }
+
+
+def _upsert_durable_waites_references(
+    connection: sqlite3.Connection,
+    *,
+    source: str,
+    source_date: str,
+    loaded_at: str,
+    payloads: dict[str, list[dict[str, Any]]],
+) -> dict[str, int]:
+    asset_tree_rows = [
+        _asset_tree_reference_row(source, source_date, loaded_at, row)
+        for row in normalize_asset_tree_records(payloads.get("asset-tree", []))
+    ]
+    equipment_reference_rows = [
+        _equipment_reference_row(source, source_date, loaded_at, row)
+        for row in payloads["equipment"]
+    ]
+    installation_reference_rows = [
+        _installation_point_reference_row(source, source_date, loaded_at, row)
+        for row in payloads["installation-points"]
+    ]
+    connection.executemany(
+        """
+        INSERT INTO waites_asset_tree_reference (
+            source, asset_tree_id, name, parent_asset_tree_id, facility_id,
+            asset_tree_path, first_loaded_at, last_loaded_at, last_source_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, asset_tree_id) DO UPDATE SET
+            name = excluded.name,
+            parent_asset_tree_id = excluded.parent_asset_tree_id,
+            facility_id = excluded.facility_id,
+            asset_tree_path = excluded.asset_tree_path,
+            last_loaded_at = excluded.last_loaded_at,
+            last_source_date = excluded.last_source_date
+        """,
+        asset_tree_rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO waites_equipment_reference (
+            source, equipment_id, asset_tree_id, name, facility_id,
+            customer_asset_id, first_loaded_at, last_loaded_at, last_source_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, equipment_id) DO UPDATE SET
+            asset_tree_id = excluded.asset_tree_id,
+            name = excluded.name,
+            facility_id = excluded.facility_id,
+            customer_asset_id = excluded.customer_asset_id,
+            last_loaded_at = excluded.last_loaded_at,
+            last_source_date = excluded.last_source_date
+        """,
+        equipment_reference_rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO waites_installation_point_reference (
+            source, installation_point_id, name, equipment_id, sensor_id,
+            facility_id, last_seen, installation_date, customer_asset_id,
+            first_loaded_at, last_loaded_at, last_source_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, installation_point_id) DO UPDATE SET
+            name = excluded.name,
+            equipment_id = excluded.equipment_id,
+            sensor_id = excluded.sensor_id,
+            facility_id = excluded.facility_id,
+            last_seen = excluded.last_seen,
+            installation_date = excluded.installation_date,
+            customer_asset_id = excluded.customer_asset_id,
+            last_loaded_at = excluded.last_loaded_at,
+            last_source_date = excluded.last_source_date
+        """,
+        installation_reference_rows,
+    )
+    return {
+        "asset_trees": len(asset_tree_rows),
+        "equipment": len(equipment_reference_rows),
+        "installation_points": len(installation_reference_rows),
+    }
+
+
+def _write_ingestion_ledger_row(
+    connection: sqlite3.Connection,
+    *,
+    source: str,
+    source_date: str,
+    facility_id: int,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    validation_report: dict[str, Any],
+    snapshot_row_count: int,
+    snapshot_revision_value: str,
+    snapshot_built_at: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO waites_ingestion_ledger (
+            source, source_date, facility_id, fetched_at, validated_at,
+            snapshot_built_at, validation_status, validation_error_count,
+            validation_warning_count, endpoint_counts_json,
+            endpoint_artifacts_json, manifest_sha256, snapshot_row_count,
+            snapshot_store_status, raw_retention_mode, raw_retention_status,
+            native_retention_status, updated_at, ingestion_state,
+            snapshot_revision
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            source,
+            source_date,
+            facility_id,
+            manifest.get("fetched_at"),
+            validation_report.get("validated_at"),
+            snapshot_built_at,
+            validation_report.get("status"),
+            _as_int(validation_report.get("error_count")) or 0,
+            _as_int(validation_report.get("warning_count")) or 0,
+            json.dumps(_manifest_endpoint_counts(manifest), sort_keys=True),
+            json.dumps(_manifest_endpoint_artifacts(manifest), sort_keys=True),
+            _sha256(manifest_path),
+            snapshot_row_count,
+            "stored",
+            "keep",
+            "kept",
+            "not_loaded",
+            _utc_now(),
+            "complete",
+            snapshot_revision_value,
+        ),
+    )
+
+
+def _set_ingestion_run_state(
+    connection: sqlite3.Connection,
+    *,
+    source: str,
+    source_date: str,
+    facility_id: int,
+    state: str,
+    started_at: str,
+    snapshot_revision_value: str | None = None,
+    snapshot_row_count: int = 0,
+    error: str | None = None,
+) -> None:
+    transitioned_at = datetime.now(UTC).isoformat()
+    connection.execute(
+        """
+        INSERT INTO ingestion_runs (
+            source, source_date, facility_id, state, snapshot_revision,
+            snapshot_row_count, started_at, updated_at, completed_at, error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, source_date, facility_id) DO UPDATE SET
+            state = excluded.state,
+            snapshot_revision = COALESCE(excluded.snapshot_revision, ingestion_runs.snapshot_revision),
+            snapshot_row_count = excluded.snapshot_row_count,
+            started_at = excluded.started_at,
+            updated_at = excluded.updated_at,
+            completed_at = excluded.completed_at,
+            error = excluded.error
+        """,
+        (
+            source,
+            source_date,
+            facility_id,
+            state,
+            snapshot_revision_value,
+            snapshot_row_count,
+            started_at,
+            transitioned_at,
+            transitioned_at if state == "complete" else None,
+            error,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO ingestion_run_transitions (
+            source, source_date, facility_id, state, transitioned_at, detail
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (source, source_date, facility_id, state, transitioned_at, error),
+    )
 
 
 def _insert_waites_payloads(
@@ -1688,11 +2064,12 @@ def _native_purge_candidate(
     source: str,
 ) -> dict[str, Any]:
     ledger = _get_ledger_row(connection, source_date=source_date, source=source)
+    snapshot_table = active_snapshot_table(connection)
     snapshot_count = int(
         connection.execute(
-            """
+            f"""
             SELECT COUNT(*)
-            FROM sensor_daily_snapshots
+            FROM {snapshot_table}
             WHERE source = ? AND source_date = ?
             """,
             (source, source_date),

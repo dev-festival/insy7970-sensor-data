@@ -12,6 +12,7 @@ from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
 from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.store.connection import read_store
 from insy_sensor_data.store.revision import data_revision
+from insy_sensor_data.store.schema import resolve_configured_source
 
 
 EVENT_PROVIDER = "waites"
@@ -298,7 +299,7 @@ def query_waites_events(
     equipment_ids: set[str] | None = None,
     installation_point_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    selected_source = _validate_source(source)
+    selected_source = resolve_configured_source(settings, source)
     clauses = [
         "source = ?",
         "first_seen_date <= ?",
@@ -331,7 +332,6 @@ def query_waites_events(
         required_tables=(
             "waites_events",
             "waites_event_coverage",
-            "sensor_daily_snapshots",
             "waites_ingestion_ledger",
         ),
     ) as connection:

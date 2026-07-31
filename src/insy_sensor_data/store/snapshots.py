@@ -6,13 +6,14 @@ from typing import Any, Iterable
 import sqlite3
 
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
-from insy_sensor_data.snapshots.build import SNAPSHOT_FIELDS
+from insy_sensor_data.snapshots.schema import SNAPSHOT_FIELDS
 from insy_sensor_data.store.connection import read_store, table_columns
 from insy_sensor_data.store.errors import (
     StoreMigrationRequiredError,
     StoreNotFoundError,
 )
 from insy_sensor_data.store.revision import data_revision
+from insy_sensor_data.store.schema import active_snapshot_table, resolve_configured_source
 
 
 SNAPSHOT_INTERNAL_FIELDS = {
@@ -42,17 +43,14 @@ def snapshot_catalog(
     *,
     source: str | None = None,
 ) -> list[dict[str, Any]]:
-    source_mode = _optional_source(source)
+    source_mode = resolve_configured_source(settings, source)
     clauses: list[str] = []
     params: list[Any] = []
-    if source_mode is not None:
-        clauses.append("source = ?")
-        params.append(source_mode)
+    clauses.append("source = ?")
+    params.append(source_mode)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    with read_store(
-        settings,
-        required_tables=("sensor_daily_snapshots",),
-    ) as connection:
+    with read_store(settings) as connection:
+        table = active_snapshot_table(connection)
         rows = connection.execute(
             f"""
             SELECT
@@ -60,7 +58,7 @@ def snapshot_catalog(
                 source_date AS date,
                 COUNT(*) AS record_count,
                 MAX(built_at) AS built_at
-            FROM sensor_daily_snapshots
+            FROM {table}
             {where}
             GROUP BY source, source_date
             ORDER BY source, source_date
@@ -80,21 +78,23 @@ def load_snapshot_view(
     customer_asset_id: str | None = None,
     fields: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    resolved_source = _optional_source(source) or settings.source_mode
+    resolved_source = resolve_configured_source(settings, source)
     with read_store(
         settings,
-        required_tables=("sensor_daily_snapshots", "waites_ingestion_ledger"),
+        required_tables=("waites_ingestion_ledger",),
     ) as connection:
+        table = active_snapshot_table(connection)
         selected_fields = _available_snapshot_fields(
             connection,
+            table,
             fields or SNAPSHOT_FIELDS,
         )
         clauses = ["source = ?", "source_date = ?"]
         params: list[Any] = [resolved_source, run_date.isoformat()]
         total_row = connection.execute(
-            """
+            f"""
             SELECT COUNT(*) AS row_count, MAX(built_at) AS built_at
-            FROM sensor_daily_snapshots
+            FROM {table}
             WHERE source = ? AND source_date = ?
             """,
             tuple(params),
@@ -118,7 +118,7 @@ def load_snapshot_view(
             "customer_asset_id",
             customer_asset_id,
         )
-        rows = _query_rows(connection, selected_fields, clauses, params)
+        rows = _query_rows(connection, table, selected_fields, clauses, params)
         revision = data_revision(
             connection,
             resolved_source,
@@ -163,7 +163,7 @@ def query_trend_rows(
     sensor_id: str | None = None,
     customer_asset_id: str | None = None,
 ) -> dict[str, Any]:
-    resolved_source = _validate_source(source)
+    resolved_source = resolve_configured_source(settings, source)
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
     selected_value_fields = list(
@@ -171,9 +171,10 @@ def query_trend_rows(
     )
     with read_store(
         settings,
-        required_tables=("sensor_daily_snapshots", "waites_ingestion_ledger"),
+        required_tables=("waites_ingestion_ledger",),
     ) as connection:
-        available = set(table_columns(connection, "sensor_daily_snapshots"))
+        table = active_snapshot_table(connection)
+        available = set(table_columns(connection, table))
         _require_columns(
             available,
             [*SNAPSHOT_IDENTIFIER_FIELDS, *selected_value_fields],
@@ -205,9 +206,9 @@ def query_trend_rows(
         available_dates = {
             str(row["source_date"])
             for row in connection.execute(
-                """
+                f"""
                 SELECT DISTINCT source_date
-                FROM sensor_daily_snapshots
+                FROM {table}
                 WHERE source = ? AND source_date >= ? AND source_date <= ?
                 ORDER BY source_date
                 """,
@@ -226,6 +227,7 @@ def query_trend_rows(
         fields = [*SNAPSHOT_IDENTIFIER_FIELDS, *selected_value_fields]
         rows = _query_rows(
             connection,
+            table,
             fields,
             clauses,
             params,
@@ -270,15 +272,16 @@ def query_trend_product(
     customer_asset_id: str | None = None,
 ) -> dict[str, Any]:
     """Return SQL summaries plus the bounded detail slice used by Trend."""
-    resolved_source = _validate_source(source)
+    resolved_source = resolve_configured_source(settings, source)
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
     selected_detail_fields = list(dict.fromkeys(detail_fields))
     with read_store(
         settings,
-        required_tables=("sensor_daily_snapshots", "waites_ingestion_ledger"),
+        required_tables=("waites_ingestion_ledger",),
     ) as connection:
-        available = set(table_columns(connection, "sensor_daily_snapshots"))
+        table = active_snapshot_table(connection)
+        available = set(table_columns(connection, table))
         _require_columns(
             available,
             [*SNAPSHOT_IDENTIFIER_FIELDS, value_field, *selected_detail_fields],
@@ -311,9 +314,9 @@ def query_trend_product(
         available_dates = {
             str(row["source_date"])
             for row in connection.execute(
-                """
+                f"""
                 SELECT DISTINCT source_date
-                FROM sensor_daily_snapshots
+                FROM {table}
                 WHERE source = ? AND source_date >= ? AND source_date <= ?
                 ORDER BY source_date
                 """,
@@ -338,7 +341,7 @@ def query_trend_product(
                 sensor_id,
                 equipment_id,
                 "{value_field}" AS value
-            FROM sensor_daily_snapshots
+            FROM {table}
             WHERE {where}
             ORDER BY
                 source_date,
@@ -429,7 +432,7 @@ def query_trend_product(
         detail_rows = connection.execute(
             f"""
             SELECT source_date AS date, {projection}
-            FROM sensor_daily_snapshots
+            FROM {table}
             WHERE {where}
             ORDER BY
                 source_date,
@@ -487,6 +490,7 @@ def query_trend_product(
 
 def _query_rows(
     connection: sqlite3.Connection,
+    table: str,
     fields: list[str],
     clauses: list[str],
     params: list[Any],
@@ -499,7 +503,7 @@ def _query_rows(
     rows = connection.execute(
         f"""
         SELECT {", ".join(projection)}
-        FROM sensor_daily_snapshots
+        FROM {table}
         WHERE {" AND ".join(clauses)}
         ORDER BY
             source_date,
@@ -513,9 +517,10 @@ def _query_rows(
 
 def _available_snapshot_fields(
     connection: sqlite3.Connection,
+    table: str,
     requested: Iterable[str],
 ) -> list[str]:
-    available = set(table_columns(connection, "sensor_daily_snapshots"))
+    available = set(table_columns(connection, table))
     fields = list(requested)
     _require_columns(available, fields)
     return fields

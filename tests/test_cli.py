@@ -71,8 +71,8 @@ def test_cli_waites_fetch_writes_mock_artifacts(tmp_path: Path) -> None:
     assert payload["record_counts"]["asset-tree"] == 2
     assert payload["record_counts"]["equipment"] == 6
     assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "manifest.json").exists()
-    assert (data_dir / "processed" / "waites" / "reference" / "asset_tree.csv").exists()
-    assert (data_dir / "processed" / "waites" / "reference" / "equipment.csv").exists()
+    assert not (data_dir / "processed" / "waites" / "reference" / "asset_tree.csv").exists()
+    assert not (data_dir / "processed" / "waites" / "reference" / "equipment.csv").exists()
 
 
 def test_cli_waites_fetch_api_requires_token(tmp_path: Path) -> None:
@@ -181,7 +181,7 @@ def test_cli_snapshot_and_trend_builds_write_mock_artifacts(tmp_path: Path) -> N
     assert snapshot_result.exit_code == 0
     snapshot_payload = json.loads(snapshot_result.stdout)
     assert snapshot_payload["record_count"] == 9
-    assert (data_dir / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv").exists()
+    assert not (data_dir / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv").exists()
 
     trend_result = runner.invoke(
         app,
@@ -201,7 +201,27 @@ def test_cli_snapshot_and_trend_builds_write_mock_artifacts(tmp_path: Path) -> N
     assert trend_result.exit_code == 0
     trend_payload = json.loads(trend_result.stdout)
     assert trend_payload["sensor_record_count"] == 9
-    assert (data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-09" / "sensor_trends.csv").exists()
+    routine_trend = data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-09" / "sensor_trends.csv"
+    assert not routine_trend.exists()
+    snapshot_export = runner.invoke(
+        app,
+        [
+            "snapshot", "export", "--source", "mock", "--date", "2025-07-09",
+            "--destination", str(tmp_path / "exports" / "snapshot.csv"),
+            "--env-file", str(env_file),
+        ],
+    )
+    trend_export = runner.invoke(
+        app,
+        [
+            "trend", "export", "--source", "mock", "--start-date", "2025-07-09",
+            "--end-date", "2025-07-09", "--destination", str(tmp_path / "exports" / "trends"),
+            "--env-file", str(env_file),
+        ],
+    )
+    assert snapshot_export.exit_code == trend_export.exit_code == 0
+    assert (tmp_path / "exports" / "snapshot.csv").is_file()
+    assert (tmp_path / "exports" / "trends" / "sensor_trends.csv").is_file()
 
 
 def test_cli_raw_lifecycle_commands(tmp_path: Path) -> None:
@@ -336,22 +356,6 @@ def test_cli_store_load_waites_and_sqlite_snapshot(tmp_path: Path) -> None:
     assert snapshot_payload["input_mode"] == "sqlite"
     assert snapshot_payload["snapshot_store"]["row_count"] == 9
 
-    store_snapshot_result = runner.invoke(
-        app,
-        [
-            "snapshot",
-            "store",
-            "--source",
-            "mock",
-            "--date",
-            "2025-07-09",
-            "--env-file",
-            str(env_file),
-        ],
-    )
-    assert store_snapshot_result.exit_code == 0
-    assert json.loads(store_snapshot_result.stdout)["snapshot_store"]["row_count"] == 9
-
     purge_preview = runner.invoke(
         app,
         [
@@ -388,7 +392,7 @@ def test_cli_store_load_waites_and_sqlite_snapshot(tmp_path: Path) -> None:
     assert _sqlite_count(data_dir, "waites_rms_observations") == 0
     assert _sqlite_count(data_dir, "waites_installation_points") == 0
     assert _sqlite_count(data_dir, "waites_action_items") == 4
-    assert _sqlite_count(data_dir, "sensor_daily_snapshots") == 9
+    assert _sqlite_count(data_dir, "sensor_daily_facts") == 9
     assert _sqlite_count(data_dir, "waites_installation_point_reference") == 8
 
 
@@ -419,7 +423,7 @@ def test_cli_workflow_mock_day_prints_human_summary(tmp_path: Path) -> None:
     assert "Next:" in result.stdout
     assert (data_dir / "raw" / "waites" / "date=2025-07-09" / "manifest.json").exists()
     assert (data_dir / "processed" / "observations.sqlite").exists()
-    assert (data_dir / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv").exists()
+    assert not (data_dir / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv").exists()
 
 
 def test_cli_workflow_mock_day_json_outputs_combined_summary(tmp_path: Path) -> None:
@@ -444,7 +448,8 @@ def test_cli_workflow_mock_day_json_outputs_combined_summary(tmp_path: Path) -> 
     payload = json.loads(result.stdout)
     assert payload["workflow"] == "mock-day"
     assert payload["fetch"]["endpoint_count"] == 7
-    assert payload["load"]["row_counts"]["rms"] == 21
+    assert payload["load"]["row_counts"]["rms"] == 0
+    assert payload["load"]["staging_row_count"] == 0
     assert payload["snapshot"]["record_count"] == 9
     assert [step["title"] for step in payload["steps"]] == [
         "Fetched Waites raw evidence",
@@ -485,7 +490,7 @@ def test_cli_workflow_mock_day_release_keeps_snapshot_only_operating_path(tmp_pa
     assert (raw_dir / "validation.json").exists()
     assert _sqlite_count(data_dir, "waites_rms_observations") == 0
     assert _sqlite_count(data_dir, "waites_installation_points") == 0
-    assert _sqlite_count(data_dir, "sensor_daily_snapshots") == 9
+    assert _sqlite_count(data_dir, "sensor_daily_facts") == 9
     assert _sqlite_count(data_dir, "waites_asset_tree_reference") == 3
     assert _sqlite_count(data_dir, "waites_installation_point_reference") == 8
 
@@ -555,8 +560,8 @@ def test_cli_workflow_mock_trend_writes_sqlite_backed_outputs(tmp_path: Path) ->
     assert "Prepared mock dates" in result.stdout
     assert "Built trend outputs" in result.stdout
     trend_dir = data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-11"
-    assert (trend_dir / "sensor_trends.csv").exists()
-    assert (trend_dir / "equipment_trends.csv").exists()
+    assert not (trend_dir / "sensor_trends.csv").exists()
+    assert not (trend_dir / "equipment_trends.csv").exists()
 
 
 def test_cli_workflow_mock_range_writes_cluster_window_and_resumes(tmp_path: Path) -> None:
@@ -675,8 +680,8 @@ def test_cli_cluster_registry_build_grid_writes_sqlite_models(tmp_path: Path) ->
     assert _sqlite_count(data_dir, "cluster_model_runs") == 2
     assert _sqlite_count(data_dir, "cluster_drift_runs") == 1
     model_dir = data_dir / "processed" / "cluster_models" / "date=2025-07-09_source=mock_feature_space=x_accel_k=5"
-    assert (model_dir / "sensor_clusters.csv").exists()
-    assert (model_dir / "metrics.json").exists()
+    assert not (model_dir / "sensor_clusters.csv").exists()
+    assert not (model_dir / "metrics.json").exists()
 
 
 def test_cli_workflow_api_day_requires_token(tmp_path: Path) -> None:
@@ -870,7 +875,8 @@ def test_cli_builds_multi_day_mock_trend(tmp_path: Path) -> None:
     trend_payload = json.loads(trend_result.stdout)
     assert trend_payload["sensor_record_count"] == 27
     assert trend_payload["skipped_dates"] == []
-    assert (data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-11" / "sensor_trends.csv").exists()
+    routine_trend = data_dir / "processed" / "trends" / "start=2025-07-09_end=2025-07-11" / "sensor_trends.csv"
+    assert not routine_trend.exists()
 
 
 def _sqlite_count(data_dir: Path, table_name: str) -> int:

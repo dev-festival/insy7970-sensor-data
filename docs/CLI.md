@@ -211,7 +211,10 @@ uv run sensor-data store load-waites --source mock --date 2025-07-09
 uv run sensor-data store load-waites --source api --date 2026-07-19
 ```
 
-Loads a validated raw Waites run into SQLite:
+This is the optional inspection/replay path. Normal `0.6.2` day workflows aggregate
+validated raw payloads directly into durable facts and do not require persistent
+native-observation staging. When explicitly invoked, this command loads a validated
+raw Waites run into SQLite:
 
 ```text
 data/processed/observations.sqlite
@@ -263,11 +266,11 @@ uv run sensor-data store purge-native --source api --start-date 2026-07-13 --end
 ```
 
 Deletes releasable date-scoped SQLite staging rows only after the matching ingestion
-ledger and SQLite daily snapshot rows exist and validate. It removes the selected
+ledger and fixed daily fact rows exist and validate. It removes the selected
 date/range from `waites_equipment`, `waites_installation_points`, RMS, temperature,
 ImpactVue, and derived rollups. It preserves `waites_action_items` as durable event
 facts, along with the one-row reference tables, daily snapshot table, ledger,
-snapshot CSV, metadata, manifest, and validation report.
+ingestion state, manifest, and validation report.
 
 ### Build Sensor Snapshot
 
@@ -276,24 +279,19 @@ uv run sensor-data snapshot build --source mock --date 2025-07-09
 uv run sensor-data snapshot build --source api --date 2026-07-19
 ```
 
-Reads raw Waites evidence for the selected date by default and writes:
-
-```text
-data/processed/snapshots/date=2025-07-09/sensor_snapshot.csv
-data/processed/snapshots/date=2025-07-09/metadata.json
-```
-
-Snapshot builds validate the matching raw run first. The snapshot metadata records the validation status and report path.
-
-Every snapshot build also writes the same daily rows into SQLite:
+Reads and validates raw Waites evidence for the selected date by default. It
+calculates daily rows and atomically commits compact references, events, fixed daily
+facts, a snapshot revision, and ingestion state to:
 
 ```text
 data/processed/observations.sqlite
-  sensor_daily_snapshots
+  sensor_daily_facts
   waites_ingestion_ledger
 ```
 
-The ledger records endpoint row counts, validation status, manifest hash, raw artifact metadata, snapshot row count, and retention status.
+Routine builds do not write snapshot CSV or metadata files. The ledger records
+endpoint counts, validation status, manifest hash, snapshot row count, and retention
+status.
 
 To build from the SQLite observation store instead:
 
@@ -303,11 +301,20 @@ uv run sensor-data snapshot build --source mock --date 2025-07-09 --input sqlite
 
 Load the date first with `store load-waites`.
 
-To backfill the SQLite daily snapshot table from an existing CSV snapshot:
+To import an existing historical CSV snapshot as a migration/recovery action:
 
 ```powershell
 uv run sensor-data snapshot store --source mock --date 2025-07-09
 ```
+
+To explicitly export one stored date:
+
+```powershell
+uv run sensor-data snapshot export --source mock --date 2025-07-09 --destination exports/snapshot.csv
+```
+
+The destination is required; an export is never created as a side effect of a
+normal sync.
 
 ### Build Trends
 
@@ -316,17 +323,9 @@ uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 
 uv run sensor-data trend build --source api --start-date 2026-07-19 --end-date 2026-07-19
 ```
 
-Materializes trend CSV/JSON artifacts for reports, exports, and offline inspection. The browser no longer requires this command for routine Trend tab rendering once daily snapshots exist in SQLite.
-
-Reads processed snapshots and writes:
-
-```text
-data/processed/trends/start=2025-07-09_end=2025-07-11/sensor_trends.csv
-data/processed/trends/start=2025-07-09_end=2025-07-11/equipment_trends.csv
-data/processed/trends/start=2025-07-09_end=2025-07-11/metadata.json
-```
-
-Trend builds only consume snapshots whose metadata source matches the requested `--source`. This prevents mock and API snapshots from being mixed silently.
+Queries the fixed SQLite daily facts and returns trend counts/readiness. It does not
+materialize CSV or metadata during routine processing; the browser queries the same
+store directly.
 
 To build trend outputs from the SQLite daily snapshot store:
 
@@ -336,13 +335,32 @@ uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 
 
 Missing SQLite daily snapshots in the range are reported as skipped dates. This path does not require raw endpoint JSON or timestamp-native SQLite observation rows.
 
+To explicitly export sensor and equipment trend CSVs plus metadata:
+
+```powershell
+uv run sensor-data trend export --source mock --start-date 2025-07-09 --end-date 2025-07-11 --destination exports/trend
+```
+
 Routine web/API trend reads are read-only queries over SQLite daily snapshots:
 
 ```text
 GET /api/trends?source=api&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&metric=rms_vel&dimension=x&stat=mean
 ```
 
-Supported web filters include `scope`, `asset_tree_id`, `equipment_id`, `installation_point_id`, `sensor_id`, and `customer_asset_id`. If SQLite daily rows are unavailable, the API falls back to matching trend artifacts when they exist.
+Supported web filters include `scope`, `asset_tree_id`, `equipment_id`, `installation_point_id`, `sensor_id`, and `customer_asset_id`. Operational reads do not silently fall back to files.
+
+### Migrate or Roll Back Snapshot Authority
+
+```powershell
+uv run sensor-data store migrate-snapshots --source api
+uv run sensor-data store snapshot-authority --authority legacy
+uv run sensor-data store snapshot-authority --authority fixed
+```
+
+`migrate-snapshots` streams the retained legacy rows into the fixed schema, verifies
+row/null/zero counts and canonical hashes, records an audit, and only then activates
+the fixed table. The authority commands provide a metadata-only rollback or
+reactivation while the legacy table is retained through sprint `0.6.6`.
 
 ### Run Human-Readable Workflows
 
@@ -357,7 +375,8 @@ uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07
 
 Workflow commands run the normal multi-step paths and print a compact, human-readable summary. They are the comfortable operator surface. The lower-level commands above remain the composable JSON surface.
 
-`mock-day` fetches raw mock Waites evidence, validates it, loads SQLite observations, and builds a sensor snapshot.
+`mock-day` fetches and validates raw mock Waites evidence, then writes the durable
+daily facts directly in one transaction.
 
 `mock-trend` runs the mock day flow across the requested date range and builds trend outputs. It reads processed snapshots by default:
 
@@ -371,7 +390,9 @@ It can also build trends directly from SQLite observation loads:
 uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11 --input sqlite
 ```
 
-`api-day` is the friendly live canary wrapper. It fetches live Waites data, validates the raw shape, verifies checksums, loads SQLite observations, builds an API-source snapshot, stores the daily rows in SQLite, and applies the retention policy. It requires `WAITES_ACCESS_TOKEN`.
+`api-day` is the friendly live canary wrapper. It fetches live Waites data,
+validates the raw shape, verifies checksums, atomically stores the API-source durable
+facts, and applies the retention policy. It requires `WAITES_ACCESS_TOKEN`.
 
 `mock-range` and `api-range` are operating-window workflows. They process each date independently, reuse valid daily snapshots by default, build trend outputs, and can either build legacy cluster-window interpretation artifacts or the registered SQLite model grid:
 

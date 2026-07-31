@@ -71,20 +71,8 @@ def test_fetch_waites_mock_writes_raw_manifest_and_reference_tables(tmp_path: Pa
     assert rms_entry["params"]["start_date"] == "2025-07-09T00:00:00Z"
 
     reference_dir = tmp_path / "data" / "processed" / "waites" / "reference"
-    with (reference_dir / "asset_tree.csv").open(newline="", encoding="utf-8") as csv_file:
-        asset_tree_rows = list(csv.DictReader(csv_file))
-    with (reference_dir / "equipment.csv").open(newline="", encoding="utf-8") as csv_file:
-        equipment_rows = list(csv.DictReader(csv_file))
-    with (reference_dir / "installation_points.csv").open(newline="", encoding="utf-8") as csv_file:
-        installation_rows = list(csv.DictReader(csv_file))
-
-    assert {"asset_tree_id", "name", "parent_asset_tree_id"} <= set(asset_tree_rows[0])
-    assert {"equipment_id", "customer_asset_id"} <= set(equipment_rows[0])
-    assert {"installation_point_id", "sensor_id", "customer_asset_id"} <= set(installation_rows[0])
-    assert len(asset_tree_rows) == 3
-    assert len(equipment_rows) == 6
-    assert len(installation_rows) == 8
-    assert (reference_dir / "metadata.json").exists()
+    assert summary["reference_outputs"] == {}
+    assert not list(reference_dir.glob("*"))
 
 
 def test_fetch_waites_mock_writes_supported_trend_dates(tmp_path: Path) -> None:
@@ -150,8 +138,7 @@ def test_fetch_waites_api_writes_raw_manifest_and_reference_tables(tmp_path: Pat
     assert manifest["endpoints"][0]["elapsed_ms"] == 7
     assert "token-123" not in manifest_text
     assert "access-token" not in manifest_text
-    assert (tmp_path / "data" / "processed" / "waites" / "reference" / "asset_tree.csv").exists()
-    assert (tmp_path / "data" / "processed" / "waites" / "reference" / "equipment.csv").exists()
+    assert summary["reference_outputs"] == {}
 
 
 def test_fetch_waites_api_writes_error_manifest_without_secret(tmp_path: Path) -> None:

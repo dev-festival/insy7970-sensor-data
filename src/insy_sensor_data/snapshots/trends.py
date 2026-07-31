@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Iterable
 
-from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
+from insy_sensor_data.artifacts import read_csv_rows, read_json
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import load_sensor_daily_snapshots
 from insy_sensor_data.snapshots.build import SNAPSHOT_FIELDS
@@ -86,7 +86,7 @@ def build_trends(
     start_date: date,
     end_date: date,
     source: str = "mock",
-    input_mode: str = "snapshots",
+    input_mode: str = "sqlite",
 ) -> dict[str, Any]:
     if source not in {"mock", "api"}:
         raise ValueError("source must be one of: api, mock")
@@ -97,7 +97,6 @@ def build_trends(
         raise ValueError(f"input_mode must be one of: {allowed}")
 
     storage = get_storage_paths(settings.data_dir)
-    output_dir = storage.trend_dir(start_date.isoformat(), end_date.isoformat())
     sensor_rows: list[dict[str, Any]] = []
     skipped_dates: list[str] = []
     source_mismatch_dates: list[str] = []
@@ -122,40 +121,14 @@ def build_trends(
         raise FileNotFoundError(f"No {input_label} found for source {source} in the requested trend range.")
 
     equipment_rows = _equipment_trends(sensor_rows)
-    sensor_path = output_dir / "sensor_trends.csv"
-    equipment_path = output_dir / "equipment_trends.csv"
-    metadata_path = output_dir / "metadata.json"
-
-    write_csv_rows(sensor_path, sensor_rows, SENSOR_TREND_FIELDS)
-    write_csv_rows(equipment_path, equipment_rows, EQUIPMENT_TREND_FIELDS)
-    write_json(
-        metadata_path,
-        {
-            "source": source,
-            "input_mode": input_mode,
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "built_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            "outputs": {
-                "sensor_trends": sensor_path.as_posix(),
-                "equipment_trends": equipment_path.as_posix(),
-                "metadata": metadata_path.as_posix(),
-            },
-            "sensor_record_count": len(sensor_rows),
-            "equipment_record_count": len(equipment_rows),
-            "skipped_dates": skipped_dates,
-            "source_mismatch_dates": source_mismatch_dates,
-        },
-    )
-
     return {
         "source": source,
         "input_mode": input_mode,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
-        "sensor_trends_path": sensor_path.as_posix(),
-        "equipment_trends_path": equipment_path.as_posix(),
-        "metadata_path": metadata_path.as_posix(),
+        "sensor_trends_path": None,
+        "equipment_trends_path": None,
+        "metadata_path": None,
         "sensor_record_count": len(sensor_rows),
         "equipment_record_count": len(equipment_rows),
         "skipped_dates": skipped_dates,

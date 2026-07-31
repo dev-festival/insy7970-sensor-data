@@ -6,10 +6,10 @@ from typing import Any
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.store.connection import read_store
 from insy_sensor_data.store.revision import data_revision
+from insy_sensor_data.store.schema import active_snapshot_table
 
 
 CONTEXT_TABLES = (
-    "sensor_daily_snapshots",
     "cluster_model_runs",
     "cluster_drift_runs",
     "waites_ingestion_ledger",
@@ -19,19 +19,23 @@ CONTEXT_TABLES = (
 def service_context(settings: AppSettings) -> dict[str, Any]:
     """Return SQLite-backed bootstrap context for the web application."""
     with read_store(settings, required_tables=CONTEXT_TABLES) as connection:
+        table = active_snapshot_table(connection)
         snapshots = [
             dict(row)
             for row in connection.execute(
-                """
+                f"""
                 SELECT
                     source,
                     source_date AS date,
                     COUNT(*) AS record_count,
                     MAX(built_at) AS built_at
-                FROM sensor_daily_snapshots
+                FROM {table}
+                WHERE source = ?
                 GROUP BY source, source_date
                 ORDER BY source, source_date
                 """
+                ,
+                (settings.source_mode,),
             ).fetchall()
         ]
         models = [
@@ -50,8 +54,10 @@ def service_context(settings: AppSettings) -> dict[str, Any]:
                     input_snapshot_row_count,
                     feature_row_count
                 FROM cluster_model_runs
+                WHERE source = ?
                 ORDER BY source, source_date, feature_space, k, created_at
-                """
+                """,
+                (settings.source_mode,),
             ).fetchall()
         ]
         drift = [
@@ -68,8 +74,10 @@ def service_context(settings: AppSettings) -> dict[str, Any]:
                     status,
                     created_at
                 FROM cluster_drift_runs
+                WHERE source = ?
                 ORDER BY source, from_date, to_date, feature_space, k
-                """
+                """,
+                (settings.source_mode,),
             ).fetchall()
         ]
         sources = sorted(
@@ -129,14 +137,15 @@ def service_context(settings: AppSettings) -> dict[str, Any]:
 def operational_dates(settings: AppSettings) -> dict[str, Any]:
     with read_store(
         settings,
-        required_tables=("sensor_daily_snapshots", "waites_ingestion_ledger"),
+        required_tables=("waites_ingestion_ledger",),
     ) as connection:
+        table = active_snapshot_table(connection)
         snapshot_dates = [
             str(row["source_date"])
             for row in connection.execute(
-                """
+                f"""
                 SELECT DISTINCT source_date
-                FROM sensor_daily_snapshots
+                FROM {table}
                 WHERE source = ?
                 ORDER BY source_date
                 """,
