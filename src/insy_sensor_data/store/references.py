@@ -286,12 +286,21 @@ def resolve_scope(
     start_date: date,
     end_date: date,
     scope: str,
+    scope_id: str | None = None,
     asset_tree_id: str | None = None,
     equipment_id: str | None = None,
     installation_point_id: str | None = None,
     sensor_id: str | None = None,
 ) -> dict[str, Any]:
     scope_type = scope if scope in VALID_SCOPE_TYPES else "all"
+    canonical_id = _text(scope_id)
+    if canonical_id:
+        if scope_type == "asset_tree" and not asset_tree_id:
+            asset_tree_id = canonical_id
+        elif scope_type == "equipment" and not equipment_id:
+            equipment_id = canonical_id
+        elif scope_type == "sensor" and not installation_point_id and not sensor_id:
+            installation_point_id = canonical_id
     context: dict[str, Any] = {
         "type": scope_type,
         "asset_tree_id": _text(asset_tree_id),
@@ -317,8 +326,15 @@ def resolve_scope(
 
 
 def public_scope(context: dict[str, Any]) -> dict[str, Any]:
+    scope_type = str(context["type"])
+    canonical_id = {
+        "asset_tree": context.get("asset_tree_id"),
+        "equipment": context.get("equipment_id"),
+        "sensor": context.get("installation_point_id") or context.get("sensor_id"),
+    }.get(scope_type)
     return {
-        "type": context["type"],
+        "type": scope_type,
+        "id": _none_if_empty(_text(canonical_id)),
         "asset_tree_id": _none_if_empty(context.get("asset_tree_id", "")),
         "equipment_id": _none_if_empty(context.get("equipment_id", "")),
         "installation_point_id": _none_if_empty(
@@ -327,6 +343,35 @@ def public_scope(context: dict[str, Any]) -> dict[str, Any]:
         "sensor_id": _none_if_empty(context.get("sensor_id", "")),
         "label": context.get("label", "All equipment"),
     }
+
+
+def row_matches_scope(
+    row: dict[str, Any],
+    scope_context: dict[str, Any],
+) -> bool:
+    """Return whether an operational row belongs to a resolved canonical scope."""
+    if scope_context["type"] == "all":
+        return True
+    installation_ids = scope_context.get("installation_point_ids", set())
+    equipment_ids = scope_context.get("equipment_ids", set())
+    installation_id = _text(row.get("installation_point_id"))
+    equipment_id = _text(row.get("equipment_id"))
+    if scope_context["type"] == "sensor":
+        return bool(installation_id and installation_id in installation_ids)
+    if installation_id and installation_ids:
+        return installation_id in installation_ids
+    if equipment_id and equipment_ids:
+        return equipment_id in equipment_ids
+    return False
+
+
+def filter_rows_for_scope(
+    rows: list[dict[str, Any]],
+    scope_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if scope_context["type"] == "all":
+        return rows
+    return [row for row in rows if row_matches_scope(row, scope_context)]
 
 
 def _resolve_asset_tree_scope(

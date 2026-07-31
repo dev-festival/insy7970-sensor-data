@@ -51,10 +51,13 @@ Default URLs:
 
 - `http://127.0.0.1:8000/`
 - `http://127.0.0.1:8000/health`
+- `http://127.0.0.1:8000/api/context`
 - `http://127.0.0.1:8000/api/dates`
 - `http://127.0.0.1:8000/api/waites/raw-runs`
 - `http://127.0.0.1:8000/api/snapshots/2025-07-09`
 - `http://127.0.0.1:8000/api/trends?start_date=2025-07-09&end_date=2025-07-11`
+- `http://127.0.0.1:8000/api/cluster-explorer?date=2025-07-09&metric=rms_vel&dimension=x`
+- `http://127.0.0.1:8000/api/drift-overview?start_date=2025-07-09&end_date=2025-07-11`
 - `http://127.0.0.1:8000/docs`
 
 Useful options:

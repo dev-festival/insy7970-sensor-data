@@ -9,11 +9,10 @@ modules.
 
 ## Current Capabilities
 
-Sprint `0.6.3` converges the web app on one registered-model engine and one
-service-owned model policy over the fixed SQLite authority established in `0.6.2`.
-Models prove their exact snapshot revision and policy version before they are
-ready, one-date repairs touch only adjacent drift, and gapped Drift ranges return
-the valid pairs plus diagnostics instead of failing wholesale:
+Sprint `0.6.4` reshapes the primary web app around Review, Fleet Trends, Cluster,
+and Drift. Browser startup now uses compact service context, scope membership is
+server-owned, Cluster projection rows load only on the standalone Cluster surface,
+and Drift composes every active feature space plus explicit gaps in one response:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -80,12 +79,12 @@ the valid pairs plus diagnostics instead of failing wholesale:
 - workflow raw-retention modes: `keep`, `compress`, and `release`
 - date-scoped staging purge after snapshot and ledger persistence are verified
 - compact Waites reference tables with one row per asset tree, equipment, and sensor
-- global browser context for source and date range
+- compact browser context for configured source, date range, readiness, and revision
 - named asset-tree, equipment, and sensor navigation with explicit scope state
 - selected-scope Snapshot review with context, trends, cluster context, events, and measurements
 - Snapshot review panes with independent scroll, pinned metadata, side-by-side charts, and collapsible detail tables
-- view-local controls for metric, dimension, and supported feature space; model `k` is service-owned
-- URL-backed browser state for local refresh/share workflows
+- view-local controls for metric and dimension; source, feature mapping, and model `k` are service-owned
+- reduced URL-backed browser state with canonical scope identity
 - first-party SVG snapshot, trend, cluster, and drift charts over API responses
 - Maximo fixture-backed work-order history and an ODBC boundary for live DB2 access
 - Asset Tree-scoped Maximo Events using Waites `customer_asset_id` to Maximo `assetnum`

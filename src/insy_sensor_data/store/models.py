@@ -6,6 +6,7 @@ from typing import Any
 from insy_sensor_data.clustering.policy import ACTIVE_MODEL_POLICY
 from insy_sensor_data.clustering.registry import (
     list_registered_cluster_models,
+    load_registered_cluster_summary,
     load_registered_cluster_view,
     load_registered_cluster_window_view,
     load_registered_drift_view,
@@ -58,6 +59,7 @@ def load_cluster(
     dimension: str = "x",
     feature_space: str | None = None,
     k: int | None = None,
+    installation_point_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     resolved_source = resolve_configured_source(settings, source)
     selected_k = ACTIVE_MODEL_POLICY.validate_k(k)
@@ -73,6 +75,48 @@ def load_cluster(
             source=resolved_source,
             feature_space=selected_feature_space.name,
             k=selected_k,
+            installation_point_ids=installation_point_ids,
+        )
+    except FileNotFoundError as exc:
+        raise StoreNotFoundError(str(exc)) from exc
+    return {
+        **payload,
+        "active_model_policy": ACTIVE_MODEL_POLICY.public_payload(),
+        "data_revision": _revision_for_dates(
+            settings,
+            resolved_source,
+            run_date,
+            run_date,
+        ),
+    }
+
+
+def load_cluster_summary(
+    settings: AppSettings,
+    *,
+    run_date: date,
+    source: str,
+    metric: str | None = None,
+    dimension: str = "x",
+    feature_space: str | None = None,
+    k: int | None = None,
+    installation_point_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    resolved_source = resolve_configured_source(settings, source)
+    selected_k = ACTIVE_MODEL_POLICY.validate_k(k)
+    selected_feature_space = ACTIVE_MODEL_POLICY.feature_space_for(
+        metric=metric,
+        dimension=dimension,
+        requested=feature_space,
+    )
+    try:
+        payload = load_registered_cluster_summary(
+            settings=settings,
+            run_date=run_date,
+            source=resolved_source,
+            feature_space=selected_feature_space.name,
+            k=selected_k,
+            installation_point_ids=installation_point_ids,
         )
     except FileNotFoundError as exc:
         raise StoreNotFoundError(str(exc)) from exc
@@ -98,6 +142,7 @@ def load_drift(
     dimension: str = "x",
     feature_space: str | None = None,
     k: int | None = None,
+    installation_point_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     resolved_source = resolve_configured_source(settings, source)
     selected_k = ACTIVE_MODEL_POLICY.validate_k(k)
@@ -114,6 +159,7 @@ def load_drift(
             source=resolved_source,
             feature_space=selected_feature_space.name,
             k=selected_k,
+            installation_point_ids=installation_point_ids,
         )
     except FileNotFoundError as exc:
         raise StoreNotFoundError(str(exc)) from exc
@@ -139,6 +185,7 @@ def load_cluster_window(
     dimension: str = "x",
     feature_space: str | None = None,
     k: int | None = None,
+    installation_point_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     resolved_source = resolve_configured_source(settings, source)
     selected_k = ACTIVE_MODEL_POLICY.validate_k(k)
@@ -155,6 +202,7 @@ def load_cluster_window(
             source=resolved_source,
             feature_space=selected_feature_space.name,
             k=selected_k,
+            installation_point_ids=installation_point_ids,
         )
     except FileNotFoundError as exc:
         raise StoreNotFoundError(str(exc)) from exc

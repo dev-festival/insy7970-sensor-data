@@ -6,7 +6,7 @@
     <title>INSY Sensor Data</title>
     <link rel="stylesheet" href="/static/styles.css">
     <script src="/static/charts.js" defer></script>
-    <script src="/static/app.js" defer></script>
+    <script type="module" src="/static/app.js"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -15,14 +15,13 @@
           <p class="eyebrow">Sensor Review</p>
           <h1 id="app-title">INSY Sensor Data</h1>
         </div>
-        <p id="health-status" class="health-status">Checking service health...</p>
+        <div class="service-status" aria-live="polite">
+          <p id="health-status" class="health-status">Checking service health...</p>
+          <p id="sync-status" class="sync-status">Checking data synchronization...</p>
+        </div>
       </header>
 
       <section class="global-context" aria-label="Global context">
-        <label>
-          <span>Source</span>
-          <select id="source-select"></select>
-        </label>
         <label>
           <span>Start</span>
           <select id="start-date-select"></select>
@@ -48,11 +47,11 @@
         </aside>
 
         <section class="review-main" aria-label="Review workspace">
-          <nav class="tabs" aria-label="Views">
-            <button class="tab is-active" type="button" data-view="snapshot">Snapshot</button>
-            <button class="tab" type="button" data-view="trend">Trend</button>
-            <button class="tab" type="button" data-view="cluster">Cluster</button>
-            <button class="tab" type="button" data-view="drift">Drift</button>
+          <nav class="tabs" aria-label="Views" role="tablist">
+            <button id="review-tab" class="tab is-active" type="button" role="tab" aria-selected="true" data-view="review">Review</button>
+            <button id="trends-tab" class="tab" type="button" role="tab" aria-selected="false" data-view="trends">Fleet Trends</button>
+            <button id="cluster-tab" class="tab" type="button" role="tab" aria-selected="false" data-view="cluster">Cluster</button>
+            <button id="drift-tab" class="tab" type="button" role="tab" aria-selected="false" data-view="drift">Drift</button>
           </nav>
 
           <div id="view-pinned" class="view-pinned">
@@ -77,7 +76,7 @@
             </section>
           </div>
 
-          <p id="status-line" class="status-line">Loading artifacts...</p>
+          <p id="status-line" class="status-line" aria-live="polite">Loading context...</p>
 
           <section id="snapshot-review" class="snapshot-review" aria-label="Snapshot review" hidden>
             <div id="snapshot-scroll" class="snapshot-scroll">

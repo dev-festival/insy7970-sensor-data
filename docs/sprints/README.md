@@ -38,7 +38,7 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.6.1](0.6.1-durable-facts-and-query-boundary.md) | Durable facts and query boundary | SQLite-backed operational repositories with explicit availability and no silent file fallback |
 | [0.6.2](0.6.2-single-operational-store.md) | Single operational store | Fixed daily schema, direct durable-fact ingestion, and explicit exports instead of routine file mirrors |
 | [0.6.3](0.6.3-registered-model-convergence.md) | Registered model convergence | One store-backed model pipeline with versioned readiness and gap-tolerant drift |
-| [0.6.4](0.6.4-web-workflow-reshaping.md) | Web workflow reshaping | Review, Fleet Trends, and Drift workflows over reduced browser state |
+| [0.6.4](0.6.4-web-workflow-reshaping.md) | Web workflow reshaping | Review, Fleet Trends, Cluster, and Drift over compact service-owned state |
 | [0.6.5](0.6.5-admin-cli-contraction.md) | Admin CLI contraction | Five operator-oriented commands for serving, synchronization, rebuild, diagnosis, and export |
 | [0.6.6](0.6.6-legacy-retirement-and-release-hardening.md) | Legacy retirement and release hardening | Recoverable removal of redundant storage, code, commands, and documentation |
 

@@ -44,7 +44,8 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert "INSY Sensor Data" in response.text
-    assert 'id="source-select"' in response.text
+    assert 'id="source-select"' not in response.text
+    assert 'id="sync-status"' in response.text
     assert 'class="global-context"' in response.text
     assert 'id="equipment-search"' in response.text
     assert 'id="equipment-tree"' in response.text
@@ -65,7 +66,11 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert 'id="snapshot-diagnostics-head"' in response.text
     assert 'id="snapshot-diagnostics-body"' in response.text
     assert 'data-view="cluster"' in response.text
+    assert 'data-view="review"' in response.text
+    assert 'data-view="trends"' in response.text
+    assert 'role="tablist"' in response.text
     assert "/static/charts.js" in response.text
+    assert 'type="module" src="/static/app.js"' in response.text
     assert "plotly" not in response.text.lower()
 
     chart_response = client.get("/static/charts.js")
@@ -75,6 +80,17 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     app_response = client.get("/static/app.js")
     assert app_response.status_code == 200
     assert 'params.set("k"' not in app_response.text
+    assert 'fetchJson("/api/context")' in app_response.text
+    assert "/api/cluster-explorer" in app_response.text
+    assert "/api/drift-overview" in app_response.text
+    assert "/api/artifacts" not in app_response.text
+    assert "filterRowsForScope" not in app_response.text
+
+    state_response = client.get("/static/app-state.js")
+    assert state_response.status_code == 200
+    assert 'params.set("scope_type"' in state_response.text
+    assert 'params.set("source"' not in state_response.text
+    assert 'params.set("feature_space"' not in state_response.text
 
 
 def test_waites_raw_runs_endpoint_lists_available_manifests(tmp_path: Path) -> None:
@@ -254,6 +270,31 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     assert all(row["active_dates"] == ["2025-07-10"] for row in ranged_tree["asset_trees"])
 
 
+def test_browser_context_is_compact_and_service_owned(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    client = TestClient(create_app(settings=settings))
+    _prepare_mock_window(settings)
+
+    context_response = client.get("/api/context")
+    artifacts_response = client.get("/api/artifacts")
+
+    assert context_response.status_code == 200
+    context = context_response.json()
+    assert context["source"] == "mock"
+    assert context["views"] == ["review", "trends", "cluster", "drift"]
+    assert [row["date"] for row in context["dates"]] == [
+        "2025-07-09",
+        "2025-07-10",
+        "2025-07-11",
+    ]
+    assert context["synchronization"]["status"] == "model_pending"
+    assert context["synchronization"]["data_revision"]["store"] == "sqlite"
+    assert {row["key"] for row in context["metrics"]} >= {"rms_vel", "temp_sensor"}
+    assert "cluster_models" not in context
+    assert "drift" not in context
+    assert len(context_response.content) < len(artifacts_response.content)
+
+
 def test_equipment_endpoint_validates_date_range(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
@@ -327,6 +368,21 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     assert registered_cluster["feature_space"] == "x_accel"
     assert registered_cluster["metrics"]["feature_count"] == 4
 
+    compact_review = client.get(
+        "/api/snapshot-review/2025-07-09"
+        "?start_date=2025-07-09&end_date=2025-07-11"
+        "&scope_type=sensor&scope_id=201300&metric=rms_vel&dimension=x"
+    ).json()
+    assert compact_review["scope"]["id"] == "201300"
+    assert compact_review["cluster_context"]["status"] == "available"
+    assert compact_review["cluster_context"]["row_count"] == 1
+    assert sum(
+        row["sensor_count"]
+        for row in compact_review["cluster_context"]["cluster_counts"]
+    ) == 1
+    assert "points" not in compact_review["cluster_context"]
+    assert "rows" not in compact_review["cluster_context"]
+
     registered_window_response = client.get(
         "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel"
     )
@@ -343,6 +399,75 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     registered_drift = registered_drift_response.json()
     assert registered_drift["registered"] is True
     assert registered_drift["aligned_metrics"]["matched_sensor_count"] == 9
+
+    tree = client.get(
+        "/api/equipment-tree?start_date=2025-07-09&end_date=2025-07-11"
+    ).json()
+    equipment = tree["asset_trees"][0]["equipment"][0]
+    equipment_id = equipment["equipment_id"]
+    scoped_sensor_count = len(equipment["sensors"])
+
+    cluster_explorer_response = client.get(
+        "/api/cluster-explorer?date=2025-07-09&metric=rms_accel&dimension=x"
+        f"&scope_type=equipment&scope_id={equipment_id}"
+    )
+    assert cluster_explorer_response.status_code == 200
+    cluster_explorer = cluster_explorer_response.json()
+    assert cluster_explorer["scope"] == {
+        "type": "equipment",
+        "id": equipment_id,
+        "asset_tree_id": tree["asset_trees"][0]["asset_tree_id"],
+        "equipment_id": equipment_id,
+        "installation_point_id": None,
+        "sensor_id": None,
+        "label": equipment["equipment_name"],
+    }
+    assert cluster_explorer["feature_space"] == "x_accel"
+    assert cluster_explorer["row_count"] == scoped_sensor_count
+    assert cluster_explorer["all_row_count"] == 9
+    assert len(cluster_explorer["rows"]) == scoped_sensor_count
+
+    drift_overview_response = client.get(
+        "/api/drift-overview?start_date=2025-07-09&end_date=2025-07-11"
+        f"&scope_type=equipment&scope_id={equipment_id}"
+    )
+    assert drift_overview_response.status_code == 200
+    drift_overview = drift_overview_response.json()
+    assert drift_overview["status"] == "complete"
+    assert drift_overview["summary"]["feature_space_count"] == 4
+    assert drift_overview["summary"]["complete_pair_count"] == 8
+    assert drift_overview["summary"]["missing_pair_count"] == 0
+    assert {row["feature_space"] for row in drift_overview["pairs"]} == {
+        "x_accel",
+        "y_vel",
+        "z_vel",
+        "temperature",
+    }
+    assert all(
+        row["matched_sensor_count"] == scoped_sensor_count
+        for row in drift_overview["pairs"]
+    )
+
+    with connect_observation_store(settings) as connection:
+        connection.execute(
+            """
+            UPDATE cluster_model_runs
+            SET status = 'failed'
+            WHERE source = 'mock'
+              AND source_date = '2025-07-10'
+              AND feature_space = 'temperature'
+            """
+        )
+        connection.commit()
+    partial_overview = client.get(
+        "/api/drift-overview?start_date=2025-07-09&end_date=2025-07-11"
+    ).json()
+    assert partial_overview["status"] == "partial"
+    assert partial_overview["summary"]["complete_pair_count"] == 6
+    assert partial_overview["summary"]["missing_pair_count"] == 2
+    assert {row["feature_space"] for row in partial_overview["gaps"]} == {
+        "temperature"
+    }
 
 
 def test_snapshot_review_endpoint_composes_sensor_scope(tmp_path: Path) -> None:

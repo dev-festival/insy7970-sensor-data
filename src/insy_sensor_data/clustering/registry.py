@@ -584,6 +584,7 @@ def load_registered_cluster_view(
     feature_space: str,
     k: int,
     random_seed: int = DEFAULT_RANDOM_SEED,
+    installation_point_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
     spec = _validate_feature_space(feature_space)
@@ -601,7 +602,11 @@ def load_registered_cluster_view(
         k=k,
         random_seed=random_seed,
     )
-    rows = _model_assignment_rows(settings, model["model_run_id"])
+    rows = _model_assignment_rows(
+        settings,
+        model["model_run_id"],
+        installation_point_ids=installation_point_ids,
+    )
     pca_rows = [
         {
             **_identifier_projection(row),
@@ -629,11 +634,59 @@ def load_registered_cluster_view(
         "registered": True,
         "metrics": metrics,
         "row_count": len(rows),
+        "all_row_count": int(model.get("feature_row_count") or len(rows)),
         "cluster_row_count": len(cluster_rows),
         "pca_row_count": len(pca_rows),
         "rows": rows,
         "cluster_rows": cluster_rows,
         "pca_rows": pca_rows,
+    }
+
+
+def load_registered_cluster_summary(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+    feature_space: str,
+    k: int,
+    random_seed: int = DEFAULT_RANDOM_SEED,
+    installation_point_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Return cluster membership counts without loading assignment projections."""
+    source_mode = _validate_source(source)
+    spec = _validate_feature_space(feature_space)
+    ACTIVE_MODEL_POLICY.validate_k(k)
+    if random_seed != ACTIVE_MODEL_POLICY.random_seed:
+        raise ValueError(
+            f"random_seed is service-owned by active policy {ACTIVE_MODEL_POLICY.version}; "
+            f"expected {ACTIVE_MODEL_POLICY.random_seed}."
+        )
+    model = _require_model_run(
+        settings=settings,
+        source=source_mode,
+        source_date=run_date.isoformat(),
+        feature_space=spec.name,
+        k=k,
+        random_seed=random_seed,
+    )
+    counts = _model_assignment_counts(
+        settings,
+        model["model_run_id"],
+        installation_point_ids=installation_point_ids,
+    )
+    return {
+        "source": source_mode,
+        "date": run_date.isoformat(),
+        "feature_space": spec.name,
+        "dimension": spec.dimension,
+        "k": int(model["k"]),
+        "model_run_id": model["model_run_id"],
+        "model_policy_version": ACTIVE_MODEL_POLICY.version,
+        "input_snapshot_revision": model["input_snapshot_revision"],
+        "readiness": "ready",
+        "row_count": sum(int(row["sensor_count"]) for row in counts),
+        "all_row_count": int(model.get("feature_row_count") or 0),
+        "cluster_counts": counts,
     }
 
 
@@ -645,6 +698,8 @@ def load_registered_drift_view(
     feature_space: str,
     k: int,
     random_seed: int = DEFAULT_RANDOM_SEED,
+    installation_point_ids: set[str] | None = None,
+    summary_only: bool = False,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
     spec = _validate_feature_space(feature_space)
@@ -690,8 +745,18 @@ def load_registered_drift_view(
             f"{from_date.isoformat()} to {to_date.isoformat()} feature_space={spec.name}.",
         )
     metrics = _json_loads(drift.get("metrics_json"), {})
-    rows = _drift_assignment_rows(settings, drift_id)
+    rows = (
+        []
+        if summary_only and installation_point_ids is None
+        else _drift_assignment_rows(
+            settings,
+            drift_id,
+            installation_point_ids=installation_point_ids,
+        )
+    )
     alignment_rows = _centroid_alignment_for_drift(settings, drift_id)
+    if installation_point_ids is not None:
+        metrics = _scoped_drift_metrics(metrics, rows, alignment_rows)
     return {
         "source": source_mode,
         "from_date": from_date.isoformat(),
@@ -723,6 +788,7 @@ def load_registered_cluster_window_view(
     feature_space: str,
     k: int,
     random_seed: int = DEFAULT_RANDOM_SEED,
+    installation_point_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
     spec = _validate_feature_space(feature_space)
@@ -784,6 +850,8 @@ def load_registered_cluster_window_view(
                     feature_space=spec.name,
                     k=k,
                     random_seed=random_seed,
+                    installation_point_ids=installation_point_ids,
+                    summary_only=True,
                 )
             )
         except (FileNotFoundError, ModelNotReadyError) as exc:
@@ -1721,14 +1789,27 @@ def _require_model_run(
     return model
 
 
-def _model_assignment_rows(settings: AppSettings, model_run_id: str) -> list[dict[str, Any]]:
+def _model_assignment_rows(
+    settings: AppSettings,
+    model_run_id: str,
+    *,
+    installation_point_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    if installation_point_ids is not None and not installation_point_ids:
+        return []
+    clauses = ["model_run_id = ?"]
+    params: list[Any] = [model_run_id]
+    if installation_point_ids is not None:
+        placeholders = ", ".join("?" for _value in installation_point_ids)
+        clauses.append(f"installation_point_id IN ({placeholders})")
+        params.extend(sorted(installation_point_ids, key=engine.sort_key))
     with read_store(
         settings,
         required_tables=("cluster_model_assignments",),
     ) as connection:
         rows = _query_dicts(
             connection,
-            """
+            f"""
             SELECT
                 model_run_id,
                 installation_point_id,
@@ -1743,10 +1824,10 @@ def _model_assignment_rows(settings: AppSettings, model_run_id: str) -> list[dic
                 pca_y,
                 features_json
             FROM cluster_model_assignments
-            WHERE model_run_id = ?
+            WHERE {" AND ".join(clauses)}
             ORDER BY CAST(installation_point_id AS INTEGER), installation_point_id
             """,
-            (model_run_id,),
+            tuple(params),
         )
     output = []
     for row in rows:
@@ -1767,6 +1848,41 @@ def _model_assignment_rows(settings: AppSettings, model_run_id: str) -> list[dic
             }
         )
     return output
+
+
+def _model_assignment_counts(
+    settings: AppSettings,
+    model_run_id: str,
+    *,
+    installation_point_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    if installation_point_ids is not None and not installation_point_ids:
+        return []
+    clauses = ["model_run_id = ?"]
+    params: list[Any] = [model_run_id]
+    if installation_point_ids is not None:
+        placeholders = ", ".join("?" for _value in installation_point_ids)
+        clauses.append(f"installation_point_id IN ({placeholders})")
+        params.extend(sorted(installation_point_ids, key=engine.sort_key))
+    with read_store(
+        settings,
+        required_tables=("cluster_model_assignments",),
+    ) as connection:
+        rows = _query_dicts(
+            connection,
+            f"""
+            SELECT cluster, COUNT(*) AS sensor_count
+            FROM cluster_model_assignments
+            WHERE {" AND ".join(clauses)}
+            GROUP BY cluster
+            ORDER BY cluster
+            """,
+            tuple(params),
+        )
+    return [
+        {"cluster": int(row["cluster"]), "sensor_count": int(row["sensor_count"])}
+        for row in rows
+    ]
 
 
 def _model_centroid_summary_rows(settings: AppSettings, model_run_id: str) -> list[dict[str, Any]]:
@@ -1802,7 +1918,20 @@ def _model_centroid_summary_rows(settings: AppSettings, model_run_id: str) -> li
     return output
 
 
-def _drift_assignment_rows(settings: AppSettings, drift_run_id: str) -> list[dict[str, Any]]:
+def _drift_assignment_rows(
+    settings: AppSettings,
+    drift_run_id: str,
+    *,
+    installation_point_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    if installation_point_ids is not None and not installation_point_ids:
+        return []
+    clauses = ["assignment.drift_run_id = ?"]
+    params: list[Any] = [drift_run_id]
+    if installation_point_ids is not None:
+        placeholders = ", ".join("?" for _value in installation_point_ids)
+        clauses.append(f"assignment.installation_point_id IN ({placeholders})")
+        params.extend(sorted(installation_point_ids, key=engine.sort_key))
     with read_store(
         settings,
         required_tables=(
@@ -1813,7 +1942,7 @@ def _drift_assignment_rows(settings: AppSettings, drift_run_id: str) -> list[dic
     ) as connection:
         rows = _query_dicts(
             connection,
-            """
+            f"""
             SELECT
                 assignment.drift_run_id,
                 assignment.installation_point_id,
@@ -1834,10 +1963,10 @@ def _drift_assignment_rows(settings: AppSettings, drift_run_id: str) -> list[dic
             LEFT JOIN cluster_model_assignments AS model_rows
               ON model_rows.model_run_id = drift.to_model_run_id
              AND model_rows.installation_point_id = assignment.installation_point_id
-            WHERE assignment.drift_run_id = ?
+            WHERE {" AND ".join(clauses)}
             ORDER BY CAST(assignment.installation_point_id AS INTEGER), assignment.installation_point_id
             """,
-            (drift_run_id,),
+            tuple(params),
         )
     return [
         {
@@ -2034,6 +2163,48 @@ def _aligned_drift_warnings(
             }
         )
     return warnings
+
+
+def _scoped_drift_metrics(
+    metrics: dict[str, Any],
+    rows: list[dict[str, Any]],
+    alignment_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Recalculate sensor-level drift metrics after the SQL scope is applied."""
+    matched_rows = [row for row in rows if row.get("status") == "matched"]
+    matched_count = len(matched_rows)
+    raw_changed_count = sum(
+        1 for row in matched_rows if row.get("raw_label_changed") == "true"
+    )
+    aligned_changed_count = sum(
+        1 for row in matched_rows if row.get("aligned_changed") == "true"
+    )
+    warnings = _aligned_drift_warnings(
+        alignment_rows,
+        raw_changed_count,
+        aligned_changed_count,
+    )
+    return {
+        **metrics,
+        "matched_sensor_count": matched_count,
+        "raw_label_changed_count": raw_changed_count,
+        "aligned_changed_count": aligned_changed_count,
+        "raw_label_changed_ratio": (
+            raw_changed_count / matched_count if matched_count else None
+        ),
+        "aligned_changed_ratio": (
+            aligned_changed_count / matched_count if matched_count else None
+        ),
+        "warning_count": len(warnings),
+        "warnings": warnings,
+        "interpretation": _drift_interpretation(
+            matched_count=matched_count,
+            raw_changed_count=raw_changed_count,
+            aligned_changed_count=aligned_changed_count,
+            warnings=warnings,
+        ),
+        "scope_applied": True,
+    }
 
 
 def _drift_interpretation(

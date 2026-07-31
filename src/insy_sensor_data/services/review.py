@@ -21,8 +21,12 @@ from insy_sensor_data.store.errors import (
     StoreNotFoundError,
 )
 from insy_sensor_data.store.events import query_waites_events
-from insy_sensor_data.store.models import load_cluster
-from insy_sensor_data.store.references import public_scope, resolve_scope
+from insy_sensor_data.store.models import load_cluster_summary
+from insy_sensor_data.store.references import (
+    filter_rows_for_scope,
+    public_scope,
+    resolve_scope,
+)
 from insy_sensor_data.store.snapshots import load_snapshot_view
 
 
@@ -49,6 +53,7 @@ def load_snapshot_review(
     start_date: date | None = None,
     end_date: date | None = None,
     scope: str = "all",
+    scope_id: str | None = None,
     asset_tree_id: str | None = None,
     equipment_id: str | None = None,
     installation_point_id: str | None = None,
@@ -106,6 +111,7 @@ def load_snapshot_review(
         start_date=effective_start,
         end_date=effective_end,
         scope=scope,
+        scope_id=scope_id,
         asset_tree_id=asset_tree_id,
         equipment_id=equipment_id,
         installation_point_id=installation_point_id,
@@ -176,19 +182,6 @@ def load_snapshot_review(
     }
 
 
-def filter_rows_for_scope(
-    rows: list[dict[str, Any]],
-    scope_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    if scope_context["type"] == "all":
-        return rows
-    return [
-        row
-        for row in rows
-        if _row_matches_scope(row, scope_context)
-    ]
-
-
 def _review_context(
     scope_context: dict[str, Any],
     scoped_rows: list[dict[str, Any]],
@@ -206,17 +199,29 @@ def _review_context(
         for row in rows
         if _text(row.get("installation_point_id"))
     }
+    equipment_selected = scope_context["type"] in {"equipment", "sensor"}
+    sensor_selected = scope_context["type"] == "sensor"
     context = {
         "label": scope_context.get("label", "All equipment"),
-        "equipment_name": scope_context.get("equipment_name")
-        or first.get("equipment_name")
-        or "",
-        "customer_asset_id": scope_context.get("customer_asset_id")
-        or first.get("customer_asset_id")
-        or "",
-        "sensor_name": scope_context.get("sensor_name")
-        or first.get("installation_point_name")
-        or "",
+        "equipment_name": (
+            scope_context.get("equipment_name") or first.get("equipment_name") or ""
+            if equipment_selected
+            else ""
+        ),
+        "customer_asset_id": (
+            scope_context.get("customer_asset_id")
+            or first.get("customer_asset_id")
+            or ""
+            if equipment_selected
+            else ""
+        ),
+        "sensor_name": (
+            scope_context.get("sensor_name")
+            or first.get("installation_point_name")
+            or ""
+            if sensor_selected
+            else ""
+        ),
         "equipment_count": len(equipment_ids),
         "sensor_count": len(sensor_ids),
         "snapshot_row_count": len(rows),
@@ -292,7 +297,12 @@ def _review_cluster(
     scope_context: dict[str, Any],
 ) -> dict[str, Any]:
     try:
-        payload = load_cluster(
+        installation_ids = (
+            None
+            if scope_context["type"] == "all"
+            else set(scope_context.get("installation_point_ids", set()))
+        )
+        payload = load_cluster_summary(
             settings,
             run_date=run_date,
             source=source,
@@ -300,6 +310,7 @@ def _review_cluster(
             dimension=dimension,
             feature_space=feature_space,
             k=k,
+            installation_point_ids=installation_ids,
         )
     except (StoreNotFoundError, StoreMigrationRequiredError) as exc:
         return {
@@ -308,27 +319,16 @@ def _review_cluster(
             "dimension": dimension,
             "feature_space": feature_space,
             "k": k,
-            "points": [],
-            "rows": [],
-            "selected_ids": sorted(
-                scope_context.get("installation_point_ids", set())
-            ),
+            "cluster_counts": [],
         }
-    points = filter_rows_for_scope(payload.get("pca_rows", []), scope_context)
-    rows = filter_rows_for_scope(payload.get("rows", []), scope_context)
     return {
         "status": "available",
         "dimension": payload["dimension"],
         "feature_space": payload.get("feature_space"),
         "k": payload["k"],
-        "row_count": len(rows),
-        "all_row_count": payload["row_count"],
-        "points": points,
-        "rows": rows,
-        "selected_ids": sorted(
-            scope_context.get("installation_point_ids", set())
-        ),
-        "metrics": payload.get("metrics", {}),
+        "row_count": payload["row_count"],
+        "all_row_count": payload["all_row_count"],
+        "cluster_counts": payload["cluster_counts"],
         "data_revision": payload["data_revision"],
     }
 
@@ -582,23 +582,6 @@ def _measurement_columns(
             ]
         )
     )
-
-
-def _row_matches_scope(
-    row: dict[str, Any],
-    scope_context: dict[str, Any],
-) -> bool:
-    installation_ids = scope_context.get("installation_point_ids", set())
-    equipment_ids = scope_context.get("equipment_ids", set())
-    installation_id = _text(row.get("installation_point_id"))
-    equipment_id = _text(row.get("equipment_id"))
-    if scope_context["type"] == "sensor":
-        return bool(installation_id and installation_id in installation_ids)
-    if installation_id and installation_ids:
-        return installation_id in installation_ids
-    if equipment_id and equipment_ids:
-        return equipment_id in equipment_ids
-    return False
 
 
 def _normalize_metric(metric: str) -> str:
