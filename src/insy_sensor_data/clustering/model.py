@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from math import isfinite, sqrt
-from random import Random
+from math import sqrt
 from typing import Any
 
 from insy_sensor_data.artifacts import read_csv_rows, read_json, write_csv_rows, write_json
+from insy_sensor_data.clustering import engine
 from insy_sensor_data.clustering.features import DIMENSIONS, IDENTIFIER_FIELDS, build_feature_preview
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.storage import get_storage_paths
@@ -55,23 +54,6 @@ CENTROID_DRIFT_FIELDS = [
 ]
 
 
-@dataclass(frozen=True)
-class ScaledMatrix:
-    values: list[list[float]]
-    means: dict[str, float]
-    scales: dict[str, float]
-
-
-@dataclass(frozen=True)
-class KMeansResult:
-    labels: list[int]
-    centroids: list[list[float]]
-    distances: list[float]
-    inertia: float
-    iterations: int
-    converged: bool
-
-
 def build_cluster_run(
     settings: AppSettings,
     run_date: date,
@@ -103,17 +85,18 @@ def build_cluster_run(
     if k > len(feature_rows):
         raise ValueError("k cannot exceed feature row count")
 
-    matrix = _numeric_matrix(feature_rows, feature_columns)
-    scaled = _standard_scale(matrix, feature_columns)
-    kmeans = _kmeans(
+    matrix = engine.numeric_matrix(feature_rows, feature_columns)
+    scaled = engine.standard_scale(matrix, feature_columns)
+    kmeans = engine.kmeans(
         scaled.values,
         k=k,
         random_seed=random_seed,
         max_iterations=max_iterations,
+        tolerance=DEFAULT_TOLERANCE,
     )
-    pca = _pca_coordinates(scaled.values)
-    metrics = _cluster_metrics(scaled.values, kmeans)
-    cluster_counts = _cluster_counts(kmeans.labels, k)
+    pca = engine.pca_coordinates(scaled.values, iterations=50)
+    metrics = engine.cluster_metrics(scaled.values, kmeans)
+    cluster_counts = engine.cluster_counts(kmeans.labels, k)
 
     storage = get_storage_paths(settings.data_dir)
     output_dir = _cluster_dir(storage.clusters_dir, run_date, source_mode, cluster_dimension, k)
@@ -123,17 +106,17 @@ def build_cluster_run(
     pca_path = output_dir / "pca_coordinates.csv"
     metrics_path = output_dir / "metrics.json"
 
-    sensor_rows = _sensor_cluster_rows(feature_rows, feature_columns, kmeans)
-    summary_rows = _cluster_summary_rows(
+    sensor_rows = engine.sensor_cluster_rows(feature_rows, feature_columns, kmeans)
+    summary_rows = engine.cluster_summary_rows(
         feature_rows=feature_rows,
         feature_columns=feature_columns,
         scaled=scaled,
-        kmeans=kmeans,
+        result=kmeans,
         k=k,
     )
-    pca_rows = _pca_rows(feature_rows, kmeans, pca)
+    pca_rows = engine.pca_rows(feature_rows, kmeans, pca)
     write_csv_rows(sensor_path, sensor_rows, [*SENSOR_CLUSTER_FIELDS, *feature_columns])
-    write_csv_rows(summary_path, summary_rows, _cluster_summary_fields(feature_columns))
+    write_csv_rows(summary_path, summary_rows, engine.cluster_summary_fields(feature_columns))
     write_csv_rows(pca_path, pca_rows, PCA_FIELDS)
     write_json(
         metrics_path,
@@ -321,325 +304,6 @@ def _feature_columns(rows: list[dict[str, str]]) -> list[str]:
     return [field for field in rows[0] if field not in IDENTIFIER_FIELDS]
 
 
-def _numeric_matrix(rows: list[dict[str, str]], feature_columns: list[str]) -> list[list[float]]:
-    return [[_float(row.get(field)) for field in feature_columns] for row in rows]
-
-
-def _standard_scale(matrix: list[list[float]], feature_columns: list[str]) -> ScaledMatrix:
-    columns = list(zip(*matrix, strict=True))
-    means = {feature: sum(values) / len(values) for feature, values in zip(feature_columns, columns, strict=True)}
-    scales: dict[str, float] = {}
-    for feature, values in zip(feature_columns, columns, strict=True):
-        mean = means[feature]
-        variance = sum((value - mean) ** 2 for value in values) / len(values)
-        scale = sqrt(variance)
-        scales[feature] = scale if scale > 0 else 1.0
-    scaled = [
-        [
-            (value - means[feature]) / scales[feature]
-            for feature, value in zip(feature_columns, row, strict=True)
-        ]
-        for row in matrix
-    ]
-    return ScaledMatrix(values=scaled, means=means, scales=scales)
-
-
-def _kmeans(
-    matrix: list[list[float]],
-    k: int,
-    random_seed: int,
-    max_iterations: int,
-) -> KMeansResult:
-    centroids = _initial_centroids(matrix, k, random_seed)
-    labels = [0 for _row in matrix]
-    converged = False
-    for iteration in range(1, max_iterations + 1):
-        labels = [_nearest_centroid(row, centroids) for row in matrix]
-        next_centroids = _updated_centroids(matrix, labels, centroids, k)
-        shift = sum(_squared_distance(old, new) for old, new in zip(centroids, next_centroids, strict=True))
-        centroids = next_centroids
-        if shift <= DEFAULT_TOLERANCE:
-            converged = True
-            break
-
-    distances = [sqrt(_squared_distance(row, centroids[label])) for row, label in zip(matrix, labels, strict=True)]
-    inertia = sum(distance**2 for distance in distances)
-    return KMeansResult(
-        labels=labels,
-        centroids=centroids,
-        distances=distances,
-        inertia=inertia,
-        iterations=iteration,
-        converged=converged,
-    )
-
-
-def _initial_centroids(matrix: list[list[float]], k: int, random_seed: int) -> list[list[float]]:
-    rng = Random(random_seed)
-    first_index = rng.randrange(len(matrix))
-    centroid_indexes = [first_index]
-    while len(centroid_indexes) < k:
-        next_index = max(
-            (index for index in range(len(matrix)) if index not in centroid_indexes),
-            key=lambda index: (
-                min(_squared_distance(matrix[index], matrix[centroid_index]) for centroid_index in centroid_indexes),
-                -index,
-            ),
-        )
-        centroid_indexes.append(next_index)
-    return [list(matrix[index]) for index in centroid_indexes]
-
-
-def _nearest_centroid(row: list[float], centroids: list[list[float]]) -> int:
-    return min(
-        range(len(centroids)),
-        key=lambda cluster: (_squared_distance(row, centroids[cluster]), cluster),
-    )
-
-
-def _updated_centroids(
-    matrix: list[list[float]],
-    labels: list[int],
-    centroids: list[list[float]],
-    k: int,
-) -> list[list[float]]:
-    updated: list[list[float]] = []
-    for cluster in range(k):
-        members = [row for row, label in zip(matrix, labels, strict=True) if label == cluster]
-        if not members:
-            updated.append(list(centroids[cluster]))
-            continue
-        updated.append([sum(values) / len(values) for values in zip(*members, strict=True)])
-    return updated
-
-
-def _sensor_cluster_rows(
-    feature_rows: list[dict[str, str]],
-    feature_columns: list[str],
-    kmeans: KMeansResult,
-) -> list[dict[str, Any]]:
-    output = []
-    for row, label, distance in zip(feature_rows, kmeans.labels, kmeans.distances, strict=True):
-        output.append(
-            {
-                **{field: row.get(field, "") for field in IDENTIFIER_FIELDS},
-                "cluster": label,
-                "distance_to_centroid": distance,
-                **{field: row.get(field, "") for field in feature_columns},
-            }
-        )
-    return output
-
-
-def _cluster_summary_rows(
-    feature_rows: list[dict[str, str]],
-    feature_columns: list[str],
-    scaled: ScaledMatrix,
-    kmeans: KMeansResult,
-    k: int,
-) -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
-    for cluster in range(k):
-        indexes = [index for index, label in enumerate(kmeans.labels) if label == cluster]
-        row: dict[str, Any] = {
-            "cluster": cluster,
-            "sensor_count": len(indexes),
-            "sensor_fraction": len(indexes) / len(feature_rows) if feature_rows else 0,
-            "within_cluster_sse": sum(kmeans.distances[index] ** 2 for index in indexes),
-        }
-        for feature in feature_columns:
-            row[f"mean_{feature}"] = _cluster_feature_mean(feature_rows, indexes, feature)
-        for feature, value in zip(feature_columns, kmeans.centroids[cluster], strict=True):
-            row[f"centroid_scaled_{feature}"] = value
-        output.append(row)
-    return output
-
-
-def _cluster_summary_fields(feature_columns: list[str]) -> list[str]:
-    return [
-        "cluster",
-        "sensor_count",
-        "sensor_fraction",
-        "within_cluster_sse",
-        *[f"mean_{feature}" for feature in feature_columns],
-        *[f"centroid_scaled_{feature}" for feature in feature_columns],
-    ]
-
-
-def _cluster_feature_mean(rows: list[dict[str, str]], indexes: list[int], feature: str) -> float | None:
-    if not indexes:
-        return None
-    values = [_float(rows[index].get(feature)) for index in indexes]
-    return sum(values) / len(values)
-
-
-def _pca_rows(
-    feature_rows: list[dict[str, str]],
-    kmeans: KMeansResult,
-    pca: dict[str, Any],
-) -> list[dict[str, Any]]:
-    rows = []
-    coordinates = pca["coordinates"]
-    for row, label, distance, coordinate in zip(
-        feature_rows,
-        kmeans.labels,
-        kmeans.distances,
-        coordinates,
-        strict=True,
-    ):
-        rows.append(
-            {
-                **{field: row.get(field, "") for field in IDENTIFIER_FIELDS},
-                "cluster": label,
-                "pc1": coordinate[0],
-                "pc2": coordinate[1],
-                "distance_to_centroid": distance,
-            }
-        )
-    return rows
-
-
-def _cluster_metrics(matrix: list[list[float]], kmeans: KMeansResult) -> dict[str, Any]:
-    k = len(kmeans.centroids)
-    n = len(matrix)
-    return {
-        "inertia": {
-            "available": True,
-            "value": kmeans.inertia,
-        },
-        "silhouette_score": _silhouette_metric(matrix, kmeans.labels, k),
-        "calinski_harabasz_score": _calinski_harabasz_metric(matrix, kmeans, k, n),
-    }
-
-
-def _silhouette_metric(matrix: list[list[float]], labels: list[int], k: int) -> dict[str, Any]:
-    n = len(matrix)
-    if k < 2 or n <= k:
-        return {"available": False, "value": None, "reason": "requires 2 <= k < row_count"}
-
-    scores: list[float] = []
-    for index, row in enumerate(matrix):
-        own_cluster = labels[index]
-        same = [
-            _distance(row, matrix[other_index])
-            for other_index, other_label in enumerate(labels)
-            if other_label == own_cluster and other_index != index
-        ]
-        other_cluster_distances = []
-        for cluster in range(k):
-            if cluster == own_cluster:
-                continue
-            members = [
-                _distance(row, matrix[other_index])
-                for other_index, other_label in enumerate(labels)
-                if other_label == cluster
-            ]
-            if members:
-                other_cluster_distances.append(sum(members) / len(members))
-        if not other_cluster_distances:
-            continue
-        a_value = sum(same) / len(same) if same else 0.0
-        b_value = min(other_cluster_distances)
-        denominator = max(a_value, b_value)
-        scores.append(0.0 if denominator == 0 else (b_value - a_value) / denominator)
-    if not scores:
-        return {"available": False, "value": None, "reason": "no comparable clusters"}
-    return {"available": True, "value": sum(scores) / len(scores), "reason": None}
-
-
-def _calinski_harabasz_metric(
-    matrix: list[list[float]],
-    kmeans: KMeansResult,
-    k: int,
-    n: int,
-) -> dict[str, Any]:
-    if k < 2 or n <= k:
-        return {"available": False, "value": None, "reason": "requires 2 <= k < row_count"}
-    overall = [sum(values) / len(values) for values in zip(*matrix, strict=True)]
-    between = 0.0
-    for cluster in range(k):
-        count = sum(1 for label in kmeans.labels if label == cluster)
-        between += count * _squared_distance(kmeans.centroids[cluster], overall)
-    within = kmeans.inertia
-    if within <= 0:
-        return {"available": False, "value": None, "reason": "within-cluster variance is zero"}
-    value = (between / (k - 1)) / (within / (n - k))
-    return {"available": True, "value": value, "reason": None}
-
-
-def _pca_coordinates(matrix: list[list[float]]) -> dict[str, Any]:
-    if not matrix:
-        return {"available": False, "coordinates": [], "explained_variance_ratio": [None, None]}
-    feature_count = len(matrix[0])
-    if feature_count == 1:
-        return {
-            "available": True,
-            "coordinates": [[row[0], 0.0] for row in matrix],
-            "explained_variance_ratio": [1.0, 0.0],
-        }
-
-    covariance = _covariance_matrix(matrix)
-    first_vector, first_value = _power_iteration(covariance, seed=1)
-    deflated = _deflate(covariance, first_vector, first_value)
-    second_vector, second_value = _power_iteration(deflated, seed=2)
-    coordinates = [
-        [_dot(row, first_vector), _dot(row, second_vector)]
-        for row in matrix
-    ]
-    total = sum(max(value, 0.0) for value in _eigenvalue_estimates(covariance))
-    ratios = (
-        [first_value / total if total else None, second_value / total if total else None]
-        if total
-        else [None, None]
-    )
-    return {
-        "available": True,
-        "coordinates": coordinates,
-        "explained_variance_ratio": ratios,
-    }
-
-
-def _covariance_matrix(matrix: list[list[float]]) -> list[list[float]]:
-    n = len(matrix)
-    feature_count = len(matrix[0])
-    if n < 2:
-        return [[0.0 for _ in range(feature_count)] for _ in range(feature_count)]
-    return [
-        [
-            sum(row[i] * row[j] for row in matrix) / (n - 1)
-            for j in range(feature_count)
-        ]
-        for i in range(feature_count)
-    ]
-
-
-def _power_iteration(matrix: list[list[float]], seed: int, iterations: int = 50) -> tuple[list[float], float]:
-    rng = Random(seed)
-    vector = _normalize([rng.random() + 0.1 for _ in matrix])
-    for _iteration in range(iterations):
-        next_vector = _matrix_vector(matrix, vector)
-        norm = _norm(next_vector)
-        if norm == 0:
-            break
-        vector = [value / norm for value in next_vector]
-    value = _dot(vector, _matrix_vector(matrix, vector))
-    return vector, max(value, 0.0)
-
-
-def _deflate(matrix: list[list[float]], vector: list[float], value: float) -> list[list[float]]:
-    return [
-        [
-            matrix[i][j] - value * vector[i] * vector[j]
-            for j in range(len(matrix))
-        ]
-        for i in range(len(matrix))
-    ]
-
-
-def _eigenvalue_estimates(matrix: list[list[float]]) -> list[float]:
-    return [max(matrix[index][index], 0.0) for index in range(len(matrix))]
-
-
 def _assignment_drift_rows(
     from_rows: list[dict[str, str]],
     to_rows: list[dict[str, str]],
@@ -705,7 +369,11 @@ def _centroid_distance(from_row: dict[str, str], to_row: dict[str, str], columns
         return None
     return sqrt(
         sum(
-            (_float(from_row.get(column)) - _float(to_row.get(column))) ** 2
+            (
+                engine.float_value(from_row.get(column))
+                - engine.float_value(to_row.get(column))
+            )
+            ** 2
             for column in columns
         )
     )
@@ -716,10 +384,6 @@ def _load_cluster_rows(cluster_dir) -> list[dict[str, str]]:
     if not path.exists():
         raise FileNotFoundError(f"Missing cluster artifact: {path}")
     return read_csv_rows(path)
-
-
-def _cluster_counts(labels: list[int], k: int) -> dict[str, int]:
-    return {str(cluster): sum(1 for label in labels if label == cluster) for cluster in range(k)}
 
 
 def _cluster_dir(root, run_date: date, source: str, dimension: str, k: int):
@@ -746,42 +410,6 @@ def _validate_dimension(dimension: str) -> str:
         allowed = ", ".join(sorted(VALID_CLUSTER_DIMENSIONS))
         raise ValueError(f"dimension must be one of: {allowed}")
     return cluster_dimension
-
-
-def _distance(left: list[float], right: list[float]) -> float:
-    return sqrt(_squared_distance(left, right))
-
-
-def _squared_distance(left: list[float], right: list[float]) -> float:
-    return sum((left_value - right_value) ** 2 for left_value, right_value in zip(left, right, strict=True))
-
-
-def _matrix_vector(matrix: list[list[float]], vector: list[float]) -> list[float]:
-    return [_dot(row, vector) for row in matrix]
-
-
-def _dot(left: list[float], right: list[float]) -> float:
-    return sum(left_value * right_value for left_value, right_value in zip(left, right, strict=True))
-
-
-def _norm(values: list[float]) -> float:
-    return sqrt(sum(value**2 for value in values))
-
-
-def _normalize(values: list[float]) -> list[float]:
-    norm = _norm(values)
-    if norm == 0:
-        return [1.0 if index == 0 else 0.0 for index, _value in enumerate(values)]
-    return [value / norm for value in values]
-
-
-def _float(value: Any) -> float:
-    if value in (None, ""):
-        return 0.0
-    result = float(value)
-    if not isfinite(result):
-        return 0.0
-    return result
 
 
 def _sort_key(value: Any) -> tuple[int, Any]:

@@ -1,124 +1,48 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from math import isfinite, sqrt
+from math import isfinite
 from statistics import median
-from pathlib import Path
 from typing import Any, Iterable
-import hashlib
 import json
 import sqlite3
 
-from insy_sensor_data.artifacts import read_csv_rows, write_csv_rows, write_json
+from insy_sensor_data.clustering import engine
 from insy_sensor_data.clustering.features import IDENTIFIER_FIELDS
-from insy_sensor_data.clustering.model import (
-    CLUSTER_SCHEMA_VERSION,
-    DEFAULT_MAX_ITERATIONS,
-    DEFAULT_RANDOM_SEED,
-    DEFAULT_TOLERANCE,
-    PCA_FIELDS,
-    SENSOR_CLUSTER_FIELDS,
-    _cluster_counts,
-    _cluster_metrics,
-    _cluster_summary_fields,
-    _cluster_summary_rows,
-    _float,
-    _kmeans,
-    _numeric_matrix,
-    _pca_coordinates,
-    _pca_rows,
-    _sensor_cluster_rows,
-    _standard_scale,
+from insy_sensor_data.clustering.policy import (
+    ACTIVE_MODEL_POLICY,
+    FeatureSpaceSpec,
 )
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import connect_observation_store, observation_db_path
 from insy_sensor_data.observations import load_sensor_daily_snapshots
-from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.store.connection import read_store
 from insy_sensor_data.store.schema import snapshot_revision
 
 
-REGISTRY_SCHEMA_VERSION = 1
-FEATURE_POLICY_VERSION = "feature_space_daily_stats_v1"
-SCALER_POLICY = "standard_zscore_v1"
-ALGORITHM = "deterministic_kmeans"
-ALIGNMENT_POLICY = "nearest_scaled_centroid_v1"
-DEFAULT_FEATURE_SPACES = ("x_accel", "y_vel", "z_vel", "temperature")
-DEFAULT_REGISTRY_KS = (5,)
+REGISTRY_SCHEMA_VERSION = 2
+FEATURE_POLICY_VERSION = ACTIVE_MODEL_POLICY.feature_policy_version
+SCALER_POLICY = ACTIVE_MODEL_POLICY.scaler_policy
+ALGORITHM = ACTIVE_MODEL_POLICY.algorithm
+ALIGNMENT_POLICY = ACTIVE_MODEL_POLICY.alignment_policy
+DEFAULT_FEATURE_SPACES = tuple(spec.name for spec in ACTIVE_MODEL_POLICY.feature_spaces)
+DEFAULT_REGISTRY_KS = (ACTIVE_MODEL_POLICY.k,)
+DEFAULT_RANDOM_SEED = ACTIVE_MODEL_POLICY.random_seed
+DEFAULT_MAX_ITERATIONS = ACTIVE_MODEL_POLICY.max_iterations
+DEFAULT_TOLERANCE = ACTIVE_MODEL_POLICY.tolerance
 VALID_REGISTRY_SOURCES = {"mock", "api"}
 
-MODEL_ARTIFACT_FIELDS = [
-    *SENSOR_CLUSTER_FIELDS,
-]
-
-CENTROID_ALIGNMENT_FIELDS = [
-    "from_date",
-    "to_date",
-    "from_cluster",
-    "to_cluster",
-    "centroid_distance",
-    "from_sensor_count",
-    "to_sensor_count",
-    "mapping_confidence",
-]
-
-ALIGNED_SENSOR_DRIFT_FIELDS = [
-    "installation_point_id",
-    "equipment_id",
-    "equipment_name",
-    "sensor_id",
-    "customer_asset_id",
-    "status",
-    "from_cluster",
-    "to_cluster",
-    "aligned_to_cluster",
-    "raw_label_changed",
-    "aligned_changed",
-    "from_distance_to_centroid",
-    "to_distance_to_centroid",
-    "distance_delta",
-]
+FEATURE_SPACE_SPECS = ACTIVE_MODEL_POLICY.feature_specs
 
 
-@dataclass(frozen=True)
-class FeatureSpaceSpec:
-    name: str
-    label: str
-    dimension: str
-    prefix: str
-    axis: str | None = None
+class InsufficientModelDataError(ValueError):
+    """The snapshot exists but cannot support the active model contract."""
 
 
-FEATURE_SPACE_SPECS: dict[str, FeatureSpaceSpec] = {
-    "x_accel": FeatureSpaceSpec(
-        name="x_accel",
-        label="X Acceleration",
-        dimension="x",
-        prefix="rms_accel_",
-        axis="x",
-    ),
-    "y_vel": FeatureSpaceSpec(
-        name="y_vel",
-        label="Y Velocity",
-        dimension="y",
-        prefix="rms_vel_",
-        axis="y",
-    ),
-    "z_vel": FeatureSpaceSpec(
-        name="z_vel",
-        label="Z Velocity",
-        dimension="z",
-        prefix="rms_vel_",
-        axis="z",
-    ),
-    "temperature": FeatureSpaceSpec(
-        name="temperature",
-        label="Temperature",
-        dimension="temperature",
-        prefix="temp_sensor_",
-    ),
-}
+class ModelNotReadyError(FileNotFoundError):
+    def __init__(self, status: str, message: str) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def build_cluster_model_grid(
@@ -132,10 +56,16 @@ def build_cluster_model_grid(
     force: bool = False,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
+    _ensure_model_schema(settings)
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
     selected_feature_spaces = _validate_feature_spaces(feature_spaces or DEFAULT_FEATURE_SPACES)
     selected_ks = _validate_ks(ks or DEFAULT_REGISTRY_KS)
+    if random_seed != ACTIVE_MODEL_POLICY.random_seed:
+        raise ValueError(
+            f"random_seed is service-owned by active policy {ACTIVE_MODEL_POLICY.version}; "
+            f"expected {ACTIVE_MODEL_POLICY.random_seed}."
+        )
     dates = _date_range(start_date, end_date)
 
     models: list[dict[str, Any]] = []
@@ -164,6 +94,11 @@ def build_cluster_model_grid(
                             k=k,
                             random_seed=random_seed,
                             error=str(exc),
+                            status=(
+                                "insufficient_data"
+                                if isinstance(exc, InsufficientModelDataError)
+                                else "failed"
+                            ),
                         )
                     )
 
@@ -233,6 +168,8 @@ def build_cluster_model_grid(
         "feature_spaces": selected_feature_spaces,
         "ks": selected_ks,
         "random_seed": random_seed,
+        "model_policy": ACTIVE_MODEL_POLICY.public_payload(),
+        "model_policy_version": ACTIVE_MODEL_POLICY.version,
         "feature_policy_version": FEATURE_POLICY_VERSION,
         "scaler_policy": SCALER_POLICY,
         "algorithm": ALGORITHM,
@@ -242,6 +179,7 @@ def build_cluster_model_grid(
         "models_built": model_actions.get("built", 0),
         "models_reused": model_actions.get("reused", 0),
         "models_failed": model_actions.get("failed", 0),
+        "models_insufficient_data": model_actions.get("insufficient_data", 0),
         "drift_count": len(drift_runs),
         "drift_built": drift_actions.get("built", 0),
         "drift_reused": drift_actions.get("reused", 0),
@@ -263,11 +201,19 @@ def build_cluster_model_run(
     force: bool = False,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
+    _ensure_model_schema(settings)
     spec = _validate_feature_space(feature_space)
-    if k < 1:
-        raise ValueError("k must be at least 1")
-    if max_iterations < 1:
-        raise ValueError("max_iterations must be at least 1")
+    ACTIVE_MODEL_POLICY.validate_k(k)
+    if random_seed != ACTIVE_MODEL_POLICY.random_seed:
+        raise ValueError(
+            f"random_seed is service-owned by active policy {ACTIVE_MODEL_POLICY.version}; "
+            f"expected {ACTIVE_MODEL_POLICY.random_seed}."
+        )
+    if max_iterations != ACTIVE_MODEL_POLICY.max_iterations:
+        raise ValueError(
+            f"max_iterations is service-owned by active policy {ACTIVE_MODEL_POLICY.version}; "
+            f"expected {ACTIVE_MODEL_POLICY.max_iterations}."
+        )
 
     model_run_id = cluster_model_run_id(
         source=source_mode,
@@ -276,9 +222,19 @@ def build_cluster_model_run(
         k=k,
         random_seed=random_seed,
     )
+    input_revision = _current_snapshot_revision(
+        settings,
+        source=source_mode,
+        source_date=run_date.isoformat(),
+    )
+    if input_revision is None:
+        raise FileNotFoundError(
+            f"Missing snapshot revision for source {source_mode} date {run_date.isoformat()}."
+        )
     if not force:
-        existing = _find_model_run(settings, model_run_id=model_run_id, status="complete")
-        if existing is not None:
+        existing = _find_model_run(settings, model_run_id=model_run_id)
+        readiness = model_run_readiness(existing, input_revision)
+        if readiness["status"] == "ready":
             return _model_summary_from_run(existing, action="reused")
 
     computed = _compute_feature_space_model(
@@ -289,6 +245,7 @@ def build_cluster_model_run(
         k=k,
         random_seed=random_seed,
         max_iterations=max_iterations,
+        input_revision=input_revision,
     )
     artifact_dir = "sqlite"
     completed_at = _utc_now()
@@ -306,6 +263,116 @@ def build_cluster_model_run(
     return _model_summary_from_computed(computed, action="built")
 
 
+def rebuild_active_model_date(
+    settings: AppSettings,
+    *,
+    run_date: date,
+    source: str,
+    feature_spaces: Iterable[str] | None = None,
+    force: bool = True,
+) -> dict[str, Any]:
+    source_mode = _validate_source(source)
+    _ensure_model_schema(settings)
+    selected_feature_spaces = _validate_feature_spaces(
+        feature_spaces or DEFAULT_FEATURE_SPACES
+    )
+    models: list[dict[str, Any]] = []
+    for feature_space in selected_feature_spaces:
+        try:
+            models.append(
+                build_cluster_model_run(
+                    settings=settings,
+                    run_date=run_date,
+                    source=source_mode,
+                    feature_space=feature_space,
+                    k=ACTIVE_MODEL_POLICY.k,
+                    random_seed=ACTIVE_MODEL_POLICY.random_seed,
+                    max_iterations=ACTIVE_MODEL_POLICY.max_iterations,
+                    force=force,
+                )
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            models.append(
+                _record_failed_model_run(
+                    settings=settings,
+                    run_date=run_date,
+                    source=source_mode,
+                    feature_space=feature_space,
+                    k=ACTIVE_MODEL_POLICY.k,
+                    random_seed=ACTIVE_MODEL_POLICY.random_seed,
+                    error=str(exc),
+                    status=(
+                        "insufficient_data"
+                        if isinstance(exc, InsufficientModelDataError)
+                        else "failed"
+                    ),
+                )
+            )
+
+    drift_runs: list[dict[str, Any]] = []
+    adjacent_pairs = [
+        (run_date - timedelta(days=1), run_date),
+        (run_date, run_date + timedelta(days=1)),
+    ]
+    for from_date, to_date in adjacent_pairs:
+        if (
+            _current_snapshot_revision(
+                settings,
+                source=source_mode,
+                source_date=from_date.isoformat(),
+            )
+            is None
+            or _current_snapshot_revision(
+                settings,
+                source=source_mode,
+                source_date=to_date.isoformat(),
+            )
+            is None
+        ):
+            continue
+        for feature_space in selected_feature_spaces:
+            try:
+                drift_runs.append(
+                    build_registered_cluster_drift(
+                        settings=settings,
+                        from_date=from_date,
+                        to_date=to_date,
+                        source=source_mode,
+                        feature_space=feature_space,
+                        k=ACTIVE_MODEL_POLICY.k,
+                        random_seed=ACTIVE_MODEL_POLICY.random_seed,
+                        force=force,
+                    )
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                drift_runs.append(
+                    {
+                        "source": source_mode,
+                        "from_date": from_date.isoformat(),
+                        "to_date": to_date.isoformat(),
+                        "feature_space": feature_space,
+                        "k": ACTIVE_MODEL_POLICY.k,
+                        "status": getattr(exc, "status", "skipped"),
+                        "action": "skipped",
+                        "reason": str(exc),
+                    }
+                )
+    return {
+        "source": source_mode,
+        "date": run_date.isoformat(),
+        "model_policy": ACTIVE_MODEL_POLICY.public_payload(),
+        "models": models,
+        "drift_runs": drift_runs,
+        "model_counts": _action_counts(models),
+        "drift_counts": _action_counts(drift_runs),
+        "readiness": active_date_readiness(
+            settings,
+            source=source_mode,
+            run_date=run_date,
+        ),
+    }
+
+
 def build_registered_cluster_drift(
     settings: AppSettings,
     from_date: date,
@@ -317,11 +384,16 @@ def build_registered_cluster_drift(
     force: bool = False,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
+    _ensure_model_schema(settings)
     spec = _validate_feature_space(feature_space)
     if to_date < from_date:
         raise ValueError("to_date must be on or after from_date")
-    if k < 1:
-        raise ValueError("k must be at least 1")
+    ACTIVE_MODEL_POLICY.validate_k(k)
+    if random_seed != ACTIVE_MODEL_POLICY.random_seed:
+        raise ValueError(
+            f"random_seed is service-owned by active policy {ACTIVE_MODEL_POLICY.version}; "
+            f"expected {ACTIVE_MODEL_POLICY.random_seed}."
+        )
     from_model = _require_model_run(
         settings=settings,
         source=source_mode,
@@ -348,14 +420,14 @@ def build_registered_cluster_drift(
     to_rows = _model_assignment_rows(settings, to_model["model_run_id"])
     from_centroids = _model_centroid_summary_rows(settings, from_model["model_run_id"])
     to_centroids = _model_centroid_summary_rows(settings, to_model["model_run_id"])
-    alignment_rows = _centroid_alignment_rows(
+    alignment_rows = engine.centroid_alignment_rows(
         from_summary=from_centroids,
         to_summary=to_centroids,
         from_date=from_date,
         to_date=to_date,
     )
     alignment = {str(row["from_cluster"]): str(row["to_cluster"]) for row in alignment_rows}
-    drift_rows = _aligned_sensor_drift_rows(from_rows, to_rows, alignment)
+    drift_rows = engine.aligned_sensor_drift_rows(from_rows, to_rows, alignment)
     matched_rows = [row for row in drift_rows if row["status"] == "matched"]
     raw_changed_count = sum(1 for row in matched_rows if row["raw_label_changed"] == "true")
     aligned_changed_count = sum(1 for row in matched_rows if row["aligned_changed"] == "true")
@@ -377,6 +449,9 @@ def build_registered_cluster_drift(
         "dimension": spec.dimension,
         "k": k,
         "alignment_policy": ALIGNMENT_POLICY,
+        "model_policy_version": ACTIVE_MODEL_POLICY.version,
+        "from_snapshot_revision": from_model["input_snapshot_revision"],
+        "to_snapshot_revision": to_model["input_snapshot_revision"],
         "from_model_run_id": from_model["model_run_id"],
         "to_model_run_id": to_model["model_run_id"],
         "matched_sensor_count": matched_count,
@@ -413,60 +488,92 @@ def list_registered_cluster_models(
     source_mode = _validate_source(source) if source else None
     if start_date is not None and end_date is not None and end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
-    clauses: list[str] = []
-    params: list[Any] = []
+    clauses: list[str] = [
+        "run.feature_policy_version = ?",
+        "run.model_policy_version = ?",
+        "run.k = ?",
+    ]
+    params: list[Any] = [
+        FEATURE_POLICY_VERSION,
+        ACTIVE_MODEL_POLICY.version,
+        ACTIVE_MODEL_POLICY.k,
+    ]
     if source_mode is not None:
-        clauses.append("source = ?")
+        clauses.append("run.source = ?")
         params.append(source_mode)
     if start_date is not None:
-        clauses.append("source_date >= ?")
+        clauses.append("run.source_date >= ?")
         params.append(start_date.isoformat())
     if end_date is not None:
-        clauses.append("source_date <= ?")
+        clauses.append("run.source_date <= ?")
         params.append(end_date.isoformat())
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    with read_store(settings, required_tables=("cluster_model_runs",)) as connection:
+    where = f"WHERE {' AND '.join(clauses)}"
+    with read_store(
+        settings,
+        required_tables=("cluster_model_runs", "snapshot_revisions"),
+    ) as connection:
         rows = _query_dicts(
             connection,
             f"""
             SELECT
-                model_run_id,
-                source,
-                source_date,
-                feature_space,
-                k,
-                algorithm,
-                random_seed,
-                feature_policy_version,
-                feature_columns_json,
-                scaler_policy,
-                input_snapshot_hash,
-                input_snapshot_row_count,
-                feature_row_count,
-                feature_count,
-                status,
-                created_at,
-                completed_at,
-                artifact_dir,
-                metrics_json,
-                warnings_json
-            FROM cluster_model_runs
+                run.model_run_id,
+                run.source,
+                run.source_date,
+                run.feature_space,
+                run.k,
+                run.algorithm,
+                run.random_seed,
+                run.feature_policy_version,
+                run.model_policy_version,
+                run.feature_columns_json,
+                run.scaler_policy,
+                run.input_snapshot_hash,
+                run.input_snapshot_revision,
+                run.max_iterations,
+                run.tolerance,
+                run.pca_iterations,
+                run.input_snapshot_row_count,
+                run.feature_row_count,
+                run.feature_count,
+                run.status,
+                run.created_at,
+                run.completed_at,
+                run.artifact_dir,
+                run.metrics_json,
+                run.warnings_json,
+                snapshot.snapshot_revision AS current_snapshot_revision
+            FROM cluster_model_runs AS run
+            LEFT JOIN snapshot_revisions AS snapshot
+              ON snapshot.source = run.source
+             AND snapshot.source_date = run.source_date
             {where}
-            ORDER BY source_date, feature_space, k, created_at
+            ORDER BY run.source_date, run.feature_space, run.created_at
             """,
             params,
         )
-    models = [_model_summary_from_run(row, action=row.get("status", "")) for row in rows]
-    complete = [model for model in models if model.get("status") == "complete"]
+    models = []
+    for row in rows:
+        readiness = model_run_readiness(row, row.get("current_snapshot_revision"))
+        models.append(
+            {
+                **_model_summary_from_run(row, action=row.get("status", "")),
+                "readiness": readiness,
+                "readiness_status": readiness["status"],
+            }
+        )
+    ready = [model for model in models if model["readiness_status"] == "ready"]
     return {
         "source": source_mode,
         "start_date": start_date.isoformat() if start_date else None,
         "end_date": end_date.isoformat() if end_date else None,
-        "feature_spaces": sorted({str(model["feature_space"]) for model in complete}),
-        "ks": sorted({int(model["k"]) for model in complete}),
+        "active_model_policy": ACTIVE_MODEL_POLICY.public_payload(),
+        "feature_spaces": [spec.name for spec in ACTIVE_MODEL_POLICY.feature_spaces],
+        "ks": [ACTIVE_MODEL_POLICY.k],
         "models": models,
         "count": len(models),
-        "complete_count": len(complete),
+        "complete_count": sum(1 for model in models if model["status"] == "complete"),
+        "ready_count": len(ready),
+        "stale_count": sum(1 for model in models if model["readiness_status"] == "stale"),
     }
 
 
@@ -480,6 +587,12 @@ def load_registered_cluster_view(
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
     spec = _validate_feature_space(feature_space)
+    ACTIVE_MODEL_POLICY.validate_k(k)
+    if random_seed != ACTIVE_MODEL_POLICY.random_seed:
+        raise ValueError(
+            f"random_seed is service-owned by active policy {ACTIVE_MODEL_POLICY.version}; "
+            f"expected {ACTIVE_MODEL_POLICY.random_seed}."
+        )
     model = _require_model_run(
         settings=settings,
         source=source_mode,
@@ -509,6 +622,9 @@ def load_registered_cluster_view(
         "dimension": spec.dimension,
         "k": int(model["k"]),
         "model_run_id": model["model_run_id"],
+        "model_policy_version": ACTIVE_MODEL_POLICY.version,
+        "input_snapshot_revision": model["input_snapshot_revision"],
+        "readiness": "ready",
         "artifact_dir": model.get("artifact_dir") or "sqlite",
         "registered": True,
         "metrics": metrics,
@@ -532,6 +648,12 @@ def load_registered_drift_view(
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
     spec = _validate_feature_space(feature_space)
+    ACTIVE_MODEL_POLICY.validate_k(k)
+    if random_seed != ACTIVE_MODEL_POLICY.random_seed:
+        raise ValueError(
+            f"random_seed is service-owned by active policy {ACTIVE_MODEL_POLICY.version}; "
+            f"expected {ACTIVE_MODEL_POLICY.random_seed}."
+        )
     from_model = _require_model_run(
         settings=settings,
         source=source_mode,
@@ -555,6 +677,18 @@ def load_registered_drift_view(
             f"Missing registered drift run for source {source_mode} "
             f"{from_date.isoformat()} to {to_date.isoformat()} feature_space={spec.name} k={k}."
         )
+    if (
+        drift.get("model_policy_version") != ACTIVE_MODEL_POLICY.version
+        or drift.get("from_snapshot_revision")
+        != from_model.get("input_snapshot_revision")
+        or drift.get("to_snapshot_revision")
+        != to_model.get("input_snapshot_revision")
+    ):
+        raise ModelNotReadyError(
+            "stale",
+            f"Registered drift is stale for source {source_mode} "
+            f"{from_date.isoformat()} to {to_date.isoformat()} feature_space={spec.name}.",
+        )
     metrics = _json_loads(drift.get("metrics_json"), {})
     rows = _drift_assignment_rows(settings, drift_id)
     alignment_rows = _centroid_alignment_for_drift(settings, drift_id)
@@ -566,6 +700,7 @@ def load_registered_drift_view(
         "dimension": spec.dimension,
         "k": k,
         "drift_run_id": drift_id,
+        "model_policy_version": ACTIVE_MODEL_POLICY.version,
         "artifact_dir": metrics.get("artifact_dir") or "sqlite",
         "registered": True,
         "metrics": metrics,
@@ -593,31 +728,81 @@ def load_registered_cluster_window_view(
     spec = _validate_feature_space(feature_space)
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
+    ACTIVE_MODEL_POLICY.validate_k(k)
+    if random_seed != ACTIVE_MODEL_POLICY.random_seed:
+        raise ValueError(
+            f"random_seed is service-owned by active policy {ACTIVE_MODEL_POLICY.version}; "
+            f"expected {ACTIVE_MODEL_POLICY.random_seed}."
+        )
     dates = _date_range(start_date, end_date)
-    models = [
-        _require_model_run(
-            settings=settings,
+    date_readiness = [
+        active_model_readiness(
+            settings,
             source=source_mode,
-            source_date=run_date.isoformat(),
+            run_date=run_date,
             feature_space=spec.name,
-            k=k,
-            random_seed=random_seed,
         )
         for run_date in dates
     ]
-    drift_views = [
-        load_registered_drift_view(
-            settings=settings,
-            from_date=from_date,
-            to_date=to_date,
-            source=source_mode,
-            feature_space=spec.name,
-            k=k,
-            random_seed=random_seed,
+    readiness_by_date = {row["date"]: row for row in date_readiness}
+    ready_models: dict[str, dict[str, Any]] = {}
+    for run_date in dates:
+        readiness = readiness_by_date[run_date.isoformat()]
+        if readiness["status"] != "ready":
+            continue
+        model = _find_model_run(
+            settings,
+            model_run_id=str(readiness["model_run_id"]),
         )
-        for from_date, to_date in zip(dates, dates[1:], strict=False)
+        if model is not None:
+            ready_models[run_date.isoformat()] = model
+
+    drift_views: list[dict[str, Any]] = []
+    missing_pairs: list[dict[str, Any]] = []
+    for from_date, to_date in zip(dates, dates[1:], strict=False):
+        from_readiness = readiness_by_date[from_date.isoformat()]
+        to_readiness = readiness_by_date[to_date.isoformat()]
+        if from_readiness["status"] != "ready" or to_readiness["status"] != "ready":
+            missing_pairs.append(
+                {
+                    "from_date": from_date.isoformat(),
+                    "to_date": to_date.isoformat(),
+                    "status": "model_gap",
+                    "from_model_status": from_readiness["status"],
+                    "to_model_status": to_readiness["status"],
+                    "reason": "one or both adjacent active models are not ready",
+                }
+            )
+            continue
+        try:
+            drift_views.append(
+                load_registered_drift_view(
+                    settings=settings,
+                    from_date=from_date,
+                    to_date=to_date,
+                    source=source_mode,
+                    feature_space=spec.name,
+                    k=k,
+                    random_seed=random_seed,
+                )
+            )
+        except (FileNotFoundError, ModelNotReadyError) as exc:
+            missing_pairs.append(
+                {
+                    "from_date": from_date.isoformat(),
+                    "to_date": to_date.isoformat(),
+                    "status": getattr(exc, "status", "missing"),
+                    "from_model_status": from_readiness["status"],
+                    "to_model_status": to_readiness["status"],
+                    "reason": str(exc),
+                }
+            )
+
+    quality_rows = [
+        _quality_row_from_model(ready_models[run_date.isoformat()])
+        for run_date in dates
+        if run_date.isoformat() in ready_models
     ]
-    quality_rows = [_quality_row_from_model(model) for model in models]
     aligned_rows = [_window_drift_row(view) for view in drift_views]
     alignment_rows = [
         row
@@ -633,10 +818,15 @@ def load_registered_cluster_window_view(
         "feature_space": spec.name,
         "dimension": spec.dimension,
         "k": k,
+        "model_policy_version": ACTIVE_MODEL_POLICY.version,
         "date_count": len(dates),
-        "pair_count": len(drift_views),
+        "ready_date_count": len(ready_models),
+        "missing_date_count": len(dates) - len(ready_models),
+        "pair_count": max(0, len(dates) - 1),
+        "complete_pair_count": len(drift_views),
+        "missing_pair_count": len(missing_pairs),
         "warning_count": warning_count,
-        "model_run_ids": [model["model_run_id"] for model in models],
+        "model_run_ids": [model["model_run_id"] for model in ready_models.values()],
         "drift_run_ids": [view["drift_run_id"] for view in drift_views],
     }
     return {
@@ -646,6 +836,8 @@ def load_registered_cluster_window_view(
         "feature_space": spec.name,
         "dimension": spec.dimension,
         "k": k,
+        "status": "complete" if not missing_pairs else "partial",
+        "model_policy_version": ACTIVE_MODEL_POLICY.version,
         "artifact_dir": "sqlite",
         "registered": True,
         "metrics": metrics,
@@ -653,6 +845,11 @@ def load_registered_cluster_window_view(
         "quality_rows": quality_rows,
         "aligned_drift_rows": aligned_rows,
         "alignment_rows": alignment_rows,
+        "date_readiness": date_readiness,
+        "missing_dates": [
+            row for row in date_readiness if row["status"] != "ready"
+        ],
+        "missing_pairs": missing_pairs,
     }
 
 
@@ -665,7 +862,7 @@ def cluster_model_run_id(
 ) -> str:
     return (
         f"{source}:{source_date}:{feature_space}:k{k}:"
-        f"{ALGORITHM}:seed{random_seed}:{FEATURE_POLICY_VERSION}"
+        f"{ALGORITHM}:seed{random_seed}:{ACTIVE_MODEL_POLICY.version}"
     )
 
 
@@ -677,6 +874,152 @@ def feature_space_dimension(feature_space: str) -> str:
     return _validate_feature_space(feature_space).dimension
 
 
+def active_model_readiness(
+    settings: AppSettings,
+    *,
+    source: str,
+    run_date: date,
+    feature_space: str,
+) -> dict[str, Any]:
+    source_mode = _validate_source(source)
+    spec = _validate_feature_space(feature_space)
+    model_run_id = cluster_model_run_id(
+        source=source_mode,
+        source_date=run_date.isoformat(),
+        feature_space=spec.name,
+        k=ACTIVE_MODEL_POLICY.k,
+        random_seed=ACTIVE_MODEL_POLICY.random_seed,
+    )
+    model = _find_model_run(settings, model_run_id=model_run_id)
+    revision = _current_snapshot_revision(
+        settings,
+        source=source_mode,
+        source_date=run_date.isoformat(),
+    )
+    return {
+        "source": source_mode,
+        "date": run_date.isoformat(),
+        "feature_space": spec.name,
+        "model_run_id": model_run_id,
+        **model_run_readiness(model, revision),
+    }
+
+
+def active_date_readiness(
+    settings: AppSettings,
+    *,
+    source: str,
+    run_date: date,
+) -> dict[str, Any]:
+    rows = [
+        active_model_readiness(
+            settings,
+            source=source,
+            run_date=run_date,
+            feature_space=spec.name,
+        )
+        for spec in ACTIVE_MODEL_POLICY.feature_spaces
+    ]
+    statuses = {str(row["status"]) for row in rows}
+    if statuses == {"ready"}:
+        status = "ready"
+    else:
+        status = next(
+            candidate
+            for candidate in ("failed", "insufficient_data", "stale", "missing")
+            if candidate in statuses
+        )
+    return {
+        "source": source,
+        "date": run_date.isoformat(),
+        "status": status,
+        "registered_model_ready": status == "ready",
+        "ready_model_count": sum(1 for row in rows if row["status"] == "ready"),
+        "required_model_count": len(rows),
+        "feature_readiness": rows,
+    }
+
+
+def model_run_readiness(
+    model: dict[str, Any] | None,
+    current_snapshot_revision: str | None,
+) -> dict[str, Any]:
+    if current_snapshot_revision is None:
+        return {
+            "status": "missing",
+            "reason": "the durable snapshot revision is missing",
+            "current_snapshot_revision": None,
+            "input_snapshot_revision": (
+                model.get("input_snapshot_revision") if model else None
+            ),
+        }
+    if model is None:
+        return {
+            "status": "missing",
+            "reason": "the active-policy model has not been built",
+            "current_snapshot_revision": current_snapshot_revision,
+            "input_snapshot_revision": None,
+        }
+    build_status = str(model.get("status") or "failed")
+    if build_status in {"failed", "insufficient_data"}:
+        return {
+            "status": build_status,
+            "reason": (
+                "the snapshot cannot satisfy the active feature contract"
+                if build_status == "insufficient_data"
+                else "the most recent active-policy model build failed"
+            ),
+            "current_snapshot_revision": current_snapshot_revision,
+            "input_snapshot_revision": model.get("input_snapshot_revision"),
+        }
+    if build_status != "complete":
+        return {
+            "status": "failed",
+            "reason": f"the model build status is {build_status!r}",
+            "current_snapshot_revision": current_snapshot_revision,
+            "input_snapshot_revision": model.get("input_snapshot_revision"),
+        }
+    if model.get("model_policy_version") != ACTIVE_MODEL_POLICY.version:
+        return {
+            "status": "stale",
+            "reason": "the model policy version does not match the active policy",
+            "current_snapshot_revision": current_snapshot_revision,
+            "input_snapshot_revision": model.get("input_snapshot_revision"),
+        }
+    input_revision = model.get("input_snapshot_revision")
+    if input_revision != current_snapshot_revision:
+        return {
+            "status": "stale",
+            "reason": "the input snapshot revision no longer matches the durable snapshot",
+            "current_snapshot_revision": current_snapshot_revision,
+            "input_snapshot_revision": input_revision,
+        }
+    return {
+        "status": "ready",
+        "reason": "snapshot revision and active model policy match",
+        "current_snapshot_revision": current_snapshot_revision,
+        "input_snapshot_revision": input_revision,
+    }
+
+
+def _current_snapshot_revision(
+    settings: AppSettings,
+    *,
+    source: str,
+    source_date: str,
+) -> str | None:
+    with read_store(settings, required_tables=("snapshot_revisions",)) as connection:
+        row = connection.execute(
+            """
+            SELECT snapshot_revision
+            FROM snapshot_revisions
+            WHERE source = ? AND source_date = ?
+            """,
+            (source, source_date),
+        ).fetchone()
+    return str(row[0]) if row is not None else None
+
+
 def _compute_feature_space_model(
     settings: AppSettings,
     run_date: date,
@@ -685,6 +1028,7 @@ def _compute_feature_space_model(
     k: int,
     random_seed: int,
     max_iterations: int,
+    input_revision: str,
 ) -> dict[str, Any]:
     snapshot_rows = load_sensor_daily_snapshots(
         settings=settings,
@@ -693,11 +1037,13 @@ def _compute_feature_space_model(
     )
     feature_rows_all, feature_columns = _store_feature_rows(snapshot_rows, spec)
     if not feature_rows_all:
-        raise ValueError("feature matrix has no rows")
+        raise InsufficientModelDataError("feature matrix has no rows")
     if not feature_columns:
-        raise ValueError(f"feature space {spec.name} has no matching feature columns")
+        raise InsufficientModelDataError(
+            f"feature space {spec.name} has no sufficiently covered feature columns"
+        )
     if k > len(feature_rows_all):
-        raise ValueError("k cannot exceed feature row count")
+        raise InsufficientModelDataError("k cannot exceed feature row count")
 
     feature_rows = [
         {
@@ -706,27 +1052,35 @@ def _compute_feature_space_model(
         }
         for row in feature_rows_all
     ]
-    matrix = _numeric_matrix(feature_rows, feature_columns)
-    scaled = _standard_scale(matrix, feature_columns)
-    kmeans = _kmeans(
+    matrix = engine.numeric_matrix(feature_rows, feature_columns)
+    scaled = engine.standard_scale(matrix, feature_columns)
+    kmeans = engine.kmeans(
         scaled.values,
         k=k,
         random_seed=random_seed,
         max_iterations=max_iterations,
+        tolerance=ACTIVE_MODEL_POLICY.tolerance,
     )
-    pca = _pca_coordinates(scaled.values)
-    metrics = _cluster_metrics(scaled.values, kmeans)
-    cluster_counts = _cluster_counts(kmeans.labels, k)
-    sensor_rows = _sensor_cluster_rows(feature_rows, feature_columns, kmeans)
-    summary_rows = _cluster_summary_rows(
+    pca = engine.pca_coordinates(
+        scaled.values,
+        iterations=ACTIVE_MODEL_POLICY.pca_iterations,
+    )
+    metrics = engine.cluster_metrics(scaled.values, kmeans)
+    cluster_counts = engine.cluster_counts(kmeans.labels, k)
+    sensor_rows = engine.sensor_cluster_rows(feature_rows, feature_columns, kmeans)
+    summary_rows = engine.cluster_summary_rows(
         feature_rows=feature_rows,
         feature_columns=feature_columns,
         scaled=scaled,
-        kmeans=kmeans,
+        result=kmeans,
         k=k,
     )
-    pca_rows = _pca_rows(feature_rows, kmeans, pca)
-    input_revision = snapshot_revision(source, run_date.isoformat(), snapshot_rows)
+    pca_rows = engine.pca_rows(feature_rows, kmeans, pca)
+    computed_revision = snapshot_revision(source, run_date.isoformat(), snapshot_rows)
+    if computed_revision != input_revision:
+        raise ValueError(
+            "Snapshot revision changed while the model was being prepared; retry the build."
+        )
     built_at = _utc_now()
     model_run_id = cluster_model_run_id(
         source=source,
@@ -748,9 +1102,14 @@ def _compute_feature_space_model(
         "algorithm": ALGORITHM,
         "random_seed": random_seed,
         "feature_policy_version": FEATURE_POLICY_VERSION,
+        "model_policy_version": ACTIVE_MODEL_POLICY.version,
         "scaler_policy": SCALER_POLICY,
+        "max_iterations": ACTIVE_MODEL_POLICY.max_iterations,
+        "tolerance": ACTIVE_MODEL_POLICY.tolerance,
+        "pca_iterations": ACTIVE_MODEL_POLICY.pca_iterations,
         "feature_columns": feature_columns,
         "input_snapshot_hash": input_revision,
+        "input_snapshot_revision": input_revision,
         "input_snapshot_row_count": len(feature_rows_all),
         "feature_row_count": len(feature_rows),
         "feature_count": len(feature_columns),
@@ -760,7 +1119,7 @@ def _compute_feature_space_model(
         "pca_rows": pca_rows,
         "warnings": warnings,
         "metrics": {
-            "schema_version": CLUSTER_SCHEMA_VERSION,
+            "schema_version": engine.ENGINE_SCHEMA_VERSION,
             "registry_schema_version": REGISTRY_SCHEMA_VERSION,
             "source": source,
             "date": run_date.isoformat(),
@@ -772,12 +1131,14 @@ def _compute_feature_space_model(
             "algorithm": ALGORITHM,
             "random_seed": random_seed,
             "feature_policy_version": FEATURE_POLICY_VERSION,
+            "model_policy_version": ACTIVE_MODEL_POLICY.version,
             "scaler_policy": SCALER_POLICY,
             "built_at": built_at,
             "feature_matrix_path": None,
             "feature_summary_path": None,
             "feature_status": "store_backed",
             "input_snapshot_hash": input_revision,
+            "input_snapshot_revision": input_revision,
             "input_snapshot_row_count": len(feature_rows_all),
             "row_count": len(feature_rows),
             "feature_row_count": len(feature_rows),
@@ -807,58 +1168,22 @@ def _compute_feature_space_model(
     }
 
 
-def _write_model_artifacts(settings: AppSettings, computed: dict[str, Any]) -> Path:
-    storage = get_storage_paths(settings.data_dir)
-    artifact_dir = storage.cluster_models_dir / _model_dir_name(
-        source_date=computed["source_date"],
-        source=computed["source"],
-        feature_space=computed["feature_space"],
-        k=int(computed["k"]),
-    )
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    feature_columns = computed["feature_columns"]
-    write_csv_rows(
-        artifact_dir / "sensor_clusters.csv",
-        computed["sensor_rows"],
-        [*MODEL_ARTIFACT_FIELDS, *feature_columns],
-    )
-    write_csv_rows(
-        artifact_dir / "cluster_summary.csv",
-        computed["cluster_rows"],
-        _cluster_summary_fields(feature_columns),
-    )
-    write_csv_rows(artifact_dir / "pca_coordinates.csv", computed["pca_rows"], PCA_FIELDS)
-    write_json(artifact_dir / "metrics.json", computed["metrics"])
-    return artifact_dir
-
-
-def _write_drift_artifacts(
-    settings: AppSettings,
-    from_date: date,
-    to_date: date,
-    source: str,
-    feature_space: str,
-    k: int,
-    drift_rows: list[dict[str, Any]],
-    alignment_rows: list[dict[str, Any]],
-) -> Path:
-    storage = get_storage_paths(settings.data_dir)
-    artifact_dir = storage.cluster_model_drift_dir / _drift_dir_name(
-        from_date=from_date,
-        to_date=to_date,
-        source=source,
-        feature_space=feature_space,
-        k=k,
-    )
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    write_csv_rows(artifact_dir / "aligned_cluster_drift.csv", drift_rows, ALIGNED_SENSOR_DRIFT_FIELDS)
-    write_csv_rows(artifact_dir / "centroid_alignment.csv", alignment_rows, CENTROID_ALIGNMENT_FIELDS)
-    return artifact_dir
-
-
 def _persist_complete_model_run(settings: AppSettings, computed: dict[str, Any]) -> None:
     with connect_observation_store(settings) as connection:
         with connection:
+            revision_row = connection.execute(
+                """
+                SELECT snapshot_revision
+                FROM snapshot_revisions
+                WHERE source = ? AND source_date = ?
+                """,
+                (computed["source"], computed["source_date"]),
+            ).fetchone()
+            current_revision = str(revision_row[0]) if revision_row is not None else None
+            if current_revision != computed["input_snapshot_revision"]:
+                raise ValueError(
+                    "Snapshot revision changed before model persistence; the transaction was rolled back."
+                )
             _delete_model_run(connection, computed["model_run_id"])
             connection.execute(
                 """
@@ -871,9 +1196,14 @@ def _persist_complete_model_run(settings: AppSettings, computed: dict[str, Any])
                     algorithm,
                     random_seed,
                     feature_policy_version,
+                    model_policy_version,
                     feature_columns_json,
                     scaler_policy,
                     input_snapshot_hash,
+                    input_snapshot_revision,
+                    max_iterations,
+                    tolerance,
+                    pca_iterations,
                     input_snapshot_row_count,
                     feature_row_count,
                     feature_count,
@@ -884,7 +1214,7 @@ def _persist_complete_model_run(settings: AppSettings, computed: dict[str, Any])
                     metrics_json,
                     warnings_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     computed["model_run_id"],
@@ -895,9 +1225,14 @@ def _persist_complete_model_run(settings: AppSettings, computed: dict[str, Any])
                     computed["algorithm"],
                     computed["random_seed"],
                     computed["feature_policy_version"],
+                    computed["model_policy_version"],
                     json.dumps(computed["feature_columns"], sort_keys=True),
                     computed["scaler_policy"],
                     computed.get("input_snapshot_hash"),
+                    computed["input_snapshot_revision"],
+                    computed["max_iterations"],
+                    computed["tolerance"],
+                    computed["pca_iterations"],
                     computed["input_snapshot_row_count"],
                     computed["feature_row_count"],
                     computed["feature_count"],
@@ -921,6 +1256,7 @@ def _record_failed_model_run(
     k: int,
     random_seed: int,
     error: str,
+    status: str,
 ) -> dict[str, Any]:
     source_mode = _validate_source(source)
     spec = _validate_feature_space(feature_space)
@@ -932,7 +1268,20 @@ def _record_failed_model_run(
         random_seed=random_seed,
     )
     now = _utc_now()
-    warning = {"level": "error", "code": "model_build_failed", "message": error}
+    warning = {
+        "level": "warning" if status == "insufficient_data" else "error",
+        "code": (
+            "insufficient_model_data"
+            if status == "insufficient_data"
+            else "model_build_failed"
+        ),
+        "message": error,
+    }
+    input_revision = _current_snapshot_revision(
+        settings,
+        source=source_mode,
+        source_date=run_date.isoformat(),
+    )
     with connect_observation_store(settings) as connection:
         with connection:
             _delete_model_run(connection, model_run_id)
@@ -947,9 +1296,14 @@ def _record_failed_model_run(
                     algorithm,
                     random_seed,
                     feature_policy_version,
+                    model_policy_version,
                     feature_columns_json,
                     scaler_policy,
                     input_snapshot_hash,
+                    input_snapshot_revision,
+                    max_iterations,
+                    tolerance,
+                    pca_iterations,
                     input_snapshot_row_count,
                     feature_row_count,
                     feature_count,
@@ -960,7 +1314,7 @@ def _record_failed_model_run(
                     metrics_json,
                     warnings_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     model_run_id,
@@ -971,17 +1325,29 @@ def _record_failed_model_run(
                     ALGORITHM,
                     random_seed,
                     FEATURE_POLICY_VERSION,
+                    ACTIVE_MODEL_POLICY.version,
                     "[]",
                     SCALER_POLICY,
-                    None,
+                    input_revision,
+                    input_revision,
+                    ACTIVE_MODEL_POLICY.max_iterations,
+                    ACTIVE_MODEL_POLICY.tolerance,
+                    ACTIVE_MODEL_POLICY.pca_iterations,
                     0,
                     0,
                     0,
-                    "failed",
+                    status,
                     now,
                     now,
                     None,
-                    json.dumps({"error": error}, sort_keys=True),
+                    json.dumps(
+                        {
+                            "error": error,
+                            "model_policy_version": ACTIVE_MODEL_POLICY.version,
+                            "input_snapshot_revision": input_revision,
+                        },
+                        sort_keys=True,
+                    ),
                     json.dumps([warning], sort_keys=True),
                 ),
             )
@@ -992,8 +1358,8 @@ def _record_failed_model_run(
         "source_date": run_date.isoformat(),
         "feature_space": spec.name,
         "k": k,
-        "status": "failed",
-        "action": "failed",
+        "status": status,
+        "action": status,
         "error": error,
     }
 
@@ -1010,6 +1376,30 @@ def _persist_complete_drift_run(
 ) -> None:
     with connect_observation_store(settings) as connection:
         with connection:
+            current_revisions = {
+                str(row["source_date"]): str(row["snapshot_revision"])
+                for row in connection.execute(
+                    """
+                    SELECT source_date, snapshot_revision
+                    FROM snapshot_revisions
+                    WHERE source = ? AND source_date IN (?, ?)
+                    """,
+                    (
+                        metrics["source"],
+                        metrics["from_date"],
+                        metrics["to_date"],
+                    ),
+                ).fetchall()
+            }
+            if (
+                current_revisions.get(metrics["from_date"])
+                != from_model["input_snapshot_revision"]
+                or current_revisions.get(metrics["to_date"])
+                != to_model["input_snapshot_revision"]
+            ):
+                raise ValueError(
+                    "Snapshot revision changed before drift persistence; the transaction was rolled back."
+                )
             connection.execute("DELETE FROM cluster_drift_assignments WHERE drift_run_id = ?", (drift_run_id,))
             connection.execute("DELETE FROM cluster_centroid_alignment WHERE drift_run_id = ?", (drift_run_id,))
             connection.execute("DELETE FROM cluster_drift_runs WHERE drift_run_id = ?", (drift_run_id,))
@@ -1025,6 +1415,9 @@ def _persist_complete_drift_run(
                     feature_space,
                     k,
                     alignment_policy,
+                    model_policy_version,
+                    from_snapshot_revision,
+                    to_snapshot_revision,
                     matched_sensor_count,
                     raw_changed_sensor_count,
                     aligned_changed_sensor_count,
@@ -1033,7 +1426,7 @@ def _persist_complete_drift_run(
                     warnings_json,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     drift_run_id,
@@ -1045,6 +1438,9 @@ def _persist_complete_drift_run(
                     metrics["feature_space"],
                     metrics["k"],
                     ALIGNMENT_POLICY,
+                    ACTIVE_MODEL_POLICY.version,
+                    from_model["input_snapshot_revision"],
+                    to_model["input_snapshot_revision"],
                     metrics["matched_sensor_count"],
                     metrics["raw_label_changed_count"],
                     metrics["aligned_changed_count"],
@@ -1224,9 +1620,14 @@ def _find_model_run(
                 algorithm,
                 random_seed,
                 feature_policy_version,
+                model_policy_version,
                 feature_columns_json,
                 scaler_policy,
                 input_snapshot_hash,
+                input_snapshot_revision,
+                max_iterations,
+                tolerance,
+                pca_iterations,
                 input_snapshot_row_count,
                 feature_row_count,
                 feature_count,
@@ -1268,6 +1669,9 @@ def _find_drift_run(
                 feature_space,
                 k,
                 alignment_policy,
+                model_policy_version,
+                from_snapshot_revision,
+                to_snapshot_revision,
                 matched_sensor_count,
                 raw_changed_sensor_count,
                 aligned_changed_sensor_count,
@@ -1299,12 +1703,21 @@ def _require_model_run(
         k=k,
         random_seed=random_seed,
     )
-    model = _find_model_run(settings, model_run_id=model_run_id, status="complete")
-    if model is None:
-        raise FileNotFoundError(
-            f"Missing registered cluster model for source {source} date {source_date} "
-            f"feature_space={feature_space} k={k}."
+    model = _find_model_run(settings, model_run_id=model_run_id)
+    revision = _current_snapshot_revision(
+        settings,
+        source=source,
+        source_date=source_date,
+    )
+    readiness = model_run_readiness(model, revision)
+    if readiness["status"] != "ready":
+        raise ModelNotReadyError(
+            readiness["status"],
+            f"Registered model is {readiness['status']} for source {source} "
+            f"date {source_date} feature_space={feature_space}; "
+            f"{readiness['reason']}",
         )
+    assert model is not None
     return model
 
 
@@ -1496,7 +1909,14 @@ def _store_feature_rows(
     candidates = _feature_space_columns(list(snapshot_rows[0]), spec)
     feature_columns: list[str] = []
     imputation: dict[str, float] = {}
-    minimum_non_null = max(1, int(len(snapshot_rows) * 0.2 + 0.999999))
+    minimum_non_null = max(
+        1,
+        int(
+            len(snapshot_rows)
+            * ACTIVE_MODEL_POLICY.minimum_feature_coverage
+            + 0.999999
+        ),
+    )
     for field in candidates:
         values = [
             float(row[field])
@@ -1583,88 +2003,6 @@ def _cluster_pca_centers(pca_rows: list[dict[str, Any]]) -> dict[int, dict[str, 
     return output
 
 
-def _centroid_alignment_rows(
-    from_summary: list[dict[str, Any]],
-    to_summary: list[dict[str, Any]],
-    from_date: date,
-    to_date: date,
-) -> list[dict[str, Any]]:
-    centroid_columns = _centroid_columns(from_summary, to_summary)
-    if not centroid_columns:
-        raise ValueError("cluster summaries do not contain compatible centroid columns")
-
-    remaining_to = {str(row["cluster"]) for row in to_summary}
-    output: list[dict[str, Any]] = []
-    for from_row in sorted(from_summary, key=lambda row: _sort_key(row["cluster"])):
-        from_cluster = str(from_row["cluster"])
-        candidates = [
-            (
-                _centroid_distance(from_row, to_row, centroid_columns),
-                str(to_row["cluster"]),
-                to_row,
-            )
-            for to_row in to_summary
-        ]
-        candidates.sort(key=lambda item: (item[0], _sort_key(item[1])))
-        available = [candidate for candidate in candidates if candidate[1] in remaining_to]
-        best_distance, to_cluster, to_row = available[0] if available else candidates[0]
-        remaining_to.discard(to_cluster)
-        second_distance = candidates[1][0] if len(candidates) > 1 else None
-        output.append(
-            {
-                "from_date": from_date.isoformat(),
-                "to_date": to_date.isoformat(),
-                "from_cluster": from_cluster,
-                "to_cluster": to_cluster,
-                "centroid_distance": best_distance,
-                "from_sensor_count": from_row.get("sensor_count", 0),
-                "to_sensor_count": to_row.get("sensor_count", 0),
-                "mapping_confidence": _mapping_confidence(best_distance, second_distance, from_row, to_row),
-            }
-        )
-    return output
-
-
-def _aligned_sensor_drift_rows(
-    from_rows: list[dict[str, Any]],
-    to_rows: list[dict[str, Any]],
-    alignment: dict[str, str],
-) -> list[dict[str, Any]]:
-    from_by_id = {str(row["installation_point_id"]): row for row in from_rows}
-    to_by_id = {str(row["installation_point_id"]): row for row in to_rows}
-    output: list[dict[str, Any]] = []
-    for installation_id in sorted(set(from_by_id) | set(to_by_id), key=_sort_key):
-        from_row = from_by_id.get(installation_id, {})
-        to_row = to_by_id.get(installation_id, {})
-        status = "matched" if from_row and to_row else "from_only" if from_row else "to_only"
-        from_cluster = _text(from_row.get("cluster"))
-        to_cluster = _text(to_row.get("cluster"))
-        aligned_to_cluster = alignment.get(from_cluster, "")
-        raw_changed = status == "matched" and from_cluster != to_cluster
-        aligned_changed = status == "matched" and aligned_to_cluster != to_cluster
-        from_distance = _optional_float(from_row.get("distance_to_centroid"))
-        to_distance = _optional_float(to_row.get("distance_to_centroid"))
-        output.append(
-            {
-                "installation_point_id": installation_id,
-                "equipment_id": to_row.get("equipment_id") or from_row.get("equipment_id", ""),
-                "equipment_name": to_row.get("equipment_name") or from_row.get("equipment_name", ""),
-                "sensor_id": to_row.get("sensor_id") or from_row.get("sensor_id", ""),
-                "customer_asset_id": to_row.get("customer_asset_id") or from_row.get("customer_asset_id", ""),
-                "status": status,
-                "from_cluster": from_cluster,
-                "to_cluster": to_cluster,
-                "aligned_to_cluster": aligned_to_cluster,
-                "raw_label_changed": "true" if raw_changed else "false",
-                "aligned_changed": "true" if aligned_changed else "false",
-                "from_distance_to_centroid": from_distance,
-                "to_distance_to_centroid": to_distance,
-                "distance_delta": to_distance - from_distance if from_distance is not None and to_distance is not None else None,
-            }
-        )
-    return output
-
-
 def _aligned_drift_warnings(
     alignment_rows: list[dict[str, Any]],
     raw_changed_count: int,
@@ -1720,36 +2058,6 @@ def _drift_interpretation(
     return f"Aligned drift shows {posture} across matched sensors."
 
 
-def _centroid_columns(from_summary: list[dict[str, Any]], to_summary: list[dict[str, Any]]) -> list[str]:
-    from_columns = {field for row in from_summary for field in row if field.startswith("centroid_scaled_")}
-    to_columns = {field for row in to_summary for field in row if field.startswith("centroid_scaled_")}
-    return sorted(from_columns & to_columns)
-
-
-def _centroid_distance(left: dict[str, Any], right: dict[str, Any], columns: list[str]) -> float:
-    return sqrt(sum((_float(left.get(column)) - _float(right.get(column))) ** 2 for column in columns))
-
-
-def _mapping_confidence(
-    best_distance: float,
-    second_distance: float | None,
-    from_row: dict[str, Any],
-    to_row: dict[str, Any],
-) -> str:
-    if (_optional_int(from_row.get("sensor_count")) or 0) == 0 or (_optional_int(to_row.get("sensor_count")) or 0) == 0:
-        return "empty_cluster"
-    if second_distance is None:
-        return "single_target"
-    if second_distance <= 0:
-        return "low"
-    ratio = best_distance / second_distance
-    if ratio <= 0.5:
-        return "high"
-    if ratio <= 0.8:
-        return "medium"
-    return "low"
-
-
 def _model_summary_from_computed(computed: dict[str, Any], action: str) -> dict[str, Any]:
     metrics = computed.get("metrics") or {}
     metric_values = metrics.get("metrics") or {}
@@ -1765,6 +2073,8 @@ def _model_summary_from_computed(computed: dict[str, Any], action: str) -> dict[
         "algorithm": computed["algorithm"],
         "random_seed": computed["random_seed"],
         "feature_policy_version": computed["feature_policy_version"],
+        "model_policy_version": computed["model_policy_version"],
+        "input_snapshot_revision": computed["input_snapshot_revision"],
         "status": "complete",
         "action": action,
         "feature_row_count": computed["feature_row_count"],
@@ -1792,6 +2102,8 @@ def _model_summary_from_run(row: dict[str, Any], action: str) -> dict[str, Any]:
         "algorithm": row["algorithm"],
         "random_seed": int(row["random_seed"]),
         "feature_policy_version": row["feature_policy_version"],
+        "model_policy_version": row.get("model_policy_version"),
+        "input_snapshot_revision": row.get("input_snapshot_revision"),
         "status": row["status"],
         "action": action,
         "feature_row_count": int(row["feature_row_count"] or 0),
@@ -1912,12 +2224,11 @@ def _validate_ks(ks: Iterable[int]) -> list[int]:
     parsed = []
     for raw_value in ks:
         value = int(raw_value)
-        if value < 1:
-            raise ValueError("k must be at least 1")
+        ACTIVE_MODEL_POLICY.validate_k(value)
         parsed.append(value)
     if not parsed:
         raise ValueError("at least one k value is required")
-    return parsed
+    return list(dict.fromkeys(parsed))
 
 
 def _action_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -1936,15 +2247,9 @@ def _query_dicts(
     return [dict(row) for row in connection.execute(sql, tuple(params))]
 
 
-def _model_dir_name(source_date: str, source: str, feature_space: str, k: int) -> str:
-    return f"date={source_date}_source={source}_feature_space={feature_space}_k={k}"
-
-
-def _drift_dir_name(from_date: date, to_date: date, source: str, feature_space: str, k: int) -> str:
-    return (
-        f"from={from_date.isoformat()}_to={to_date.isoformat()}_"
-        f"source={source}_feature_space={feature_space}_k={k}"
-    )
+def _ensure_model_schema(settings: AppSettings) -> None:
+    with connect_observation_store(settings):
+        pass
 
 
 def _date_range(start_date: date, end_date: date) -> list[date]:
@@ -1985,14 +2290,6 @@ def _text(value: Any) -> str:
 def _sort_key(value: Any) -> tuple[int, Any]:
     raw = str(value)
     return (0, int(raw)) if raw.isdigit() else (1, raw)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _utc_now() -> str:

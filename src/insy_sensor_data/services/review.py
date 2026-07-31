@@ -4,6 +4,7 @@ from datetime import date
 from typing import Any
 
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
+from insy_sensor_data.clustering.policy import ACTIVE_MODEL_POLICY
 from insy_sensor_data.joins import index_snapshot_assets, normalize_asset_number
 from insy_sensor_data.maximo.db import MaximoDatabaseError
 from insy_sensor_data.maximo.history import load_asset_history
@@ -56,7 +57,7 @@ def load_snapshot_review(
     dimension: str = "x",
     feature_space: str | None = None,
     stat: str = "mean",
-    k: int = 4,
+    k: int | None = None,
 ) -> dict[str, Any]:
     resolved_source = _resolve_source(settings, source)
     effective_start = start_date or run_date
@@ -111,7 +112,12 @@ def load_snapshot_review(
         sensor_id=sensor_id,
     )
     scoped_rows = filter_rows_for_scope(snapshot_rows, scope_context)
-    cluster_dimension = _cluster_dimension(feature_space, selected_dimension)
+    cluster_feature = ACTIVE_MODEL_POLICY.feature_space_for(
+        metric=selected_metric,
+        dimension=selected_dimension,
+        requested=feature_space,
+    )
+    selected_k = ACTIVE_MODEL_POLICY.validate_k(k)
     return {
         "source": resolved_source,
         "date": run_date.isoformat(),
@@ -133,9 +139,10 @@ def load_snapshot_review(
             settings,
             run_date,
             resolved_source,
-            cluster_dimension,
-            feature_space,
-            k,
+            selected_metric,
+            selected_dimension,
+            cluster_feature.name,
+            selected_k,
             scope_context,
         ),
         "events": _review_events(
@@ -160,8 +167,10 @@ def load_snapshot_review(
             "metric": selected_metric,
             "dimension": selected_dimension,
             "stat": selected_stat,
-            "cluster_dimension": cluster_dimension,
-            "k": _validate_k(k),
+            "cluster_dimension": cluster_feature.dimension,
+            "cluster_feature_space": cluster_feature.name,
+            "k": selected_k,
+            "model_policy_version": ACTIVE_MODEL_POLICY.version,
             "data_revision": snapshot["data_revision"],
         },
     }
@@ -276,8 +285,9 @@ def _review_cluster(
     settings: AppSettings,
     run_date: date,
     source: str,
+    metric: str,
     dimension: str,
-    feature_space: str | None,
+    feature_space: str,
     k: int,
     scope_context: dict[str, Any],
 ) -> dict[str, Any]:
@@ -286,8 +296,10 @@ def _review_cluster(
             settings,
             run_date=run_date,
             source=source,
+            metric=metric,
+            dimension=dimension,
             feature_space=feature_space,
-            k=_validate_k(k),
+            k=k,
         )
     except (StoreNotFoundError, StoreMigrationRequiredError) as exc:
         return {
@@ -611,22 +623,6 @@ def _normalize_dimension(metric: str, dimension: str) -> str:
     if selected not in {"x", "y", "z"}:
         raise ValueError("dimension must be one of: x, y, z")
     return selected
-
-
-def _cluster_dimension(
-    feature_space: str | None,
-    dimension: str,
-) -> str:
-    if not feature_space:
-        return dimension
-    selected = feature_space.split("_", 1)[0]
-    return selected if selected in {"x", "y", "z"} else dimension
-
-
-def _validate_k(k: int) -> int:
-    if k < 1:
-        raise ValueError("k must be at least 1")
-    return k
 
 
 def _resolve_source(settings: AppSettings, source: str | None) -> str:

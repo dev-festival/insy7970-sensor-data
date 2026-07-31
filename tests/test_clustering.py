@@ -202,7 +202,9 @@ def test_build_cluster_model_grid_persists_registered_models_and_drift(tmp_path:
 
     discovery = list_registered_cluster_models(settings, source="mock")
     assert discovery["complete_count"] == 4
-    assert set(discovery["feature_spaces"]) == {"x_accel", "temperature"}
+    assert set(discovery["feature_spaces"]) == {
+        "x_accel", "y_vel", "z_vel", "temperature"
+    }
     assert discovery["ks"] == [5]
 
     cluster = load_registered_cluster_view(

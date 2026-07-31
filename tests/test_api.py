@@ -61,6 +61,7 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert 'id="snapshot-events-detail"' in response.text
     assert 'id="snapshot-measurements-detail"' in response.text
     assert 'id="metric-coverage"' in response.text
+    assert 'id="k-select"' not in response.text
     assert 'id="snapshot-diagnostics-head"' in response.text
     assert 'id="snapshot-diagnostics-body"' in response.text
     assert 'data-view="cluster"' in response.text
@@ -70,6 +71,10 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     chart_response = client.get("/static/charts.js")
     assert chart_response.status_code == 200
     assert "window.SensorCharts" in chart_response.text
+
+    app_response = client.get("/static/app.js")
+    assert app_response.status_code == 200
+    assert 'params.set("k"' not in app_response.text
 
 
 def test_waites_raw_runs_endpoint_lists_available_manifests(tmp_path: Path) -> None:
@@ -195,8 +200,9 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     assert artifacts["counts"]["drift"] == 0
     assert artifacts["counts"]["cluster_windows"] == 0
     assert artifacts["sources"] == ["mock"]
-    assert artifacts["dimensions"] == []
-    assert artifacts["ks"] == []
+    assert artifacts["dimensions"] == ["temperature", "x", "y", "z"]
+    assert artifacts["ks"] == [5]
+    assert artifacts["active_model_policy"]["k"] == 5
     assert artifacts["data_revisions"]["mock"]["store"] == "sqlite"
     assert artifacts["latest_readiness"]["mock"] == {
         "snapshot_date": "2025-07-11",
@@ -269,26 +275,26 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     client = TestClient(create_app(settings=settings))
     _prepare_mock_window(settings)
 
-    cluster_response = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4")
-    assert cluster_response.status_code == 409
-    assert "registered feature_space" in cluster_response.json()["detail"]
+    cluster_response = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x")
+    assert cluster_response.status_code == 404
 
     drift_response = client.get(
-        "/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&dimension=x&k=4"
+        "/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&dimension=x"
     )
-    assert drift_response.status_code == 409
+    assert drift_response.status_code == 404
 
     window_response = client.get(
-        "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4"
+        "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x"
     )
-    assert window_response.status_code == 409
+    assert window_response.status_code == 200
+    assert window_response.json()["status"] == "partial"
 
     build_cluster_model_grid(
         settings=settings,
         start_date=date(2025, 7, 9),
         end_date=date(2025, 7, 11),
         source="mock",
-        feature_spaces=["x_accel"],
+        feature_spaces=["x_accel", "y_vel", "z_vel", "temperature"],
         ks=[5],
     )
 
@@ -297,8 +303,8 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     )
     assert models_response.status_code == 200
     models = models_response.json()
-    assert models["complete_count"] == 3
-    assert models["feature_spaces"] == ["x_accel"]
+    assert models["complete_count"] == 12
+    assert models["feature_spaces"] == ["x_accel", "y_vel", "z_vel", "temperature"]
     assert models["ks"] == [5]
     readiness = client.get("/api/artifacts").json()
     assert readiness["latest_readiness"]["mock"] == {
@@ -313,7 +319,7 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     )
 
     registered_cluster_response = client.get(
-        "/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel&k=5"
+        "/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel"
     )
     assert registered_cluster_response.status_code == 200
     registered_cluster = registered_cluster_response.json()
@@ -322,7 +328,7 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     assert registered_cluster["metrics"]["feature_count"] == 4
 
     registered_window_response = client.get(
-        "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5"
+        "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel"
     )
     assert registered_window_response.status_code == 200
     registered_window = registered_window_response.json()
@@ -347,7 +353,7 @@ def test_snapshot_review_endpoint_composes_sensor_scope(tmp_path: Path) -> None:
     response = client.get(
         "/api/snapshot-review/2025-07-09"
         "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
-        "&scope=sensor&installation_point_id=201300&metric=rms_vel&dimension=x&k=4"
+        "&scope=sensor&installation_point_id=201300&metric=rms_vel&dimension=x"
     )
 
     assert response.status_code == 200
@@ -454,7 +460,7 @@ def test_snapshot_review_endpoint_composes_equipment_scope(tmp_path: Path) -> No
     response = client.get(
         "/api/snapshot-review/2025-07-09"
         "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
-        "&scope=equipment&equipment_id=55576&metric=rms_accel&dimension=x&k=4"
+        "&scope=equipment&equipment_id=55576&metric=rms_accel&dimension=x"
     )
 
     assert response.status_code == 200
@@ -594,14 +600,14 @@ def test_cluster_endpoint_validates_parameters_and_requires_registered_model(
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
 
-    bad_dimension = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=q&k=4")
+    bad_dimension = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=q")
     assert bad_dimension.status_code == 422
 
-    bad_k = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x&k=0")
+    bad_k = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4")
     assert bad_k.status_code == 422
 
-    missing = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4")
-    assert missing.status_code == 409
+    missing = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x")
+    assert missing.status_code == 404
 
 
 def test_snapshot_and_trend_endpoints_support_source_and_sensor_filters(tmp_path: Path) -> None:
@@ -755,7 +761,7 @@ def test_representative_web_payloads_stay_within_response_budget(tmp_path: Path)
     snapshot_response = client.get(
         "/api/snapshot-review/2025-07-09"
         "?source=mock&start_date=2025-07-09&end_date=2025-07-30"
-        "&metric=rms_vel&dimension=x&k=4"
+        "&metric=rms_vel&dimension=x"
     )
 
     assert trend_response.status_code == 200

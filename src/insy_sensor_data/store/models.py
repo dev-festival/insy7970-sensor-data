@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from insy_sensor_data.clustering.policy import ACTIVE_MODEL_POLICY
 from insy_sensor_data.clustering.registry import (
     list_registered_cluster_models,
     load_registered_cluster_view,
@@ -12,7 +13,6 @@ from insy_sensor_data.clustering.registry import (
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.store.connection import read_store
 from insy_sensor_data.store.errors import (
-    StoreMigrationRequiredError,
     StoreNotFoundError,
 )
 from insy_sensor_data.store.revision import data_revision
@@ -54,24 +54,37 @@ def load_cluster(
     *,
     run_date: date,
     source: str,
-    feature_space: str | None,
-    k: int,
+    metric: str | None = None,
+    dimension: str = "x",
+    feature_space: str | None = None,
+    k: int | None = None,
 ) -> dict[str, Any]:
-    selected_k = _validate_k(k)
-    selected_feature_space = _require_feature_space(feature_space)
+    resolved_source = resolve_configured_source(settings, source)
+    selected_k = ACTIVE_MODEL_POLICY.validate_k(k)
+    selected_feature_space = ACTIVE_MODEL_POLICY.feature_space_for(
+        metric=metric,
+        dimension=dimension,
+        requested=feature_space,
+    )
     try:
         payload = load_registered_cluster_view(
             settings=settings,
             run_date=run_date,
-            source=source,
-            feature_space=selected_feature_space,
+            source=resolved_source,
+            feature_space=selected_feature_space.name,
             k=selected_k,
         )
     except FileNotFoundError as exc:
         raise StoreNotFoundError(str(exc)) from exc
     return {
         **payload,
-        "data_revision": _revision_for_dates(settings, source, run_date, run_date),
+        "active_model_policy": ACTIVE_MODEL_POLICY.public_payload(),
+        "data_revision": _revision_for_dates(
+            settings,
+            resolved_source,
+            run_date,
+            run_date,
+        ),
     }
 
 
@@ -81,25 +94,38 @@ def load_drift(
     from_date: date,
     to_date: date,
     source: str,
-    feature_space: str | None,
-    k: int,
+    metric: str | None = None,
+    dimension: str = "x",
+    feature_space: str | None = None,
+    k: int | None = None,
 ) -> dict[str, Any]:
-    selected_k = _validate_k(k)
-    selected_feature_space = _require_feature_space(feature_space)
+    resolved_source = resolve_configured_source(settings, source)
+    selected_k = ACTIVE_MODEL_POLICY.validate_k(k)
+    selected_feature_space = ACTIVE_MODEL_POLICY.feature_space_for(
+        metric=metric,
+        dimension=dimension,
+        requested=feature_space,
+    )
     try:
         payload = load_registered_drift_view(
             settings=settings,
             from_date=from_date,
             to_date=to_date,
-            source=source,
-            feature_space=selected_feature_space,
+            source=resolved_source,
+            feature_space=selected_feature_space.name,
             k=selected_k,
         )
     except FileNotFoundError as exc:
         raise StoreNotFoundError(str(exc)) from exc
     return {
         **payload,
-        "data_revision": _revision_for_dates(settings, source, from_date, to_date),
+        "active_model_policy": ACTIVE_MODEL_POLICY.public_payload(),
+        "data_revision": _revision_for_dates(
+            settings,
+            resolved_source,
+            from_date,
+            to_date,
+        ),
     }
 
 
@@ -109,25 +135,38 @@ def load_cluster_window(
     start_date: date,
     end_date: date,
     source: str,
-    feature_space: str | None,
-    k: int,
+    metric: str | None = None,
+    dimension: str = "x",
+    feature_space: str | None = None,
+    k: int | None = None,
 ) -> dict[str, Any]:
-    selected_k = _validate_k(k)
-    selected_feature_space = _require_feature_space(feature_space)
+    resolved_source = resolve_configured_source(settings, source)
+    selected_k = ACTIVE_MODEL_POLICY.validate_k(k)
+    selected_feature_space = ACTIVE_MODEL_POLICY.feature_space_for(
+        metric=metric,
+        dimension=dimension,
+        requested=feature_space,
+    )
     try:
         payload = load_registered_cluster_window_view(
             settings=settings,
             start_date=start_date,
             end_date=end_date,
-            source=source,
-            feature_space=selected_feature_space,
+            source=resolved_source,
+            feature_space=selected_feature_space.name,
             k=selected_k,
         )
     except FileNotFoundError as exc:
         raise StoreNotFoundError(str(exc)) from exc
     return {
         **payload,
-        "data_revision": _revision_for_dates(settings, source, start_date, end_date),
+        "active_model_policy": ACTIVE_MODEL_POLICY.public_payload(),
+        "data_revision": _revision_for_dates(
+            settings,
+            resolved_source,
+            start_date,
+            end_date,
+        ),
     }
 
 
@@ -147,18 +186,3 @@ def _revision_for_dates(
             start_date=start_date,
             end_date=end_date,
         )
-
-
-def _require_feature_space(feature_space: str | None) -> str:
-    if feature_space in (None, ""):
-        raise StoreMigrationRequiredError(
-            "Legacy file-backed cluster views are diagnostic-only. "
-            "Select a registered feature_space."
-        )
-    return str(feature_space)
-
-
-def _validate_k(k: int) -> int:
-    if k < 1:
-        raise ValueError("k must be at least 1")
-    return k

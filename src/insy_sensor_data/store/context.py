@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from insy_sensor_data.clustering.policy import ACTIVE_MODEL_POLICY
+from insy_sensor_data.clustering.registry import model_run_readiness
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.store.connection import read_store
 from insy_sensor_data.store.revision import data_revision
@@ -12,12 +14,14 @@ from insy_sensor_data.store.schema import active_snapshot_table
 CONTEXT_TABLES = (
     "cluster_model_runs",
     "cluster_drift_runs",
+    "snapshot_revisions",
     "waites_ingestion_ledger",
 )
 
 
 def service_context(settings: AppSettings) -> dict[str, Any]:
-    """Return SQLite-backed bootstrap context for the web application."""
+    """Return the active SQLite model policy and per-date web readiness."""
+    source = settings.source_mode
     with read_store(settings, required_tables=CONTEXT_TABLES) as connection:
         table = active_snapshot_table(connection)
         snapshots = [
@@ -25,17 +29,20 @@ def service_context(settings: AppSettings) -> dict[str, Any]:
             for row in connection.execute(
                 f"""
                 SELECT
-                    source,
-                    source_date AS date,
+                    facts.source,
+                    facts.source_date AS date,
                     COUNT(*) AS record_count,
-                    MAX(built_at) AS built_at
-                FROM {table}
-                WHERE source = ?
-                GROUP BY source, source_date
-                ORDER BY source, source_date
-                """
-                ,
-                (settings.source_mode,),
+                    MAX(facts.built_at) AS built_at,
+                    MAX(revision.snapshot_revision) AS snapshot_revision
+                FROM {table} AS facts
+                LEFT JOIN snapshot_revisions AS revision
+                  ON revision.source = facts.source
+                 AND revision.source_date = facts.source_date
+                WHERE facts.source = ?
+                GROUP BY facts.source, facts.source_date
+                ORDER BY facts.source_date
+                """,
+                (source,),
             ).fetchall()
         ]
         models = [
@@ -49,15 +56,27 @@ def service_context(settings: AppSettings) -> dict[str, Any]:
                     feature_space,
                     k,
                     status,
+                    model_policy_version,
+                    input_snapshot_revision,
                     created_at,
                     completed_at,
                     input_snapshot_row_count,
-                    feature_row_count
+                    feature_row_count,
+                    metrics_json,
+                    warnings_json
                 FROM cluster_model_runs
                 WHERE source = ?
-                ORDER BY source, source_date, feature_space, k, created_at
+                  AND feature_policy_version = ?
+                  AND model_policy_version = ?
+                  AND k = ?
+                ORDER BY source_date, feature_space, created_at
                 """,
-                (settings.source_mode,),
+                (
+                    source,
+                    ACTIVE_MODEL_POLICY.feature_policy_version,
+                    ACTIVE_MODEL_POLICY.version,
+                    ACTIVE_MODEL_POLICY.k,
+                ),
             ).fetchall()
         ]
         drift = [
@@ -72,57 +91,41 @@ def service_context(settings: AppSettings) -> dict[str, Any]:
                     feature_space,
                     k,
                     status,
+                    model_policy_version,
+                    from_snapshot_revision,
+                    to_snapshot_revision,
                     created_at
                 FROM cluster_drift_runs
                 WHERE source = ?
-                ORDER BY source, from_date, to_date, feature_space, k
+                  AND model_policy_version = ?
+                  AND k = ?
+                ORDER BY from_date, to_date, feature_space
                 """,
-                (settings.source_mode,),
+                (source, ACTIVE_MODEL_POLICY.version, ACTIVE_MODEL_POLICY.k),
             ).fetchall()
         ]
-        sources = sorted(
-            {
-                str(row["source"])
-                for row in [*snapshots, *models, *drift]
-                if row.get("source")
-            }
-        )
-        revisions = {
-            source: data_revision(connection, source)
-            for source in sources
-        }
-    readiness, latest = _readiness(snapshots, models)
-    complete_models = [row for row in models if row["status"] == "complete"]
-    feature_spaces = sorted(
-        {str(row["feature_space"]) for row in complete_models}
-    )
-    dimensions = sorted(
-        {
-            dimension
-            for dimension in (
-                _feature_space_dimension(row["feature_space"])
-                for row in complete_models
-            )
-            if dimension
-        }
-    )
-    ks = sorted({int(row["k"]) for row in complete_models})
+        revision = data_revision(connection, source)
+
+    readiness, latest, visible_models = _readiness(snapshots, models)
     trends = _snapshot_ranges(snapshots)
-    cluster_windows = _registered_windows(complete_models)
+    cluster_windows = _registered_windows(readiness)
     return {
-        "sources": sources,
-        "dimensions": dimensions,
-        "feature_spaces": feature_spaces,
-        "ks": ks,
+        "sources": [source] if snapshots or models or drift else [],
+        "dimensions": sorted(
+            {spec.dimension for spec in ACTIVE_MODEL_POLICY.feature_spaces}
+        ),
+        "feature_spaces": [spec.name for spec in ACTIVE_MODEL_POLICY.feature_spaces],
+        "ks": [ACTIVE_MODEL_POLICY.k],
+        "active_model_policy": ACTIVE_MODEL_POLICY.public_payload(),
         "snapshots": snapshots,
         "trends": trends,
         "clusters": [],
-        "cluster_models": models,
+        "cluster_models": visible_models,
         "drift": drift,
         "cluster_windows": cluster_windows,
         "readiness": readiness,
-        "latest_readiness": latest,
-        "data_revisions": revisions,
+        "latest_readiness": {source: latest} if snapshots or models else {},
+        "data_revisions": {source: revision},
         "counts": {
             "snapshots": len(snapshots),
             "trends": len(trends),
@@ -181,75 +184,95 @@ def operational_dates(settings: AppSettings) -> dict[str, Any]:
 def _readiness(
     snapshots: list[dict[str, Any]],
     models: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str | None]]]:
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+) -> tuple[list[dict[str, Any]], dict[str, str | None], list[dict[str, Any]]]:
+    models_by_key = {
+        (str(model["date"]), str(model["feature_space"])): model
+        for model in models
+    }
+    visible_models: list[dict[str, Any]] = []
+    readiness: list[dict[str, Any]] = []
     for snapshot in snapshots:
-        key = (str(snapshot["source"]), str(snapshot["date"]))
-        by_key[key] = {
-            "source": key[0],
-            "date": key[1],
-            "snapshot_ready": True,
-            "registered_model_ready": False,
-            "complete_model_count": 0,
-            "feature_spaces": [],
-            "ks": [],
-            "snapshot_built_at": snapshot.get("built_at"),
-            "model_completed_at": None,
-        }
-    for model in models:
-        if model["status"] != "complete":
-            continue
-        key = (str(model["source"]), str(model["date"]))
-        row = by_key.setdefault(
-            key,
-            {
-                "source": key[0],
-                "date": key[1],
-                "snapshot_ready": False,
-                "registered_model_ready": False,
-                "complete_model_count": 0,
-                "feature_spaces": [],
-                "ks": [],
-                "snapshot_built_at": None,
-                "model_completed_at": None,
-            },
+        date_value = str(snapshot["date"])
+        feature_readiness = []
+        completed_at: str | None = None
+        for spec in ACTIVE_MODEL_POLICY.feature_spaces:
+            model = models_by_key.get((date_value, spec.name))
+            result = model_run_readiness(model, snapshot.get("snapshot_revision"))
+            feature_row = {
+                "feature_space": spec.name,
+                "dimension": spec.dimension,
+                "model_run_id": model.get("model_run_id") if model else None,
+                **result,
+            }
+            feature_readiness.append(feature_row)
+            if model is not None:
+                visible_models.append(
+                    {
+                        **model,
+                        "readiness_status": result["status"],
+                        "readiness": result,
+                    }
+                )
+                model_completed = model.get("completed_at")
+                if model_completed and (
+                    completed_at is None or str(model_completed) > completed_at
+                ):
+                    completed_at = str(model_completed)
+        statuses = {str(row["status"]) for row in feature_readiness}
+        overall = (
+            "ready"
+            if statuses == {"ready"}
+            else next(
+                candidate
+                for candidate in (
+                    "failed",
+                    "insufficient_data",
+                    "stale",
+                    "missing",
+                )
+                if candidate in statuses
+            )
         )
-        row["registered_model_ready"] = True
-        row["complete_model_count"] += 1
-        if model["feature_space"] not in row["feature_spaces"]:
-            row["feature_spaces"].append(model["feature_space"])
-        selected_k = int(model["k"])
-        if selected_k not in row["ks"]:
-            row["ks"].append(selected_k)
-        completed_at = model.get("completed_at")
-        if completed_at and (
-            row["model_completed_at"] is None
-            or completed_at > row["model_completed_at"]
-        ):
-            row["model_completed_at"] = completed_at
-    readiness = sorted(
-        by_key.values(),
-        key=lambda row: (row["source"], row["date"]),
-    )
-    for row in readiness:
-        row["feature_spaces"].sort()
-        row["ks"].sort()
-    latest: dict[str, dict[str, str | None]] = {}
-    for source in sorted({row["source"] for row in readiness}):
-        source_rows = [row for row in readiness if row["source"] == source]
-        latest[source] = {
-            "snapshot_date": max(
-                (
-                    row["date"]
-                    for row in source_rows
-                    if row["snapshot_ready"]
+        readiness.append(
+            {
+                "source": str(snapshot["source"]),
+                "date": date_value,
+                "snapshot_ready": True,
+                "registered_model_ready": overall == "ready",
+                "model_status": overall,
+                "ready_model_count": sum(
+                    1 for row in feature_readiness if row["status"] == "ready"
                 ),
+                "required_model_count": len(ACTIVE_MODEL_POLICY.feature_spaces),
+                "complete_model_count": sum(
+                    1
+                    for spec in ACTIVE_MODEL_POLICY.feature_spaces
+                    if (models_by_key.get((date_value, spec.name)) or {}).get("status")
+                    == "complete"
+                ),
+                "feature_spaces": [
+                    row["feature_space"]
+                    for row in feature_readiness
+                    if row["status"] == "ready"
+                ],
+                "ks": [ACTIVE_MODEL_POLICY.k] if overall == "ready" else [],
+                "snapshot_revision": snapshot.get("snapshot_revision"),
+                "snapshot_built_at": snapshot.get("built_at"),
+                "model_completed_at": completed_at,
+                "feature_readiness": feature_readiness,
+            }
+        )
+    return (
+        readiness,
+        {
+            "snapshot_date": max(
+                (row["date"] for row in readiness if row["snapshot_ready"]),
                 default=None,
             ),
             "registered_model_date": max(
                 (
                     row["date"]
-                    for row in source_rows
+                    for row in readiness
                     if row["registered_model_ready"]
                 ),
                 default=None,
@@ -257,19 +280,17 @@ def _readiness(
             "fully_ready_date": max(
                 (
                     row["date"]
-                    for row in source_rows
-                    if row["snapshot_ready"]
-                    and row["registered_model_ready"]
+                    for row in readiness
+                    if row["snapshot_ready"] and row["registered_model_ready"]
                 ),
                 default=None,
             ),
-        }
-    return readiness, latest
+        },
+        visible_models,
+    )
 
 
-def _snapshot_ranges(
-    snapshots: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+def _snapshot_ranges(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     dates_by_source: dict[str, list[str]] = defaultdict(list)
     for snapshot in snapshots:
         dates_by_source[str(snapshot["source"])].append(str(snapshot["date"]))
@@ -285,36 +306,36 @@ def _snapshot_ranges(
     ]
 
 
-def _registered_windows(
-    models: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, int], list[str]] = defaultdict(list)
-    for model in models:
-        grouped[
-            (
-                str(model["source"]),
-                str(model["feature_space"]),
-                int(model["k"]),
+def _registered_windows(readiness: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output = []
+    for spec in ACTIVE_MODEL_POLICY.feature_spaces:
+        ready_dates = [
+            str(row["date"])
+            for row in readiness
+            if any(
+                feature["feature_space"] == spec.name
+                and feature["status"] == "ready"
+                for feature in row["feature_readiness"]
             )
-        ].append(str(model["date"]))
-    return [
-        {
-            "source": source,
-            "feature_space": feature_space,
-            "k": k,
-            "start_date": min(dates),
-            "end_date": max(dates),
-            "date_count": len(set(dates)),
-            "registered": True,
-        }
-        for (source, feature_space, k), dates in sorted(grouped.items())
-        if dates
-    ]
-
-
-def _feature_space_dimension(feature_space: Any) -> str | None:
-    value = str(feature_space or "")
-    if not value:
-        return None
-    prefix = value.split("_", 1)[0]
-    return prefix if prefix in {"x", "y", "z"} else None
+        ]
+        if not ready_dates:
+            continue
+        output.append(
+            {
+                "source": str(readiness[0]["source"]),
+                "feature_space": spec.name,
+                "k": ACTIVE_MODEL_POLICY.k,
+                "model_policy_version": ACTIVE_MODEL_POLICY.version,
+                "start_date": min(ready_dates),
+                "end_date": max(ready_dates),
+                "date_count": len(ready_dates),
+                "required_date_count": len(readiness),
+                "status": (
+                    "complete"
+                    if len(ready_dates) == len(readiness)
+                    else "partial"
+                ),
+                "registered": True,
+            }
+        )
+    return output

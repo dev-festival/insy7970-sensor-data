@@ -9,11 +9,11 @@ modules.
 
 ## Current Capabilities
 
-Sprint `0.6.2` makes fixed-schema SQLite the single operational authority behind
-the compact `0.6.0` web contracts. Validated raw payloads now become references,
-events, daily facts, revisions, and ingestion state in one transaction. Routine
-processing no longer coordinates through snapshot, trend, reference, or registered
-model files:
+Sprint `0.6.3` converges the web app on one registered-model engine and one
+service-owned model policy over the fixed SQLite authority established in `0.6.2`.
+Models prove their exact snapshot revision and policy version before they are
+ready, one-date repairs touch only adjacent drift, and gapped Drift ranges return
+the valid pairs plus diagnostics instead of failing wholesale:
 
 - uv-managed Python package
 - Typer CLI entry point
@@ -67,6 +67,10 @@ model files:
 - registered centroid-aligned drift artifacts under `data/processed/cluster_model_drift/`
 - SQLite cluster model runs, assignments, centroids, drift runs, drift assignments, and centroid alignment tables
 - `cluster registry build-grid` for prebuilding feature-space models and adjacent-date drift
+- `cluster registry rebuild-date` for rebuilding one date and only its touching drift pairs
+- one versioned active model policy (`k=5`) with metric/dimension mapping owned by the service
+- explicit ready, stale, missing, insufficient-data, and failed model states
+- partial Drift windows with complete-pair and missing-pair coverage
 - `workflow mock-range --cluster-models` and `workflow api-range --cluster-models`
 - `workflow mock-range` and `workflow api-range` for date-window orchestration
 - versioned `sensor_daily_facts` without duplicate row JSON or runtime schema changes
@@ -80,7 +84,7 @@ model files:
 - named asset-tree, equipment, and sensor navigation with explicit scope state
 - selected-scope Snapshot review with context, trends, cluster context, events, and measurements
 - Snapshot review panes with independent scroll, pinned metadata, side-by-side charts, and collapsible detail tables
-- view-local controls for metric, dimension, and `k`
+- view-local controls for metric, dimension, and supported feature space; model `k` is service-owned
 - URL-backed browser state for local refresh/share workflows
 - first-party SVG snapshot, trend, cluster, and drift charts over API responses
 - Maximo fixture-backed work-order history and an ODBC boundary for live DB2 access
@@ -133,6 +137,7 @@ uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 
 uv run sensor-data cluster align-drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
 uv run sensor-data cluster window --source mock --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
 uv run sensor-data cluster registry build-grid --source mock --start-date 2025-07-09 --end-date 2025-07-11 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
+uv run sensor-data cluster registry rebuild-date --source mock --date 2025-07-10
 uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
 uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --cluster-models
 ```
@@ -210,13 +215,13 @@ Then open:
 - `http://127.0.0.1:8000/api/snapshots/2025-07-09?source=mock`
 - `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11`
 - `http://127.0.0.1:8000/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11&scope=asset_tree&asset_tree_id=12440&metric=rms_accel&dimension=x&stat=mean`
-- `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4`
+- `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&dimension=x`
 - `http://127.0.0.1:8000/api/cluster-models?source=mock&start_date=2025-07-09&end_date=2025-07-11`
-- `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel&k=5`
-- `http://127.0.0.1:8000/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&dimension=x&k=4`
-- `http://127.0.0.1:8000/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&feature_space=x_accel&k=5`
-- `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x&k=4`
-- `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel&k=5`
+- `http://127.0.0.1:8000/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel`
+- `http://127.0.0.1:8000/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&dimension=x`
+- `http://127.0.0.1:8000/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&feature_space=x_accel`
+- `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x`
+- `http://127.0.0.1:8000/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel`
 - `http://127.0.0.1:8000/docs`
 
 The web and API are read-only over fixed SQLite daily facts, registered SQLite
@@ -232,8 +237,9 @@ chart series aggregated by the server. `/api/trends` bounds its detail collectio
 registered-model readiness, so a model-missing date can still render Snapshot,
 Trend, Events, and Measurements. Maximo is queried only when an Asset Tree,
 equipment, or sensor is selected; All Equipment never initiates a Maximo query.
-Run `cluster registry build-grid` before selecting cluster or drift feature-space
-parameters in the browser.
+Run `cluster registry build-grid` for a new range or `cluster registry rebuild-date`
+after patching one snapshot. The browser never chooses a model `k`; an incompatible
+compatibility parameter is rejected rather than silently selecting another model.
 
 ## Source API
 

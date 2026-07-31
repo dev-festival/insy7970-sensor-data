@@ -683,6 +683,49 @@ def test_cli_cluster_registry_build_grid_writes_sqlite_models(tmp_path: Path) ->
     assert not (model_dir / "sensor_clusters.csv").exists()
     assert not (model_dir / "metrics.json").exists()
 
+    rebuild_result = runner.invoke(
+        app,
+        [
+            "cluster",
+            "registry",
+            "rebuild-date",
+            "--source",
+            "mock",
+            "--date",
+            "2025-07-09",
+            "--feature-spaces",
+            "x_accel",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert rebuild_result.exit_code == 0
+    rebuild = json.loads(rebuild_result.stdout)
+    assert rebuild["model_counts"] == {"built": 1}
+    assert rebuild["drift_counts"] == {"built": 1}
+
+    rejected_k = runner.invoke(
+        app,
+        [
+            "cluster",
+            "registry",
+            "build-grid",
+            "--source",
+            "mock",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-09",
+            "--ks",
+            "7",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert rejected_k.exit_code == 1
+    assert "active policy" in rejected_k.stderr
+
 
 def test_cli_workflow_api_day_requires_token(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"

@@ -21,6 +21,7 @@ from insy_sensor_data.clustering.registry import (
     DEFAULT_REGISTRY_KS,
     FEATURE_SPACE_SPECS,
     build_cluster_model_grid,
+    rebuild_active_model_date,
 )
 from insy_sensor_data.clustering.window import align_cluster_drift, build_cluster_window
 from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
@@ -1262,7 +1263,7 @@ def cluster_registry_build_grid(
 ) -> None:
     """Build the offline SQLite cluster model registry over a date range."""
     source_mode = _validate_source(source)
-    settings = AppSettings.from_env(env_file=env_file)
+    settings = _settings_for_source(AppSettings.from_env(env_file=env_file), source_mode)
     try:
         summary = build_cluster_model_grid(
             settings=settings,
@@ -1277,6 +1278,49 @@ def cluster_registry_build_grid(
     except (FileNotFoundError, ValueError) as exc:
         _fail(str(exc))
     _emit_cluster_registry_summary(summary, json_output)
+
+
+@cluster_registry_app.command("rebuild-date")
+def cluster_registry_rebuild_date(
+    rebuild_date: Annotated[
+        str,
+        typer.Option("--date", help="Snapshot date to rebuild in YYYY-MM-DD format."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Source mode: mock or api."),
+    ] = "mock",
+    feature_spaces: Annotated[
+        str,
+        typer.Option(
+            "--feature-spaces",
+            help="Comma-separated active feature spaces; defaults to all.",
+        ),
+    ] = ",".join(DEFAULT_FEATURE_SPACES),
+    force: Annotated[
+        bool,
+        typer.Option("--force/--resume", help="Rebuild the selected date by default."),
+    ] = True,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the rebuild summary as JSON."),
+    ] = False,
+    env_file: EnvFileOption = Path(".env"),
+) -> None:
+    """Rebuild one active model date and only its adjacent drift pairs."""
+    source_mode = _validate_source(source)
+    settings = _settings_for_source(AppSettings.from_env(env_file=env_file), source_mode)
+    try:
+        summary = rebuild_active_model_date(
+            settings,
+            run_date=_parse_run_date(rebuild_date),
+            source=source_mode,
+            feature_spaces=_parse_feature_spaces(feature_spaces),
+            force=force,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    typer.echo(json.dumps(summary, sort_keys=True))
 
 
 def _validate_source(source: str) -> str:
@@ -1522,6 +1566,9 @@ def _emit_cluster_registry_summary(summary: dict[str, object], json_output: bool
     typer.echo(f"Models built: {summary.get('models_built', 0)}")
     typer.echo(f"Models reused: {summary.get('models_reused', 0)}")
     typer.echo(f"Models failed: {summary.get('models_failed', 0)}")
+    typer.echo(
+        f"Models insufficient data: {summary.get('models_insufficient_data', 0)}"
+    )
     typer.echo(f"Drift pairs built: {summary.get('drift_built', 0)}")
     typer.echo(f"Drift pairs reused: {summary.get('drift_reused', 0)}")
     typer.echo(f"Drift pairs skipped: {summary.get('drift_skipped', 0)}")

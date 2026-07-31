@@ -282,10 +282,9 @@ def test_operational_routes_do_not_read_legacy_artifacts(
         "insy_sensor_data.snapshots.trends.load_trends",
         artifact_read_forbidden,
     )
-    monkeypatch.setattr(
-        "insy_sensor_data.clustering.registry.read_csv_rows",
-        artifact_read_forbidden,
-    )
+    import insy_sensor_data.clustering.registry as registry
+
+    assert not hasattr(registry, "read_csv_rows")
 
     client = TestClient(create_app(settings=settings))
     paths = [
@@ -296,17 +295,17 @@ def test_operational_routes_do_not_read_legacy_artifacts(
         (
             "/api/snapshot-review/2025-07-09?source=mock"
             "&start_date=2025-07-09&end_date=2025-07-11"
-            "&feature_space=x_accel&k=5"
+            "&metric=rms_accel&dimension=x"
         ),
         "/api/cluster-models?source=mock&start_date=2025-07-09&end_date=2025-07-11",
-        "/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel&k=5",
+        "/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel",
         (
             "/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10"
-            "&feature_space=x_accel&k=5"
+            "&feature_space=x_accel"
         ),
         (
             "/api/cluster-windows?source=mock&start_date=2025-07-09"
-            "&end_date=2025-07-11&feature_space=x_accel&k=5"
+            "&end_date=2025-07-11&feature_space=x_accel"
         ),
     ]
 

@@ -76,7 +76,7 @@ def read_snapshot_review(
     dimension: str = "x",
     feature_space: str | None = None,
     stat: str = "mean",
-    k: int = 4,
+    k: int | None = None,
 ) -> dict[str, Any]:
     try:
         return load_snapshot_review(
@@ -107,15 +107,16 @@ def read_clusters(
     source: str | None = None,
     dimension: str = "x",
     feature_space: str | None = None,
-    k: int = 4,
+    metric: str | None = None,
+    k: int | None = None,
 ) -> dict[str, Any]:
     try:
-        if dimension not in {"x", "y", "z"}:
-            raise ValueError("dimension must be one of: x, y, z")
         return load_cluster(
             settings=request.app.state.settings,
             run_date=date.fromisoformat(cluster_date),
             source=source or request.app.state.settings.source_mode,
+            metric=metric,
+            dimension=dimension,
             feature_space=feature_space,
             k=k,
         )
@@ -131,16 +132,17 @@ def read_drift(
     source: str | None = None,
     dimension: str = "x",
     feature_space: str | None = None,
-    k: int = 4,
+    metric: str | None = None,
+    k: int | None = None,
 ) -> dict[str, Any]:
     try:
-        if dimension not in {"x", "y", "z"}:
-            raise ValueError("dimension must be one of: x, y, z")
         return load_drift(
             settings=request.app.state.settings,
             from_date=date.fromisoformat(from_date),
             to_date=date.fromisoformat(to_date),
             source=source or request.app.state.settings.source_mode,
+            metric=metric,
+            dimension=dimension,
             feature_space=feature_space,
             k=k,
         )
@@ -156,16 +158,17 @@ def read_cluster_windows(
     source: str | None = None,
     dimension: str = "x",
     feature_space: str | None = None,
-    k: int = 4,
+    metric: str | None = None,
+    k: int | None = None,
 ) -> dict[str, Any]:
     try:
-        if dimension not in {"x", "y", "z"}:
-            raise ValueError("dimension must be one of: x, y, z")
         return load_cluster_window(
             settings=request.app.state.settings,
             start_date=date.fromisoformat(start_date),
             end_date=date.fromisoformat(end_date),
             source=source or request.app.state.settings.source_mode,
+            metric=metric,
+            dimension=dimension,
             feature_space=feature_space,
             k=k,
         )

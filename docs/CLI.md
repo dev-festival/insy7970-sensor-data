@@ -624,9 +624,13 @@ data/processed/cluster_windows/start=YYYY-MM-DD_end=YYYY-MM-DD_source=SOURCE_dim
 ```powershell
 uv run sensor-data cluster registry build-grid --source mock --start-date 2025-07-09 --end-date 2025-07-11 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
 uv run sensor-data cluster registry build-grid --source api --start-date 2026-07-24 --end-date 2026-07-26 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
+uv run sensor-data cluster registry rebuild-date --source api --date 2026-07-26
 ```
 
-Build snapshots for the date range first. The registry command consumes the processed daily snapshot artifacts, builds one deterministic KMeans model for each date, feature space, and `k`, computes adjacent-date centroid-aligned drift when both dates are complete, and writes the app-facing rows into:
+Build snapshots for the date range first. The registry reads fixed daily facts
+directly from SQLite and applies the single active service policy (`k=5`, seed 42)
+for each date and supported feature space. It writes model and adjacent-date drift
+results transactionally into:
 
 ```text
 data/processed/observations.sqlite
@@ -638,26 +642,15 @@ data/processed/observations.sqlite
   cluster_centroid_alignment
 ```
 
-It also preserves inspectable CSV/JSON evidence:
-
-```text
-data/processed/cluster_models/date=YYYY-MM-DD_source=SOURCE_feature_space=FEATURE_SPACE_k=K/
-  sensor_clusters.csv
-  cluster_summary.csv
-  pca_coordinates.csv
-  metrics.json
-
-data/processed/cluster_model_drift/from=YYYY-MM-DD_to=YYYY-MM-DD_source=SOURCE_feature_space=FEATURE_SPACE_k=K/
-  aligned_cluster_drift.csv
-  centroid_alignment.csv
-  aligned_metrics.json
-```
+Normal registered builds create no feature, model, drift, CSV, or JSON mirrors.
+Use the explicit legacy diagnostic commands only when rollback/parity evidence is
+needed before `0.6.6`.
 
 Default model grid:
 
 ```text
 feature_spaces = x_accel,y_vel,z_vel,temperature
-ks = 5
+k = 5
 random_seed = 42
 ```
 
@@ -674,13 +667,17 @@ Useful options:
 
 ```powershell
 --feature-spaces x_accel,temperature
---ks 5,7
+--ks 5
 --resume
 --force
 --json
 ```
 
-Use `--json` when a script wants counts for `models_built`, `models_reused`, `models_failed`, `drift_built`, `drift_reused`, `drift_skipped`, and `drift_failed`.
+`--ks` remains a compatibility option but accepts only the active value. A
+different value fails explicitly. `rebuild-date` rebuilds the selected date and
+only its previous/current and current/next drift pairs; use it after a snapshot
+patch instead of rebuilding the full range. Use `--json` for build, reuse,
+insufficient-data, failure, and drift counts.
 
 ## Raw Retention Guidance
 

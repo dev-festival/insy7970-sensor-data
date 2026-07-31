@@ -2,7 +2,6 @@ const AXIS_DIMENSIONS = ["x", "y", "z"];
 const DEFAULT_DIMENSIONS = [...AXIS_DIMENSIONS, "temperature"];
 const DEFAULT_FEATURE_SPACES = ["x_accel", "y_vel", "z_vel", "temperature"];
 const DEFAULT_METRIC = "rms_vel";
-const DEFAULT_K = "5";
 const VALID_SCOPE_TYPES = new Set(["all", "asset_tree", "equipment", "sensor"]);
 const FEATURE_SPACE_LABELS = {
   x_accel: "X Acceleration",
@@ -37,7 +36,6 @@ const state = {
   dimension: "x",
   featureSpace: "x_accel",
   metric: DEFAULT_METRIC,
-  k: DEFAULT_K,
   equipmentSearch: "",
   expandedAssetTrees: new Set(),
   expandedEquipment: new Set(),
@@ -57,12 +55,10 @@ const elements = {
   dateSelect: document.querySelector("#date-select"),
   metricSelect: document.querySelector("#metric-select"),
   dimensionSelect: document.querySelector("#dimension-select"),
-  kSelect: document.querySelector("#k-select"),
   dateControl: document.querySelector("#date-control"),
   metricControl: document.querySelector("#metric-control"),
   metricCoverage: document.querySelector("#metric-coverage"),
   dimensionControl: document.querySelector("#dimension-control"),
-  kControl: document.querySelector("#k-control"),
   statusLine: document.querySelector("#status-line"),
   snapshotReview: document.querySelector("#snapshot-review"),
   snapshotScroll: document.querySelector("#snapshot-scroll"),
@@ -165,11 +161,6 @@ function bindEvents() {
     }
     renderActiveView();
   });
-  elements.kSelect.addEventListener("change", () => {
-    updateState({ k: elements.kSelect.value });
-    renderActiveView();
-  });
-
   elements.equipmentSearch.addEventListener("input", debounce(() => {
     state.equipmentSearch = elements.equipmentSearch.value;
     renderNavigator();
@@ -261,10 +252,6 @@ function normalizeState() {
   if (!featureSpaces.includes(state.featureSpace)) {
     state.featureSpace = featureSpaces[0] || "x_accel";
   }
-  const ks = availableKs().map(String);
-  if (!ks.includes(String(state.k))) {
-    state.k = ks.includes(DEFAULT_K) ? DEFAULT_K : ks[0] || DEFAULT_K;
-  }
   if (!METRICS[state.metric]) {
     state.metric = DEFAULT_METRIC;
   }
@@ -326,7 +313,6 @@ function updateControlsFromState() {
     (value) => modelView ? featureSpaceLabel(value) : value,
     modelView ? state.featureSpace : state.dimension,
   );
-  setOptions(elements.kSelect, availableKs(), (value) => String(value), state.k);
   elements.equipmentSearch.value = state.equipmentSearch;
   updateTabState();
   updateViewControls();
@@ -346,7 +332,6 @@ function updateViewControls() {
     ["cluster", "drift"].includes(state.view)
     || (["snapshot", "trend"].includes(state.view) && metricNeedsAxis)
   );
-  elements.kControl.hidden = !["cluster", "drift"].includes(state.view);
 }
 
 function renderNavigator() {
@@ -884,10 +869,10 @@ function renderMissingState(error) {
 
 function commandHint() {
   if (state.view === "cluster") {
-    return `uv run sensor-data cluster registry build-grid --source ${state.source} --start-date ${state.date} --end-date ${state.date} --feature-spaces ${state.featureSpace} --ks ${state.k}`;
+    return `uv run sensor-data cluster registry rebuild-date --source ${state.source} --date ${state.date} --feature-spaces ${state.featureSpace}`;
   }
   if (state.view === "drift") {
-    return `uv run sensor-data cluster registry build-grid --source ${state.source} --start-date ${state.startDate} --end-date ${state.endDate} --feature-spaces ${state.featureSpace} --ks ${state.k}`;
+    return `uv run sensor-data cluster registry build-grid --source ${state.source} --start-date ${state.startDate} --end-date ${state.endDate} --feature-spaces ${state.featureSpace}`;
   }
   if (state.view === "trend") {
     if (state.source === "api") {
@@ -918,8 +903,6 @@ function snapshotReviewParams() {
   }
   params.set("metric", state.metric);
   params.set("dimension", state.dimension);
-  params.set("feature_space", state.featureSpace);
-  params.set("k", state.k);
   return params;
 }
 
@@ -963,7 +946,6 @@ function clusterParams() {
   params.set("date", state.date);
   params.set("dimension", featureSpaceDimension(state.featureSpace));
   params.set("feature_space", state.featureSpace);
-  params.set("k", state.k);
   return params;
 }
 
@@ -974,7 +956,6 @@ function clusterWindowParams() {
   params.set("end_date", state.endDate);
   params.set("dimension", featureSpaceDimension(state.featureSpace));
   params.set("feature_space", state.featureSpace);
-  params.set("k", state.k);
   return params;
 }
 
@@ -985,7 +966,6 @@ function driftParamsFromState() {
   params.set("to_date", state.endDate);
   params.set("dimension", featureSpaceDimension(state.featureSpace));
   params.set("feature_space", state.featureSpace);
-  params.set("k", state.k);
   return params;
 }
 
@@ -1045,7 +1025,6 @@ function readStateFromUrl() {
     dimension: isFeatureSpace(rawDimension) ? state.dimension : rawDimension || state.dimension,
     featureSpace: params.get("feature_space") || (isFeatureSpace(rawDimension) ? rawDimension : state.featureSpace),
     metric: params.get("metric") || state.metric,
-    k: params.get("k") || state.k,
   });
 }
 
@@ -1072,7 +1051,6 @@ function updateUrlFromState(replace = false) {
   params.set("dimension", state.dimension);
   params.set("feature_space", state.featureSpace);
   params.set("metric", state.metric);
-  params.set("k", state.k);
   const nextUrl = `${window.location.pathname}?${params}`;
   if (replace) {
     window.history.replaceState(null, "", nextUrl);
@@ -1172,10 +1150,6 @@ function featureSpaceDimension(value) {
     return "z";
   }
   return state.dimension || "x";
-}
-
-function availableKs() {
-  return state.artifacts?.ks?.length ? state.artifacts.ks : [DEFAULT_K];
 }
 
 function filteredEquipmentTree() {

@@ -17,7 +17,8 @@ from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.store.errors import StoreMigrationRequiredError
 
 
-OPERATIONAL_SCHEMA_VERSION = 7
+OPERATIONAL_SCHEMA_VERSION = 8
+SNAPSHOT_MIGRATION_VERSION = 7
 LEGACY_SNAPSHOT_TABLE = "sensor_daily_snapshots"
 FIXED_SNAPSHOT_TABLE = "sensor_daily_facts"
 VALID_SNAPSHOT_AUTHORITIES = {LEGACY_SNAPSHOT_TABLE, FIXED_SNAPSHOT_TABLE}
@@ -122,6 +123,27 @@ def initialize_operational_schema(connection: sqlite3.Connection) -> None:
     )
     _ensure_column(connection, "waites_ingestion_ledger", "ingestion_state", "TEXT")
     _ensure_column(connection, "waites_ingestion_ledger", "snapshot_revision", "TEXT")
+    _ensure_column(connection, "cluster_model_runs", "model_policy_version", "TEXT")
+    _ensure_column(connection, "cluster_model_runs", "input_snapshot_revision", "TEXT")
+    _ensure_column(connection, "cluster_model_runs", "max_iterations", "INTEGER")
+    _ensure_column(connection, "cluster_model_runs", "tolerance", "REAL")
+    _ensure_column(connection, "cluster_model_runs", "pca_iterations", "INTEGER")
+    _ensure_column(connection, "cluster_drift_runs", "model_policy_version", "TEXT")
+    _ensure_column(connection, "cluster_drift_runs", "from_snapshot_revision", "TEXT")
+    _ensure_column(connection, "cluster_drift_runs", "to_snapshot_revision", "TEXT")
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cluster_model_runs_active
+            ON cluster_model_runs (
+                source, source_date, feature_space, model_policy_version, status
+            );
+        CREATE INDEX IF NOT EXISTS idx_cluster_drift_runs_active
+            ON cluster_drift_runs (
+                source, from_date, to_date, feature_space,
+                model_policy_version, status
+            );
+        """
+    )
 
     state = connection.execute(
         "SELECT 1 FROM operational_store_state WHERE state_id = 1"
@@ -142,7 +164,7 @@ def initialize_operational_schema(connection: sqlite3.Connection) -> None:
             )
             VALUES (1, NULL, ?, ?, ?, ?)
             """,
-            (authority, status, OPERATIONAL_SCHEMA_VERSION, _utc_now()),
+            (authority, status, SNAPSHOT_MIGRATION_VERSION, _utc_now()),
         )
 
 
@@ -252,7 +274,7 @@ def migrate_snapshot_store(settings: AppSettings, source: str) -> dict[str, Any]
                 completed_at = NULL, error = NULL,
                 database_bytes_before = excluded.database_bytes_before
             """,
-            (source, OPERATIONAL_SCHEMA_VERSION, started_at, bytes_before),
+            (source, SNAPSHOT_MIGRATION_VERSION, started_at, bytes_before),
         )
         connection.commit()
         migration_started = True
@@ -336,7 +358,7 @@ def migrate_snapshot_store(settings: AppSettings, source: str) -> dict[str, Any]
                 migration_version = ?, updated_at = ?
             WHERE state_id = 1
             """,
-            (FIXED_SNAPSHOT_TABLE, OPERATIONAL_SCHEMA_VERSION, completed_at),
+            (FIXED_SNAPSHOT_TABLE, SNAPSHOT_MIGRATION_VERSION, completed_at),
         )
         connection.execute(
             """
@@ -355,7 +377,7 @@ def migrate_snapshot_store(settings: AppSettings, source: str) -> dict[str, Any]
                 null_count,
                 zero_count,
                 source,
-                OPERATIONAL_SCHEMA_VERSION,
+                SNAPSHOT_MIGRATION_VERSION,
             ),
         )
         connection.commit()
@@ -367,12 +389,12 @@ def migrate_snapshot_store(settings: AppSettings, source: str) -> dict[str, Any]
             SET database_bytes_side_by_side = ?
             WHERE source = ? AND migration_version = ?
             """,
-            (bytes_side_by_side, source, OPERATIONAL_SCHEMA_VERSION),
+            (bytes_side_by_side, source, SNAPSHOT_MIGRATION_VERSION),
         )
         connection.commit()
         return {
             "source": source,
-            "migration_version": OPERATIONAL_SCHEMA_VERSION,
+            "migration_version": SNAPSHOT_MIGRATION_VERSION,
             "status": "complete",
             "legacy_row_count": legacy_row_count,
             "fixed_row_count": fixed_row_count,
@@ -404,7 +426,7 @@ def migrate_snapshot_store(settings: AppSettings, source: str) -> dict[str, Any]
                 SET status = 'failed', completed_at = ?, error = ?
                 WHERE source = ? AND migration_version = ?
                 """,
-                (_utc_now(), str(exc), source, OPERATIONAL_SCHEMA_VERSION),
+                (_utc_now(), str(exc), source, SNAPSHOT_MIGRATION_VERSION),
             )
             connection.commit()
         finally:
