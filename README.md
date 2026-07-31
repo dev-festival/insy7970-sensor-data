@@ -9,13 +9,19 @@ modules.
 
 ## Current Capabilities
 
-Sprint `0.6.4` reshapes the primary web app around Review, Fleet Trends, Cluster,
-and Drift. Browser startup now uses compact service context, scope membership is
-server-owned, Cluster projection rows load only on the standalone Cluster surface,
-and Drift composes every active feature space plus explicit gaps in one response:
+Sprint `0.6.5` keeps the primary web app from `0.6.4` and contracts service
+administration to five operator-oriented commands. A scheduler can now invoke bare
+`sync`; the service plans missing dates through yesterday, resumes verified stages,
+builds active models, applies retention one day at a time, and reports durable
+current-through state:
 
 - uv-managed Python package
 - Typer CLI entry point
+- five-command public CLI: `serve`, `sync`, `rebuild`, `doctor`, and `export`
+- scheduler-ready catch-up planning in the configured source timezone
+- stage-aware daily synchronization with durable cursor and audit state
+- single-writer protection for synchronization and rebuild operations
+- explicit snapshot, trend, event, and active-model exports
 - FastAPI app factory and `/health`
 - static browser review dashboard
 - compact, projected Trend and Snapshot Review responses with server-produced chart series
@@ -44,39 +50,25 @@ and Drift composes every active feature space plus explicit gaps in one response
 - manifest byte counts and SHA-256 checksums for raw endpoint artifacts
 - explicit raw evidence verification, gzip compression, and dry-run-first pruning
 - SQLite native observation store under `data/processed/observations.sqlite`
-- idempotent `store load-waites` command for validated Waites raw runs
 - daily metric rollups for native RMS, temperature, and ImpactVue observations
-- SQLite-backed snapshot and trend builds when explicitly requested
-- human-readable `workflow mock-day`, `workflow mock-trend`, and `workflow api-day`
-- `--json` workflow output for scripts that want combined structured summaries
-- mock trend evidence reports under `reports/mock-trend/`
-- deterministic sample CSVs, min/avg/max SVG trend charts, and expected-versus-observed checks
-- no-Quarto fallback report generation with optional Quarto HTML rendering
 - dimension-specific clustering feature previews under `data/processed/features/`
-- `cluster features` command for X, Y, Z, and temperature feature matrices
 - feature readiness rows in evidence reports when previews are available
 - deterministic dimension-specific KMeans cluster runs under `data/processed/clusters/`
 - scaled feature metrics, cluster summaries, and PCA coordinate outputs
 - cluster drift comparison artifacts under `data/processed/drift/`
-- `cluster run` and `cluster drift` commands
 - centroid-aligned drift artifacts that distinguish label movement from likely behavior movement
 - cluster window summaries under `data/processed/cluster_windows/`
-- `cluster align-drift` and `cluster window` commands
 - registered cluster model grids under `data/processed/cluster_models/`
 - registered centroid-aligned drift artifacts under `data/processed/cluster_model_drift/`
 - SQLite cluster model runs, assignments, centroids, drift runs, drift assignments, and centroid alignment tables
-- `cluster registry build-grid` for prebuilding feature-space models and adjacent-date drift
-- `cluster registry rebuild-date` for rebuilding one date and only its touching drift pairs
 - one versioned active model policy (`k=5`) with metric/dimension mapping owned by the service
 - explicit ready, stale, missing, insufficient-data, and failed model states
 - partial Drift windows with complete-pair and missing-pair coverage
-- `workflow mock-range --cluster-models` and `workflow api-range --cluster-models`
-- `workflow mock-range` and `workflow api-range` for date-window orchestration
 - versioned `sensor_daily_facts` without duplicate row JSON or runtime schema changes
 - on-demand `/api/trends` reads over the active SQLite snapshot authority
 - reversible, audited side-by-side snapshot migration
 - Waites ingestion ledger with endpoint counts, validation status, checksums, and retention status
-- workflow raw-retention modes: `keep`, `compress`, and `release`
+- synchronization raw-retention modes: `keep`, `compress`, and `release`
 - date-scoped staging purge after snapshot and ledger persistence are verified
 - compact Waites reference tables with one row per asset tree, equipment, and sensor
 - compact browser context for configured source, date range, readiness, and revision
@@ -89,7 +81,7 @@ and Drift composes every active feature space plus explicit gaps in one response
 - Maximo fixture-backed work-order history and an ODBC boundary for live DB2 access
 - Asset Tree-scoped Maximo Events using Waites `customer_asset_id` to Maximo `assetnum`
 - Maximo event-provider status that preserves Waites events if DB2 is unavailable
-- diagnostic Maximo asset-history CLI and API lookup
+- bounded Maximo diagnosis and API lookup
 
 
 ## Requirements
@@ -111,94 +103,30 @@ Edit `.env` for local values. Keep `.env` out of Git.
 
 ```powershell
 uv run sensor-data --help
-uv run sensor-data health
-uv run sensor-data maximo asset-history --source mock --assetnum LEVF454TS --start-date 2025-07-09 --end-date 2025-07-11
-uv run sensor-data serve --source mock
-uv run sensor-data waites fetch --source mock --date 2025-07-09 --facility 679
-uv run sensor-data waites validate --source mock --date 2025-07-09
-uv run sensor-data raw verify --source waites --date 2025-07-09
-uv run sensor-data raw compress --source waites --date 2025-07-09
-uv run sensor-data store load-waites --source mock --date 2025-07-09
-uv run sensor-data store backfill-events --source mock
-uv run sensor-data store migrate-snapshots --source mock
-uv run sensor-data snapshot build --source mock --date 2025-07-09
-uv run sensor-data snapshot build --source mock --date 2025-07-09 --input sqlite
-uv run sensor-data snapshot export --source mock --date 2025-07-09 --destination exports/snapshot.csv
-uv run sensor-data store purge-native --source mock --date 2025-07-09 --dry-run
-uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
-uv run sensor-data trend export --source mock --start-date 2025-07-09 --end-date 2025-07-11 --destination exports/trend
-uv run sensor-data workflow mock-day --date 2025-07-09
-uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
-uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
-uv run sensor-data cluster features --source mock --date 2025-07-09
-uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k 4
-uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
-uv run sensor-data cluster align-drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
-uv run sensor-data cluster window --source mock --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
-uv run sensor-data cluster registry build-grid --source mock --start-date 2025-07-09 --end-date 2025-07-11 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
-uv run sensor-data cluster registry rebuild-date --source mock --date 2025-07-10
-uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
-uv run sensor-data workflow mock-range --start-date 2025-07-09 --end-date 2025-07-11 --cluster-models
+uv run sensor-data serve
+uv run sensor-data sync
+uv run sensor-data sync --date 2026-07-30 --json
+uv run sensor-data rebuild --date 2026-07-30 --component models
+uv run sensor-data doctor --json
+uv run sensor-data export trends --start-date 2026-07-24 --end-date 2026-07-30 --output exports/trends
 ```
 
-The leaf commands print JSON so they can be composed by scripts. The `workflow` commands print human-readable summaries by default and support `--json` when a combined structured result is useful.
+`sync` without dates is the Task Scheduler/cron contract: it calculates yesterday in
+the configured source timezone and catches up from durable SQLite state. Explicit
+dates remain available for controlled operation. All administration commands support
+human-readable output; `sync`, `rebuild`, `doctor`, and export subcommands support
+`--json` for automation.
 
-Live Waites canary fetches are explicit and should use small date ranges:
-
-```powershell
-uv run sensor-data waites fetch --source api --date 2026-07-19 --facility 679
-uv run sensor-data waites validate --source api --date 2026-07-19
-uv run sensor-data raw verify --source waites --date 2026-07-19
-uv run sensor-data store load-waites --source api --date 2026-07-19
-uv run sensor-data snapshot build --source api --date 2026-07-19 --input sqlite
-uv run sensor-data store purge-native --source api --date 2026-07-19 --confirm-delete
-uv run sensor-data trend build --source api --input sqlite --start-date 2026-07-19 --end-date 2026-07-19
-uv run sensor-data workflow api-day --date 2026-07-19 --facility 679 --raw-retention release
-uv run sensor-data workflow api-range --start-date 2026-07-24 --end-date 2026-07-26 --facility 679 --raw-retention release --cluster-models
-```
-
-The live workflow reads `WAITES_BASE_URL` and `WAITES_ACCESS_TOKEN` from `.env`,
-saves temporary raw responses under `data/raw/waites/`, validates them, and commits
-references, events, fixed daily facts, revisions, and ingestion state atomically to
-SQLite. It defaults to releasing bulky raw/high-frequency data after success. Use
-`--raw-retention keep --keep-native` when you need inspection or replay, and use the
-explicit export commands when a CSV is actually needed. Keep `.env` and `data/` out
-of Git.
-
-For a visible mock trend, fetch and build snapshots for each supported mock trend date first:
-
-```powershell
-uv run sensor-data workflow mock-trend --start-date 2025-07-09 --end-date 2025-07-11
-uv run sensor-data cluster features --source mock --date 2025-07-09
-uv run sensor-data cluster features --source mock --date 2025-07-10
-uv run sensor-data cluster features --source mock --date 2025-07-11
-uv run sensor-data cluster run --source mock --date 2025-07-09 --dimension x --k 4
-uv run sensor-data cluster run --source mock --date 2025-07-10 --dimension x --k 4
-uv run sensor-data cluster drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
-uv run sensor-data cluster align-drift --source mock --from-date 2025-07-09 --to-date 2025-07-10 --dimension x --k 4
-uv run sensor-data cluster window --source mock --start-date 2025-07-09 --end-date 2025-07-11 --dimension x --k 4
-uv run sensor-data cluster registry build-grid --source mock --start-date 2025-07-09 --end-date 2025-07-11 --feature-spaces x_accel,y_vel,z_vel,temperature --ks 5
-uv run sensor-data report mock-trend --start-date 2025-07-09 --end-date 2025-07-11
-```
-
-Or run the lower-level JSON commands yourself:
-
-```powershell
-uv run sensor-data waites fetch --source mock --date 2025-07-09 --facility 679
-uv run sensor-data snapshot build --source mock --date 2025-07-09
-uv run sensor-data waites fetch --source mock --date 2025-07-10 --facility 679
-uv run sensor-data snapshot build --source mock --date 2025-07-10
-uv run sensor-data waites fetch --source mock --date 2025-07-11 --facility 679
-uv run sensor-data snapshot build --source mock --date 2025-07-11
-uv run sensor-data trend build --source mock --start-date 2025-07-09 --end-date 2025-07-11
-```
+See [Service Administration CLI](docs/CLI.md) for configuration, scheduler exit
+codes, recovery rules, and export options. Hidden legacy command families remain as
+deprecated aliases only until sprint `0.6.6`.
 
 ## FastAPI Service
 
 Start the local service:
 
 ```powershell
-uv run sensor-data serve --source mock --host 127.0.0.1 --port 8000
+uv run sensor-data serve --host 127.0.0.1 --port 8000
 ```
 
 Then open:
@@ -226,7 +154,8 @@ Then open:
 The web and API are read-only over fixed SQLite daily facts, registered SQLite
 cluster models, retained Waites events, and bounded Maximo work-order lookups.
 Each service instance is bound to one configured source; start the live data
-directory with `uv run sensor-data serve --source api`. A source mismatch or an
+directory by setting `INSY_SOURCE_MODE=api` and then running
+`uv run sensor-data serve`. A source mismatch or an
 incomplete store migration is rejected at startup. Snapshot trend coverage reports finite values
 for the selected metric field without imputing missing values; clicking an observed
 trend point selects that Snapshot date. Build snapshots first; the Trend tab reads
@@ -236,8 +165,8 @@ chart series aggregated by the server. `/api/trends` bounds its detail collectio
 registered-model readiness, so a model-missing date can still render Snapshot,
 Trend, Events, and Measurements. Maximo is queried only when an Asset Tree,
 equipment, or sensor is selected; All Equipment never initiates a Maximo query.
-Run `cluster registry build-grid` for a new range or `cluster registry rebuild-date`
-after patching one snapshot. The browser never chooses a model `k`; an incompatible
+Run `sync` for new dates or `rebuild --component models` after patching a snapshot.
+The browser never chooses a model `k`; an incompatible
 compatibility parameter is rejected rather than silently selecting another model.
 
 ## Source API

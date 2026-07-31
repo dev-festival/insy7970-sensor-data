@@ -19,6 +19,13 @@ def build_health_report(settings: AppSettings) -> dict[str, Any]:
             "facility_id": settings.waites_facility_id,
             "token_configured": settings.waites_token_configured,
         },
+        "synchronization": {
+            "source_timezone": settings.source_timezone,
+            "configured_start_date": (
+                settings.sync_start_date.isoformat() if settings.sync_start_date else None
+            ),
+            "raw_retention_mode": settings.raw_retention_mode,
+        },
         "maximo": {
             "dsn": settings.maximo_dsn,
             "schema": settings.maximo_schema,

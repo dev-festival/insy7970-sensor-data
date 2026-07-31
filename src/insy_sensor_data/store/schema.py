@@ -17,7 +17,7 @@ from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.store.errors import StoreMigrationRequiredError
 
 
-OPERATIONAL_SCHEMA_VERSION = 8
+OPERATIONAL_SCHEMA_VERSION = 9
 SNAPSHOT_MIGRATION_VERSION = 7
 LEGACY_SNAPSHOT_TABLE = "sensor_daily_snapshots"
 FIXED_SNAPSHOT_TABLE = "sensor_daily_facts"
@@ -119,6 +119,59 @@ def initialize_operational_schema(connection: sqlite3.Connection) -> None:
             detail TEXT,
             PRIMARY KEY (source, source_date, facility_id, state, transitioned_at)
         );
+
+        CREATE TABLE IF NOT EXISTS sync_control (
+            source TEXT PRIMARY KEY,
+            start_date TEXT NOT NULL,
+            current_through TEXT,
+            source_timezone TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sync_date_runs (
+            source TEXT NOT NULL,
+            source_date TEXT NOT NULL,
+            facility_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            data_status TEXT NOT NULL,
+            model_status TEXT NOT NULL,
+            retention_status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            error TEXT,
+            PRIMARY KEY (source, source_date)
+        );
+
+        CREATE TABLE IF NOT EXISTS admin_writer_lease (
+            lease_id INTEGER PRIMARY KEY CHECK (lease_id = 1),
+            owner_token TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            process_id INTEGER NOT NULL,
+            host_name TEXT NOT NULL,
+            acquired_at TEXT NOT NULL,
+            heartbeat_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS admin_action_audit (
+            action_id TEXT PRIMARY KEY,
+            operation TEXT NOT NULL,
+            source TEXT NOT NULL,
+            start_date TEXT,
+            end_date TEXT,
+            component TEXT,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            summary_json TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sync_date_runs_status
+            ON sync_date_runs (source, status, source_date);
+        CREATE INDEX IF NOT EXISTS idx_admin_action_audit_source
+            ON admin_action_audit (source, started_at);
         """
     )
     _ensure_column(connection, "waites_ingestion_ledger", "ingestion_state", "TEXT")

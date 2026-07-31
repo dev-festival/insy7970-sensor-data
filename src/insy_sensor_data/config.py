@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Mapping
 import os
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 DEFAULT_WAITES_BASE_URL = "https://data.api.waites.net/v1_1"
 VALID_SOURCE_MODES = {"mock", "api"}
+VALID_RAW_RETENTION_MODES = {"release", "compress", "keep"}
 
 
 @dataclass(frozen=True)
@@ -19,6 +22,9 @@ class AppSettings:
     waites_base_url: str = DEFAULT_WAITES_BASE_URL
     waites_access_token: str = ""
     waites_facility_id: int = 679
+    source_timezone: str = "America/Chicago"
+    sync_start_date: date | None = None
+    raw_retention_mode: str = "release"
     maximo_dsn: str = "MaximoMAS9"
     maximo_schema: str = "MAXIMO"
     maximo_site_id: str = "HMA"
@@ -39,6 +45,21 @@ class AppSettings:
             allowed = ", ".join(sorted(VALID_SOURCE_MODES))
             raise ValueError(f"INSY_SOURCE_MODE must be one of: {allowed}")
 
+        source_timezone = env.get("INSY_SOURCE_TIMEZONE", cls.source_timezone).strip()
+        try:
+            ZoneInfo(source_timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(
+                f"INSY_SOURCE_TIMEZONE is not a recognized timezone: {source_timezone}"
+            ) from exc
+        raw_retention_mode = env.get(
+            "INSY_RAW_RETENTION",
+            cls.raw_retention_mode,
+        ).strip().lower()
+        if raw_retention_mode not in VALID_RAW_RETENTION_MODES:
+            allowed = ", ".join(sorted(VALID_RAW_RETENTION_MODES))
+            raise ValueError(f"INSY_RAW_RETENTION must be one of: {allowed}")
+
         return cls(
             app_env=env.get("INSY_APP_ENV", cls.app_env),
             source_mode=source_mode,
@@ -46,6 +67,9 @@ class AppSettings:
             waites_base_url=env.get("WAITES_BASE_URL", cls.waites_base_url),
             waites_access_token=env.get("WAITES_ACCESS_TOKEN", cls.waites_access_token),
             waites_facility_id=_get_int(env, "WAITES_FACILITY_ID", cls.waites_facility_id),
+            source_timezone=source_timezone,
+            sync_start_date=_get_date(env, "INSY_SYNC_START_DATE"),
+            raw_retention_mode=raw_retention_mode,
             maximo_dsn=env.get("MAXIMO_DSN", cls.maximo_dsn),
             maximo_schema=env.get("MAXIMO_SCHEMA", cls.maximo_schema).strip() or cls.maximo_schema,
             maximo_site_id=env.get("MAXIMO_SITE_ID", cls.maximo_site_id).strip() or cls.maximo_site_id,
@@ -104,3 +128,13 @@ def _get_positive_int(env: Mapping[str, str], key: str, default: int) -> int:
     if value < 1:
         raise ValueError(f"{key} must be greater than zero")
     return value
+
+
+def _get_date(env: Mapping[str, str], key: str) -> date | None:
+    raw_value = env.get(key, "").strip()
+    if not raw_value:
+        return None
+    try:
+        return date.fromisoformat(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{key} must use YYYY-MM-DD format") from exc

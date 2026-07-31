@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Any
+from time import perf_counter
 
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.maximo.queries import render_workorder_query
@@ -55,6 +56,41 @@ def fetch_asset_workorders(
         return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
     except pyodbc.Error as exc:  # pragma: no cover - requires a DB2/ODBC installation
         raise MaximoDatabaseError(f"Maximo DB2 query failed: {exc}") from exc
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def check_maximo_connection(settings: AppSettings) -> dict[str, Any]:
+    """Run one bounded read-only DB2 expression for explicit doctor diagnostics."""
+    try:
+        import pyodbc
+    except ImportError as exc:  # pragma: no cover - dependency is installed in production
+        return {"status": "unavailable", "error": str(exc), "elapsed_ms": 0.0}
+
+    connection = None
+    started = perf_counter()
+    try:
+        connection = pyodbc.connect(
+            build_connection_string(settings),
+            timeout=settings.maximo_query_timeout_seconds,
+        )
+        cursor = connection.cursor()
+        _set_statement_timeout(cursor, settings.maximo_query_timeout_seconds, pyodbc.Error)
+        cursor.execute("VALUES 1")
+        cursor.fetchone()
+        return {
+            "status": "available",
+            "elapsed_ms": round((perf_counter() - started) * 1000, 2),
+            "timeout_seconds": settings.maximo_query_timeout_seconds,
+        }
+    except pyodbc.Error as exc:  # pragma: no cover - requires a DB2/ODBC installation
+        return {
+            "status": "unavailable",
+            "error": f"Maximo DB2 connectivity check failed: {exc}",
+            "elapsed_ms": round((perf_counter() - started) * 1000, 2),
+            "timeout_seconds": settings.maximo_query_timeout_seconds,
+        }
     finally:
         if connection is not None:
             connection.close()

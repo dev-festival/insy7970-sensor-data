@@ -6,6 +6,7 @@ from typing import Any
 
 from insy_sensor_data.artifacts import write_csv_rows, write_json
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.clustering.registry import list_registered_cluster_models
 from insy_sensor_data.snapshots.schema import SNAPSHOT_FIELDS, SNAPSHOT_METADATA_FIELDS
 from insy_sensor_data.snapshots.trends import (
     EQUIPMENT_TREND_FIELDS,
@@ -13,6 +14,30 @@ from insy_sensor_data.snapshots.trends import (
     _equipment_trends,
 )
 from insy_sensor_data.store.snapshots import load_snapshot_view, query_trend_rows
+from insy_sensor_data.store.events import query_waites_events
+
+
+EVENT_EXPORT_FIELDS = [
+    "date",
+    "provider",
+    "event_id",
+    "provider_created_at",
+    "provider_updated_at",
+    "first_seen_date",
+    "last_seen_date",
+    "work_order",
+    "work_order_status",
+    "sensor_id",
+    "type",
+    "status",
+    "installation_point_id",
+    "equipment_id",
+    "asset_number",
+    "title",
+    "description",
+    "urgency",
+    "closed_at",
+]
 
 
 def export_snapshot_csv(
@@ -21,11 +46,18 @@ def export_snapshot_csv(
     run_date: date,
     source: str,
     destination: Path,
+    equipment_id: str | None = None,
+    installation_point_id: str | None = None,
+    customer_asset_id: str | None = None,
 ) -> dict[str, Any]:
+    _validate_export_destination(settings, destination)
     payload = load_snapshot_view(
         settings,
         run_date=run_date,
         source=source,
+        equipment_id=equipment_id,
+        installation_point_id=installation_point_id,
+        customer_asset_id=customer_asset_id,
         fields=SNAPSHOT_FIELDS,
     )
     write_csv_rows(destination, payload["rows"], SNAPSHOT_FIELDS)
@@ -35,6 +67,11 @@ def export_snapshot_csv(
         "destination": destination.as_posix(),
         "row_count": len(payload["rows"]),
         "fields": SNAPSHOT_FIELDS,
+        "scope": {
+            "equipment_id": equipment_id,
+            "installation_point_id": installation_point_id,
+            "customer_asset_id": customer_asset_id,
+        },
         "data_revision": payload["data_revision"],
     }
 
@@ -46,7 +83,11 @@ def export_trend_csvs(
     end_date: date,
     source: str,
     destination: Path,
+    equipment_id: str | None = None,
+    installation_point_id: str | None = None,
+    customer_asset_id: str | None = None,
 ) -> dict[str, Any]:
+    _validate_export_destination(settings, destination)
     value_fields = [field for field in SNAPSHOT_FIELDS if field not in SNAPSHOT_METADATA_FIELDS]
     queried = query_trend_rows(
         settings,
@@ -54,6 +95,9 @@ def export_trend_csvs(
         end_date=end_date,
         source=source,
         value_fields=value_fields,
+        equipment_ids={equipment_id} if equipment_id else None,
+        installation_point_ids={installation_point_id} if installation_point_id else None,
+        customer_asset_id=customer_asset_id,
     )
     sensor_rows = [
         {field: row.get(field) for field in SENSOR_TREND_FIELDS}
@@ -75,6 +119,11 @@ def export_trend_csvs(
         "equipment_record_count": len(equipment_rows),
         "skipped_dates": queried["skipped_dates"],
         "data_revision": queried["data_revision"],
+        "scope": {
+            "equipment_id": equipment_id,
+            "installation_point_id": installation_point_id,
+            "customer_asset_id": customer_asset_id,
+        },
     }
     write_json(metadata_path, metadata)
     return {
@@ -83,3 +132,76 @@ def export_trend_csvs(
         "equipment_trends_path": equipment_path.as_posix(),
         "metadata_path": metadata_path.as_posix(),
     }
+
+
+def export_events_csv(
+    settings: AppSettings,
+    *,
+    start_date: date,
+    end_date: date,
+    source: str,
+    destination: Path,
+    equipment_id: str | None = None,
+    installation_point_id: str | None = None,
+) -> dict[str, Any]:
+    _validate_export_destination(settings, destination)
+    payload = query_waites_events(
+        settings,
+        source=source,
+        start_date=start_date,
+        end_date=end_date,
+        equipment_ids={equipment_id} if equipment_id else None,
+        installation_point_ids={installation_point_id} if installation_point_id else None,
+    )
+    write_csv_rows(destination, payload["rows"], EVENT_EXPORT_FIELDS)
+    return {
+        "source": source,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "destination": destination.as_posix(),
+        "row_count": len(payload["rows"]),
+        "fields": EVENT_EXPORT_FIELDS,
+        "scope": {
+            "equipment_id": equipment_id,
+            "installation_point_id": installation_point_id,
+        },
+        "coverage": payload["coverage"],
+        "data_revision": payload["data_revision"],
+    }
+
+
+def export_active_models_json(
+    settings: AppSettings,
+    *,
+    start_date: date,
+    end_date: date,
+    source: str,
+    destination: Path,
+) -> dict[str, Any]:
+    _validate_export_destination(settings, destination)
+    payload = list_registered_cluster_models(
+        settings,
+        source=source,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    write_json(destination, payload)
+    return {
+        "source": source,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "destination": destination.as_posix(),
+        "model_count": payload["count"],
+        "ready_count": payload["ready_count"],
+        "stale_count": payload["stale_count"],
+        "active_model_policy": payload["active_model_policy"],
+    }
+
+
+def _validate_export_destination(settings: AppSettings, destination: Path) -> None:
+    data_dir = settings.data_dir.resolve()
+    resolved = destination.resolve()
+    if resolved == data_dir or data_dir in resolved.parents:
+        raise ValueError(
+            "Export destination must be outside the configured operational data directory."
+        )

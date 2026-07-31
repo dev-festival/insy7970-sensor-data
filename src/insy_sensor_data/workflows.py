@@ -54,7 +54,7 @@ def run_mock_day_workflow(
         input_mode=snapshot_input,
     )
     load_summary = load_summary or snapshot_summary["metadata"]["store_load"]
-    retention_summary = _apply_retention(
+    retention_summary = apply_retention(
         settings=settings,
         run_date=run_date,
         source="mock",
@@ -223,7 +223,7 @@ def run_api_day_workflow(
         input_mode=snapshot_input,
     )
     load_summary = load_summary or snapshot_summary["metadata"]["store_load"]
-    retention_summary = _apply_retention(
+    retention_summary = apply_retention(
         settings=settings,
         run_date=run_date,
         source="api",
@@ -744,7 +744,7 @@ def _run_existing_raw_day_workflow(
         input_mode=snapshot_input,
     )
     load_summary = load_summary or snapshot_summary["metadata"]["store_load"]
-    retention_summary = _apply_retention(
+    retention_summary = apply_retention(
         settings=settings,
         run_date=run_date,
         source=source,
@@ -797,7 +797,7 @@ def _reusable_snapshot(settings: AppSettings, run_date: date, source: str) -> di
     }
 
 
-def _apply_retention(
+def apply_retention(
     settings: AppSettings,
     run_date: date,
     source: str,

@@ -39,7 +39,7 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.6.2](0.6.2-single-operational-store.md) | Single operational store | Fixed daily schema, direct durable-fact ingestion, and explicit exports instead of routine file mirrors |
 | [0.6.3](0.6.3-registered-model-convergence.md) | Registered model convergence | One store-backed model pipeline with versioned readiness and gap-tolerant drift |
 | [0.6.4](0.6.4-web-workflow-reshaping.md) | Web workflow reshaping | Review, Fleet Trends, Cluster, and Drift over compact service-owned state |
-| [0.6.5](0.6.5-admin-cli-contraction.md) | Admin CLI contraction | Five operator-oriented commands for serving, synchronization, rebuild, diagnosis, and export |
+| [0.6.5](0.6.5-admin-cli-contraction.md) | Admin CLI contraction and sustainment sync | Five operator-oriented commands plus scheduler-ready catch-up through yesterday |
 | [0.6.6](0.6.6-legacy-retirement-and-release-hardening.md) | Legacy retirement and release hardening | Recoverable removal of redundant storage, code, commands, and documentation |
 
 ## 0.6.x Reshaping Phase
@@ -60,10 +60,12 @@ Each sprint keeps the legacy path needed to roll back until its replacement has
 passed parity. Historical files and tables are not deleted before `0.6.6`, and that
 cleanup is dry-run-first, manifest-driven, backed up, and explicitly confirmed.
 
-The phase deliberately defers user profiles, authentication, scheduling, caching,
-and deployment expansion. Adding those features before the data and request paths
-are consolidated would make the migration harder and preserve the wrong
-abstractions.
+The phase deliberately defers user profiles, authentication, scheduler/service
+installation, caching, and deployment expansion. Sprint `0.6.5` does include the
+self-planning `sync` command a scheduler invokes; only registering and credentialing
+the operating-system job is deferred. Adding broader deployment features before the
+data and request paths are consolidated would make the migration harder and preserve
+the wrong abstractions.
 
 ## Sprint Style
 

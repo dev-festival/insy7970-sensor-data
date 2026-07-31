@@ -39,9 +39,201 @@ def test_cli_serve_help_is_discoverable() -> None:
     result = runner.invoke(app, ["serve", "--help"])
 
     assert result.exit_code == 0
-    assert "--source" in result.stdout
+    assert "--env-file" in result.stdout
+    assert "--source" not in result.stdout
     assert "--host" in result.stdout
     assert "--port" in result.stdout
+
+
+def test_cli_primary_help_contains_only_operator_commands() -> None:
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    candidates = {
+            "serve",
+            "sync",
+            "rebuild",
+            "doctor",
+            "export",
+            "health",
+            "waites",
+            "raw",
+            "store",
+            "snapshot",
+            "trend",
+            "workflow",
+            "report",
+            "cluster",
+            "maximo",
+    }
+    command_lines = {
+        candidate
+        for candidate in candidates
+        if any(
+            line.strip().startswith(f"│ {candidate} ")
+            for line in result.stdout.splitlines()
+        )
+    }
+    assert command_lines == {"serve", "sync", "rebuild", "doctor", "export"}
+
+
+def test_cli_sync_doctor_rebuild_and_exports_use_operational_surface(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"INSY_DATA_DIR={data_dir}",
+                "INSY_SOURCE_MODE=mock",
+                "INSY_SYNC_START_DATE=2025-07-09",
+                "INSY_RAW_RETENTION=release",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    sync_result = runner.invoke(
+        app,
+        [
+            "sync",
+            "--date",
+            "2025-07-09",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert sync_result.exit_code == 0
+    synced = json.loads(sync_result.stdout)
+    assert synced["status"] == "advanced"
+    assert synced["dates"][0]["models"] == "built"
+
+    doctor_result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-09",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert doctor_result.exit_code == 0
+    diagnosed = json.loads(doctor_result.stdout)
+    assert diagnosed["status"] == "ok"
+    assert diagnosed["synchronization"]["issue_count"] == 0
+
+    rebuild_result = runner.invoke(
+        app,
+        [
+            "rebuild",
+            "--date",
+            "2025-07-09",
+            "--component",
+            "models",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    assert rebuild_result.exit_code == 0
+    rebuilt = json.loads(rebuild_result.stdout)
+    assert rebuilt["component"] == "models"
+    assert rebuilt["results"][0]["readiness"]["status"] == "ready"
+
+    export_dir = tmp_path / "exports"
+    export_commands = {
+        "snapshots": [
+            "--date",
+            "2025-07-09",
+            "--output",
+            str(export_dir / "snapshot.csv"),
+        ],
+        "trends": [
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-09",
+            "--output",
+            str(export_dir / "trends"),
+        ],
+        "events": [
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-09",
+            "--output",
+            str(export_dir / "events.csv"),
+        ],
+        "models": [
+            "--start-date",
+            "2025-07-09",
+            "--end-date",
+            "2025-07-09",
+            "--output",
+            str(export_dir / "models.json"),
+        ],
+    }
+    for domain, arguments in export_commands.items():
+        result = runner.invoke(
+            app,
+            ["export", domain, *arguments, "--json", "--env-file", str(env_file)],
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["source"] == "mock"
+
+    assert (export_dir / "snapshot.csv").is_file()
+    assert (export_dir / "trends" / "sensor_trends.csv").is_file()
+    assert (export_dir / "events.csv").is_file()
+    assert (export_dir / "models.json").is_file()
+
+
+def test_hidden_legacy_command_emits_replacement_guidance(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"INSY_DATA_DIR={tmp_path / 'data'}\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["health", "--env-file", str(env_file)])
+
+    assert result.exit_code == 0
+    assert "Deprecated command 'health'" in result.stderr
+    assert json.loads(result.stdout)["status"] == "ok"
+
+
+def test_cli_admin_json_failures_are_machine_readable_and_secret_safe(tmp_path: Path) -> None:
+    sync_env = tmp_path / "sync.env"
+    sync_env.write_text(
+        f"INSY_DATA_DIR={tmp_path / 'sync-data'}\nWAITES_ACCESS_TOKEN=do-not-print\n",
+        encoding="utf-8",
+    )
+
+    sync_result = runner.invoke(
+        app,
+        ["sync", "--json", "--env-file", str(sync_env)],
+    )
+
+    assert sync_result.exit_code == 1
+    sync_payload = json.loads(sync_result.stdout)
+    assert sync_payload["operation"] == "sync"
+    assert sync_payload["status"] == "failed"
+    assert "do-not-print" not in sync_result.output
+
+    doctor_env = tmp_path / "doctor.env"
+    doctor_env.write_text(
+        f"INSY_DATA_DIR={tmp_path / 'missing-data'}\n",
+        encoding="utf-8",
+    )
+    doctor_result = runner.invoke(
+        app,
+        ["doctor", "--json", "--env-file", str(doctor_env)],
+    )
+
+    assert doctor_result.exit_code == 1
+    doctor_payload = json.loads(doctor_result.stdout)
+    assert doctor_payload["status"] == "error"
+    assert doctor_payload["store"]["status"] == "missing"
 
 
 def test_cli_waites_fetch_writes_mock_artifacts(tmp_path: Path) -> None:

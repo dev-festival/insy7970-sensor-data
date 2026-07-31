@@ -443,6 +443,8 @@ def backfill_waites_events(
     settings: AppSettings,
     *,
     source: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> dict[str, Any]:
     """Import retained action items and report dates needing a narrow re-fetch."""
     selected_source = _validate_source(source)
@@ -452,14 +454,24 @@ def backfill_waites_events(
     results: list[dict[str, Any]] = []
     imported_observation_count = 0
     with connect_observation_store(settings) as connection:
+        clauses = ["source = ?"]
+        params: list[Any] = [selected_source]
+        if start_date is not None:
+            clauses.append("source_date >= ?")
+            params.append(start_date.isoformat())
+        if end_date is not None:
+            clauses.append("source_date <= ?")
+            params.append(end_date.isoformat())
+        if start_date is not None and end_date is not None and end_date < start_date:
+            raise ValueError("end_date must be on or after start_date")
         ledger_rows = connection.execute(
-            """
+            f"""
             SELECT source_date, updated_at, endpoint_counts_json
             FROM waites_ingestion_ledger
-            WHERE source = ?
+            WHERE {' AND '.join(clauses)}
             ORDER BY source_date
             """,
-            (selected_source,),
+            tuple(params),
         ).fetchall()
         for ledger in ledger_rows:
             source_date = str(ledger["source_date"])
