@@ -99,6 +99,26 @@ Copy-Item .env.example .env
 
 Edit `.env` for local values. Keep `.env` out of Git.
 
+The source mode and data directory are a matched pair: one operational data
+directory belongs to one source. For the existing live/API-backed store, use:
+
+```env
+INSY_SOURCE_MODE=api
+INSY_DATA_DIR=data
+```
+
+The example configuration defaults to the committed mock fixture. If you want a
+separate mock instance, give it its own directory instead of pointing mock mode
+at the API store:
+
+```env
+INSY_SOURCE_MODE=mock
+INSY_DATA_DIR=data-mock
+```
+
+Starting the service with a source that does not match the configured data
+directory is rejected so the two stores cannot be mixed accidentally.
+
 ## CLI
 
 ```powershell
