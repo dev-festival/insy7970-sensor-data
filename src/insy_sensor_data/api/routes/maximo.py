@@ -18,7 +18,6 @@ def read_asset_history(
     assetnum: str,
     start_date: str,
     end_date: str,
-    source: str | None = None,
 ) -> dict[str, Any]:
     try:
         return load_asset_history(
@@ -26,7 +25,7 @@ def read_asset_history(
             assetnums=[assetnum],
             start_date=date.fromisoformat(start_date),
             end_date=date.fromisoformat(end_date),
-            source=source or request.app.state.settings.source_mode,
+            source=request.app.state.settings.source_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

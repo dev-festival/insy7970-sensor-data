@@ -6,10 +6,15 @@ from math import isfinite, sqrt
 from random import Random
 from typing import Any
 
-from insy_sensor_data.clustering.features import IDENTIFIER_FIELDS
-
-
 ENGINE_SCHEMA_VERSION = 1
+IDENTIFIER_FIELDS = [
+    "installation_point_id",
+    "installation_point_name",
+    "equipment_id",
+    "equipment_name",
+    "sensor_id",
+    "customer_asset_id",
+]
 
 
 @dataclass(frozen=True)

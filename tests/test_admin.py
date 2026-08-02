@@ -18,7 +18,6 @@ from insy_sensor_data.admin import (
 )
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.store.exports import export_snapshot_csv
-from insy_sensor_data.workflows import run_mock_day_workflow
 
 
 RUN_NOW = datetime(2025, 7, 10, 12, tzinfo=UTC)
@@ -68,51 +67,6 @@ def test_sync_builds_complete_day_and_bare_sync_is_non_mutating_noop(tmp_path: P
         assert connection.execute(
             "SELECT COUNT(*) FROM admin_action_audit"
         ).fetchone()[0] == before_audits
-
-
-def test_sync_matches_legacy_day_durable_facts(tmp_path: Path) -> None:
-    legacy_settings = AppSettings(
-        data_dir=tmp_path / "legacy-data",
-        source_mode="mock",
-        raw_retention_mode="release",
-    )
-    new_settings = _settings(tmp_path / "new", sync_start_date=RUN_DATE)
-    run_mock_day_workflow(
-        legacy_settings,
-        run_date=RUN_DATE,
-        raw_retention="release",
-    )
-    run_sync(new_settings, run_date=RUN_DATE, now=RUN_NOW)
-
-    legacy_database = legacy_settings.data_dir / "processed" / "observations.sqlite"
-    new_database = new_settings.data_dir / "processed" / "observations.sqlite"
-    compared_tables = (
-        "sensor_daily_facts",
-        "waites_asset_tree_reference",
-        "waites_equipment_reference",
-        "waites_installation_point_reference",
-        "waites_events",
-        "waites_event_coverage",
-        "waites_ingestion_ledger",
-    )
-    with sqlite3.connect(legacy_database) as legacy, sqlite3.connect(new_database) as new:
-        for table in compared_tables:
-            legacy_count = legacy.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            new_count = new.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            assert new_count == legacy_count, table
-        columns = [
-            row[1]
-            for row in legacy.execute("PRAGMA table_info(sensor_daily_facts)").fetchall()
-            if row[1] != "built_at"
-        ]
-        projection = ", ".join(f'"{column}"' for column in columns)
-        legacy_rows = legacy.execute(
-            f"SELECT {projection} FROM sensor_daily_facts ORDER BY installation_point_id"
-        ).fetchall()
-        new_rows = new.execute(
-            f"SELECT {projection} FROM sensor_daily_facts ORDER BY installation_point_id"
-        ).fetchall()
-        assert new_rows == legacy_rows
 
 
 def test_sync_requires_start_boundary_and_rejects_current_date(tmp_path: Path) -> None:
@@ -276,7 +230,7 @@ def test_doctor_reports_healthy_current_store(tmp_path: Path) -> None:
     report = build_doctor_report(settings, now=RUN_NOW)
 
     assert report["status"] == "ok"
-    assert report["store"]["schema_version"] == 9
+    assert report["store"]["schema_version"] == 10
     assert report["synchronization"]["is_current"] is True
     assert report["synchronization"]["snapshot_gaps"] == []
     assert report["synchronization"]["event_gaps"] == []

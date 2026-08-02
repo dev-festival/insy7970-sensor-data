@@ -2,30 +2,33 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import importlib.util
 import json
 import sqlite3
 
 from fastapi.testclient import TestClient
 
 from insy_sensor_data.api.main import create_app
-from insy_sensor_data.artifact_views import list_equipment_tree_view
 from insy_sensor_data.clustering.registry import build_cluster_model_grid
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import connect_observation_store
+from insy_sensor_data.raw_lifecycle import apply_retention
+from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.store.events import (
     backfill_waites_events,
     query_waites_events,
     upsert_waites_events,
 )
 from insy_sensor_data.store.references import list_equipment_tree
-from insy_sensor_data.workflows import run_mock_day_workflow
+from insy_sensor_data.waites.fetch import fetch_waites
+from insy_sensor_data.waites.validate import validate_waites_raw
 
 
 def test_store_errors_are_visible_for_absent_corrupt_and_partial_schemas(
     tmp_path: Path,
 ) -> None:
     settings = AppSettings(data_dir=tmp_path / "missing")
-    missing = TestClient(create_app(settings=settings)).get("/api/artifacts")
+    missing = TestClient(create_app(settings=settings)).get("/api/context")
     assert missing.status_code == 404
     assert "Operational SQLite store is missing" in missing.json()["detail"]
 
@@ -33,7 +36,7 @@ def test_store_errors_are_visible_for_absent_corrupt_and_partial_schemas(
     corrupt_path = corrupt_settings.data_dir / "processed" / "observations.sqlite"
     corrupt_path.parent.mkdir(parents=True)
     corrupt_path.write_text("not a sqlite database", encoding="utf-8")
-    corrupt = TestClient(create_app(settings=corrupt_settings)).get("/api/artifacts")
+    corrupt = TestClient(create_app(settings=corrupt_settings)).get("/api/context")
     assert corrupt.status_code == 503
     assert "corrupt" in corrupt.json()["detail"].lower()
 
@@ -64,7 +67,7 @@ def test_store_errors_are_visible_for_absent_corrupt_and_partial_schemas(
             """
         )
     partial = TestClient(create_app(settings=partial_settings)).get(
-        "/api/snapshots/2025-07-09?source=mock"
+        "/api/snapshots/2025-07-09"
     )
     assert partial.status_code == 409
     assert "missing columns" in partial.json()["detail"]
@@ -174,27 +177,11 @@ def test_event_backfill_distinguishes_import_refetch_and_empty_dates(
     tmp_path: Path,
 ) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
-    run_mock_day_workflow(
-        settings=settings,
-        run_date=date(2025, 7, 9),
-        raw_retention="release",
-    )
-    run_mock_day_workflow(
-        settings=settings,
-        run_date=date(2025, 7, 10),
-        raw_retention="release",
-    )
-    run_mock_day_workflow(
-        settings=settings,
-        run_date=date(2025, 7, 11),
-        raw_retention="keep",
-    )
+    _prepare_day(settings, date(2025, 7, 9), "release")
+    _prepare_day(settings, date(2025, 7, 10), "release")
+    _prepare_day(settings, date(2025, 7, 11), "keep")
     with connect_observation_store(settings) as connection:
         connection.execute("DELETE FROM waites_events")
-        connection.execute(
-            "DELETE FROM waites_action_items WHERE source_date IN (?, ?)",
-            ("2025-07-09", "2025-07-10"),
-        )
         ledger = connection.execute(
             """
             SELECT endpoint_counts_json
@@ -249,7 +236,6 @@ def test_equipment_tree_repository_uses_direct_store_references(tmp_path: Path) 
 
 def test_operational_routes_do_not_read_legacy_artifacts(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     _prepare_operational_window(settings)
@@ -262,50 +248,32 @@ def test_operational_routes_do_not_read_legacy_artifacts(
         ks=[5],
     )
 
-    def artifact_read_forbidden(*_args, **_kwargs):
-        raise AssertionError("normal FastAPI path opened a legacy artifact")
-
-    monkeypatch.setattr(
-        "insy_sensor_data.artifact_views.read_csv_rows",
-        artifact_read_forbidden,
-    )
-    monkeypatch.setattr(
-        "insy_sensor_data.artifact_views.read_json",
-        artifact_read_forbidden,
-    )
-    monkeypatch.setattr(
-        "insy_sensor_data.snapshots.build.load_snapshot",
-        artifact_read_forbidden,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "insy_sensor_data.snapshots.trends.load_trends",
-        artifact_read_forbidden,
-    )
+    assert importlib.util.find_spec("insy_sensor_data.artifact_views") is None
+    assert importlib.util.find_spec("insy_sensor_data.reports") is None
+    assert importlib.util.find_spec("insy_sensor_data.workflows") is None
     import insy_sensor_data.clustering.registry as registry
 
     assert not hasattr(registry, "read_csv_rows")
 
     client = TestClient(create_app(settings=settings))
     paths = [
-        "/api/artifacts",
-        "/api/equipment-tree?source=mock&start_date=2025-07-09&end_date=2025-07-11",
-        "/api/snapshots/2025-07-09?source=mock",
-        "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11",
+        "/api/context",
+        "/api/equipment-tree?start_date=2025-07-09&end_date=2025-07-11",
+        "/api/snapshots/2025-07-09",
+        "/api/trends?start_date=2025-07-09&end_date=2025-07-11",
         (
-            "/api/snapshot-review/2025-07-09?source=mock"
-            "&start_date=2025-07-09&end_date=2025-07-11"
+            "/api/snapshot-review/2025-07-09?start_date=2025-07-09"
+            "&end_date=2025-07-11"
             "&metric=rms_accel&dimension=x"
         ),
-        "/api/cluster-models?source=mock&start_date=2025-07-09&end_date=2025-07-11",
-        "/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel",
+        "/api/cluster-models?start_date=2025-07-09&end_date=2025-07-11",
+        "/api/clusters?date=2025-07-09&dimension=x",
         (
-            "/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10"
-            "&feature_space=x_accel"
+            "/api/drift?from_date=2025-07-09&to_date=2025-07-10&dimension=x"
         ),
         (
-            "/api/cluster-windows?source=mock&start_date=2025-07-09"
-            "&end_date=2025-07-11&feature_space=x_accel"
+            "/api/cluster-windows?start_date=2025-07-09"
+            "&end_date=2025-07-11&dimension=x"
         ),
     ]
 
@@ -316,11 +284,7 @@ def test_operational_routes_do_not_read_legacy_artifacts(
 
 def test_operational_scope_queries_use_covering_indexes(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
-    run_mock_day_workflow(
-        settings=settings,
-        run_date=date(2025, 7, 9),
-        raw_retention="keep",
-    )
+    _prepare_day(settings, date(2025, 7, 9), "keep")
     with connect_observation_store(settings) as connection:
         equipment_plan = connection.execute(
             """
@@ -370,11 +334,29 @@ def _prepare_operational_window(settings: AppSettings) -> None:
         date(2025, 7, 10),
         date(2025, 7, 11),
     ]:
-        run_mock_day_workflow(
-            settings=settings,
-            run_date=run_date,
-            raw_retention="keep",
-        )
+        _prepare_day(settings, run_date, "keep")
+
+
+def _prepare_day(settings: AppSettings, run_date: date, retention: str) -> None:
+    fetch_waites(
+        settings=settings,
+        run_date=run_date,
+        facility_id=settings.waites_facility_id,
+        source=settings.source_mode,
+    )
+    validate_waites_raw(settings=settings, run_date=run_date, source=settings.source_mode)
+    snapshot = build_sensor_snapshot(
+        settings=settings,
+        run_date=run_date,
+        source=settings.source_mode,
+    )
+    apply_retention(
+        settings=settings,
+        run_date=run_date,
+        source=settings.source_mode,
+        snapshot_summary=snapshot,
+        raw_retention=retention,
+    )
 
 
 def _plan_text(rows: list[sqlite3.Row]) -> str:

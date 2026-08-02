@@ -24,7 +24,7 @@ def test_build_sensor_snapshot_stores_joined_converted_stats_without_artifacts(t
 
     rows = {
         str(row["installation_point_id"]): row
-        for row in load_sensor_daily_snapshots(settings, run_date)
+        for row in load_sensor_daily_snapshots(settings, run_date, source="mock")
     }
     row = rows["201300"]
     assert row["installation_point_name"] == "Bottom Shaft - NDE"

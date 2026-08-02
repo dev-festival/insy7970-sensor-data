@@ -8,7 +8,6 @@ import json
 import sqlite3
 
 from insy_sensor_data.clustering import engine
-from insy_sensor_data.clustering.features import IDENTIFIER_FIELDS
 from insy_sensor_data.clustering.policy import (
     ACTIVE_MODEL_POLICY,
     FeatureSpaceSpec,
@@ -33,6 +32,7 @@ DEFAULT_TOLERANCE = ACTIVE_MODEL_POLICY.tolerance
 VALID_REGISTRY_SOURCES = {"mock", "api"}
 
 FEATURE_SPACE_SPECS = ACTIVE_MODEL_POLICY.feature_specs
+IDENTIFIER_FIELDS = engine.IDENTIFIER_FIELDS
 
 
 class InsufficientModelDataError(ValueError):

@@ -6,21 +6,18 @@ import pytest
 
 from insy_sensor_data.api.main import create_app
 from insy_sensor_data.clustering.registry import build_cluster_model_grid
-from insy_sensor_data.clustering.window import build_cluster_window
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.maximo.db import MaximoDatabaseError
 from insy_sensor_data.observations import (
     connect_observation_store,
-    load_waites_observations,
 )
+from insy_sensor_data.raw_lifecycle import apply_retention
 from insy_sensor_data.services.trends import (
     trend_coverage as _trend_coverage,
     trend_series as _trend_series,
 )
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
-from insy_sensor_data.snapshots.trends import build_trends
 from insy_sensor_data.waites.fetch import fetch_waites
-from insy_sensor_data.workflows import run_mock_day_workflow
 
 
 def test_health_endpoint_returns_shared_health_payload(tmp_path: Path) -> None:
@@ -113,14 +110,13 @@ def test_waites_raw_runs_endpoint_lists_available_manifests(tmp_path: Path) -> N
     assert payload["runs"][0]["record_counts"]["readings-rms"] == 21
 
 
-def test_snapshot_and_trend_endpoints_read_processed_artifacts(tmp_path: Path) -> None:
+def test_snapshot_and_trend_endpoints_read_operational_store(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
     run_date = date(2025, 7, 9)
 
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
     build_sensor_snapshot(settings=settings, run_date=run_date)
-    build_trends(settings=settings, start_date=run_date, end_date=run_date)
 
     dates_response = client.get("/api/dates")
     assert dates_response.status_code == 200
@@ -182,12 +178,11 @@ def test_trend_endpoint_reports_missing_store_facts_without_artifact_fallback(
     for run_date in [start, date(2025, 7, 10), end]:
         fetch_waites(settings=settings, run_date=run_date, facility_id=679)
         build_sensor_snapshot(settings=settings, run_date=run_date)
-    build_trends(settings=settings, start_date=start, end_date=end)
     with connect_observation_store(settings) as connection:
         connection.execute("DELETE FROM sensor_daily_facts")
         connection.commit()
 
-    response = client.get("/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11")
+    response = client.get("/api/trends?start_date=2025-07-09&end_date=2025-07-11")
 
     assert response.status_code == 404
     assert "Snapshots are unavailable" in response.json()["detail"]
@@ -202,46 +197,40 @@ def test_snapshot_endpoint_returns_404_for_missing_artifact(tmp_path: Path) -> N
     assert response.status_code == 404
 
 
-def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: Path) -> None:
+def test_context_and_equipment_endpoints_read_operational_store(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
     _prepare_mock_window(settings)
 
-    artifacts_response = client.get("/api/artifacts")
-    assert artifacts_response.status_code == 200
-    artifacts = artifacts_response.json()
-    assert artifacts["counts"]["snapshots"] == 3
-    assert artifacts["counts"]["trends"] == 1
-    assert artifacts["counts"]["clusters"] == 0
-    assert artifacts["counts"]["drift"] == 0
-    assert artifacts["counts"]["cluster_windows"] == 0
-    assert artifacts["sources"] == ["mock"]
-    assert artifacts["dimensions"] == ["temperature", "x", "y", "z"]
-    assert artifacts["ks"] == [5]
-    assert artifacts["active_model_policy"]["k"] == 5
-    assert artifacts["data_revisions"]["mock"]["store"] == "sqlite"
-    assert artifacts["latest_readiness"]["mock"] == {
+    context_response = client.get("/api/context")
+    assert context_response.status_code == 200
+    context = context_response.json()
+    assert context["source"] == "mock"
+    assert context["dimensions"] == ["x", "y", "z"]
+    assert context["active_model_policy"]["k"] == 5
+    assert context["synchronization"]["data_revision"]["store"] == "sqlite"
+    assert context["synchronization"]["latest_readiness"] == {
         "snapshot_date": "2025-07-11",
         "registered_model_date": None,
         "fully_ready_date": None,
     }
     assert [
         (row["date"], row["snapshot_ready"], row["registered_model_ready"])
-        for row in artifacts["readiness"]
+        for row in context["dates"]
     ] == [
         ("2025-07-09", True, False),
         ("2025-07-10", True, False),
         ("2025-07-11", True, False),
     ]
 
-    equipment_response = client.get("/api/equipment?source=mock")
+    equipment_response = client.get("/api/equipment")
     assert equipment_response.status_code == 200
     equipment = equipment_response.json()
     assert equipment["count"] >= 1
     assert equipment["rows"][0]["sensor_count"] >= 1
     assert "dates" in equipment["rows"][0]
 
-    tree_response = client.get("/api/equipment-tree?source=mock")
+    tree_response = client.get("/api/equipment-tree")
     assert tree_response.status_code == 200
     tree = tree_response.json()
     assert tree["asset_tree_count"] >= 1
@@ -252,7 +241,7 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     assert blanking_line["equipment"][0]["sensors"][0]["installation_point_id"]
 
     ranged_response = client.get(
-        "/api/equipment?source=mock&start_date=2025-07-10&end_date=2025-07-10"
+        "/api/equipment?start_date=2025-07-10&end_date=2025-07-10"
     )
     assert ranged_response.status_code == 200
     ranged = ranged_response.json()
@@ -261,7 +250,7 @@ def test_artifact_and_equipment_endpoints_discover_processed_outputs(tmp_path: P
     assert all(row["dates"] == ["2025-07-10"] for row in ranged["rows"])
 
     ranged_tree_response = client.get(
-        "/api/equipment-tree?source=mock&start_date=2025-07-10&end_date=2025-07-10"
+        "/api/equipment-tree?start_date=2025-07-10&end_date=2025-07-10"
     )
     assert ranged_tree_response.status_code == 200
     ranged_tree = ranged_tree_response.json()
@@ -276,7 +265,6 @@ def test_browser_context_is_compact_and_service_owned(tmp_path: Path) -> None:
     _prepare_mock_window(settings)
 
     context_response = client.get("/api/context")
-    artifacts_response = client.get("/api/artifacts")
 
     assert context_response.status_code == 200
     context = context_response.json()
@@ -292,40 +280,41 @@ def test_browser_context_is_compact_and_service_owned(tmp_path: Path) -> None:
     assert {row["key"] for row in context["metrics"]} >= {"rms_vel", "temp_sensor"}
     assert "cluster_models" not in context
     assert "drift" not in context
-    assert len(context_response.content) < len(artifacts_response.content)
+    assert len(context_response.content) < 10_000
+    assert client.get("/api/artifacts").status_code == 404
 
 
 def test_equipment_endpoint_validates_date_range(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
 
-    bad_date = client.get("/api/equipment?source=mock&start_date=bad")
+    bad_date = client.get("/api/equipment?start_date=bad")
     assert bad_date.status_code == 422
 
-    bad_tree_date = client.get("/api/equipment-tree?source=mock&start_date=bad")
+    bad_tree_date = client.get("/api/equipment-tree?start_date=bad")
     assert bad_tree_date.status_code == 422
 
     reversed_range = client.get(
-        "/api/equipment?source=mock&start_date=2025-07-11&end_date=2025-07-09"
+        "/api/equipment?start_date=2025-07-11&end_date=2025-07-09"
     )
     assert reversed_range.status_code == 422
 
 
-def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: Path) -> None:
+def test_cluster_drift_and_window_endpoints_read_registered_models(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
     _prepare_mock_window(settings)
 
-    cluster_response = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x")
+    cluster_response = client.get("/api/clusters?date=2025-07-09&dimension=x")
     assert cluster_response.status_code == 404
 
     drift_response = client.get(
-        "/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&dimension=x"
+        "/api/drift?from_date=2025-07-09&to_date=2025-07-10&dimension=x"
     )
     assert drift_response.status_code == 404
 
     window_response = client.get(
-        "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&dimension=x"
+        "/api/cluster-windows?start_date=2025-07-09&end_date=2025-07-11&dimension=x"
     )
     assert window_response.status_code == 200
     assert window_response.json()["status"] == "partial"
@@ -340,27 +329,26 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     )
 
     models_response = client.get(
-        "/api/cluster-models?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "/api/cluster-models?start_date=2025-07-09&end_date=2025-07-11"
     )
     assert models_response.status_code == 200
     models = models_response.json()
     assert models["complete_count"] == 12
     assert models["feature_spaces"] == ["x_accel", "y_vel", "z_vel", "temperature"]
     assert models["ks"] == [5]
-    readiness = client.get("/api/artifacts").json()
-    assert readiness["latest_readiness"]["mock"] == {
+    readiness = client.get("/api/context").json()
+    assert readiness["synchronization"]["latest_readiness"] == {
         "snapshot_date": "2025-07-11",
         "registered_model_date": "2025-07-11",
         "fully_ready_date": "2025-07-11",
     }
     assert all(
         row["snapshot_ready"] and row["registered_model_ready"]
-        for row in readiness["readiness"]
-        if row["source"] == "mock"
+        for row in readiness["dates"]
     )
 
     registered_cluster_response = client.get(
-        "/api/clusters?source=mock&date=2025-07-09&feature_space=x_accel"
+        "/api/clusters?date=2025-07-09&metric=rms_accel&dimension=x"
     )
     assert registered_cluster_response.status_code == 200
     registered_cluster = registered_cluster_response.json()
@@ -384,7 +372,7 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     assert "rows" not in compact_review["cluster_context"]
 
     registered_window_response = client.get(
-        "/api/cluster-windows?source=mock&start_date=2025-07-09&end_date=2025-07-11&feature_space=x_accel"
+        "/api/cluster-windows?start_date=2025-07-09&end_date=2025-07-11&metric=rms_accel&dimension=x"
     )
     assert registered_window_response.status_code == 200
     registered_window = registered_window_response.json()
@@ -393,7 +381,7 @@ def test_cluster_drift_and_window_endpoints_read_processed_artifacts(tmp_path: P
     assert len(registered_window["quality_rows"]) == 3
 
     registered_drift_response = client.get(
-        "/api/drift?source=mock&from_date=2025-07-09&to_date=2025-07-10&feature_space=x_accel&k=5"
+        "/api/drift?from_date=2025-07-09&to_date=2025-07-10&metric=rms_accel&dimension=x"
     )
     assert registered_drift_response.status_code == 200
     registered_drift = registered_drift_response.json()
@@ -477,7 +465,7 @@ def test_snapshot_review_endpoint_composes_sensor_scope(tmp_path: Path) -> None:
 
     response = client.get(
         "/api/snapshot-review/2025-07-09"
-        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "?start_date=2025-07-09&end_date=2025-07-11"
         "&scope=sensor&installation_point_id=201300&metric=rms_vel&dimension=x"
     )
 
@@ -506,7 +494,7 @@ def test_snapshot_review_reports_selected_field_coverage_and_diagnostics(tmp_pat
 
     response = client.get(
         "/api/snapshot-review/2025-07-11"
-        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "?start_date=2025-07-09&end_date=2025-07-11"
         "&scope=sensor&installation_point_id=201305&metric=rms_vel&dimension=x"
     )
 
@@ -570,7 +558,7 @@ def test_snapshot_review_rejects_a_snapshot_date_outside_the_selected_range(tmp_
     _prepare_mock_window(settings)
 
     response = client.get(
-        "/api/snapshot-review/2025-07-11?source=mock&start_date=2025-07-09&end_date=2025-07-10"
+        "/api/snapshot-review/2025-07-11?start_date=2025-07-09&end_date=2025-07-10"
     )
 
     assert response.status_code == 422
@@ -584,7 +572,7 @@ def test_snapshot_review_endpoint_composes_equipment_scope(tmp_path: Path) -> No
 
     response = client.get(
         "/api/snapshot-review/2025-07-09"
-        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "?start_date=2025-07-09&end_date=2025-07-11"
         "&scope=equipment&equipment_id=55576&metric=rms_accel&dimension=x"
     )
 
@@ -605,7 +593,7 @@ def test_snapshot_review_maximo_events_activate_at_asset_tree_scope(tmp_path: Pa
     _prepare_mock_window(settings)
 
     all_response = client.get(
-        "/api/snapshot-review/2025-07-09?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "/api/snapshot-review/2025-07-09?start_date=2025-07-09&end_date=2025-07-11"
     )
     assert all_response.status_code == 200
     assert all_response.json()["events"]["providers"]["maximo"]["status"] == "not_requested"
@@ -613,7 +601,7 @@ def test_snapshot_review_maximo_events_activate_at_asset_tree_scope(tmp_path: Pa
 
     tree_response = client.get(
         "/api/snapshot-review/2025-07-09"
-        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "?start_date=2025-07-09&end_date=2025-07-11"
         "&scope=asset_tree&asset_tree_id=12440"
     )
     assert tree_response.status_code == 200
@@ -646,7 +634,7 @@ def test_snapshot_review_maximo_events_activate_at_asset_tree_scope(tmp_path: Pa
 
     sensor_response = client.get(
         "/api/snapshot-review/2025-07-09"
-        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "?start_date=2025-07-09&end_date=2025-07-11"
         "&scope=sensor&asset_tree_id=12440&equipment_id=55577&installation_point_id=201303"
     )
     assert sensor_response.status_code == 200
@@ -664,7 +652,7 @@ def test_snapshot_review_keeps_waites_events_when_maximo_is_unavailable(tmp_path
     monkeypatch.setattr("insy_sensor_data.services.review.load_asset_history", unavailable)
     response = client.get(
         "/api/snapshot-review/2025-07-09"
-        "?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "?start_date=2025-07-09&end_date=2025-07-11"
         "&scope=asset_tree&asset_tree_id=12440"
     )
 
@@ -679,7 +667,7 @@ def test_maximo_asset_history_endpoint_returns_mock_records(tmp_path: Path) -> N
     client = TestClient(create_app(settings=AppSettings(data_dir=tmp_path / "data")))
 
     response = client.get(
-        "/api/maximo/asset-history?assetnum=LEVF412TS&start_date=2025-06-01&end_date=2025-07-09&source=mock"
+        "/api/maximo/asset-history?assetnum=LEVF412TS&start_date=2025-06-01&end_date=2025-07-09"
     )
 
     assert response.status_code == 200
@@ -696,17 +684,11 @@ def test_snapshot_review_endpoint_handles_missing_trend_and_cluster_artifacts(tm
     client = TestClient(create_app(settings=settings))
     run_date = date(2025, 7, 9)
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
-    load_waites_observations(
-        settings=settings,
-        run_date=run_date,
-        source="mock",
-    )
     build_sensor_snapshot(settings=settings, run_date=run_date)
 
     response = client.get(
         "/api/snapshot-review/2025-07-09"
-        "?source=mock&scope=sensor&installation_point_id=201300"
-        "&feature_space=x_accel&k=5"
+        "?scope=sensor&installation_point_id=201300"
     )
 
     assert response.status_code == 200
@@ -725,23 +707,28 @@ def test_cluster_endpoint_validates_parameters_and_requires_registered_model(
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
 
-    bad_dimension = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=q")
+    bad_dimension = client.get("/api/clusters?date=2025-07-09&dimension=q")
     assert bad_dimension.status_code == 422
 
-    bad_k = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x&k=4")
-    assert bad_k.status_code == 422
-
-    missing = client.get("/api/clusters?source=mock&date=2025-07-09&dimension=x")
+    missing = client.get("/api/clusters?date=2025-07-09&dimension=x")
     assert missing.status_code == 404
 
+    cluster_parameters = {
+        parameter["name"]
+        for parameter in client.get("/openapi.json").json()["paths"]["/api/clusters"]["get"]["parameters"]
+    }
+    assert "source" not in cluster_parameters
+    assert "feature_space" not in cluster_parameters
+    assert "k" not in cluster_parameters
 
-def test_snapshot_and_trend_endpoints_support_source_and_sensor_filters(tmp_path: Path) -> None:
+
+def test_snapshot_and_trend_endpoints_support_sensor_filters(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     client = TestClient(create_app(settings=settings))
     _prepare_mock_window(settings)
 
     snapshot_response = client.get(
-        "/api/snapshots/2025-07-09?source=mock&installation_point_id=201300"
+        "/api/snapshots/2025-07-09?installation_point_id=201300"
     )
     assert snapshot_response.status_code == 200
     snapshot = snapshot_response.json()
@@ -750,7 +737,7 @@ def test_snapshot_and_trend_endpoints_support_source_and_sensor_filters(tmp_path
     assert snapshot["rows"][0]["installation_point_id"] == "201300"
 
     trend_response = client.get(
-        "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11&installation_point_id=201300"
+        "/api/trends?start_date=2025-07-09&end_date=2025-07-11&installation_point_id=201300"
     )
     assert trend_response.status_code == 200
     trend = trend_response.json()
@@ -761,7 +748,7 @@ def test_snapshot_and_trend_endpoints_support_source_and_sensor_filters(tmp_path
     assert trend["detail"]["truncated"] is False
 
     scoped_response = client.get(
-        "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "/api/trends?start_date=2025-07-09&end_date=2025-07-11"
         "&scope=asset_tree&asset_tree_id=12440&metric=rms_accel&dimension=x&stat=mean"
     )
     assert scoped_response.status_code == 200
@@ -799,7 +786,7 @@ def test_trend_endpoint_projects_and_bounds_each_scope(
     _prepare_mock_window(settings)
 
     response = client.get(
-        "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-11"
+        "/api/trends?start_date=2025-07-09&end_date=2025-07-11"
         "&metric=rms_accel&dimension=x&limit=2"
         f"{scope_query}"
     )
@@ -844,19 +831,23 @@ def test_trend_endpoint_validates_detail_bounds(tmp_path: Path) -> None:
     ).status_code == 422
 
 
-def test_release_workflow_preserves_waites_events_for_snapshot_review(tmp_path: Path) -> None:
+def test_release_retention_preserves_waites_events_for_snapshot_review(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     run_date = date(2025, 7, 9)
-    run_mock_day_workflow(
+    fetch_waites(settings=settings, run_date=run_date, facility_id=679)
+    snapshot = build_sensor_snapshot(settings=settings, run_date=run_date)
+    apply_retention(
         settings=settings,
         run_date=run_date,
+        source="mock",
+        snapshot_summary=snapshot,
         raw_retention="release",
     )
     client = TestClient(create_app(settings=settings))
 
     response = client.get(
         "/api/snapshot-review/2025-07-09"
-        "?source=mock&start_date=2025-07-09&end_date=2025-07-09"
+        "?start_date=2025-07-09&end_date=2025-07-09"
         "&scope=sensor&installation_point_id=201300"
     )
 
@@ -880,12 +871,12 @@ def test_representative_web_payloads_stay_within_response_budget(tmp_path: Path)
     )
 
     trend_response = client.get(
-        "/api/trends?source=mock&start_date=2025-07-09&end_date=2025-07-30"
+        "/api/trends?start_date=2025-07-09&end_date=2025-07-30"
         "&metric=rms_vel&dimension=x"
     )
     snapshot_response = client.get(
         "/api/snapshot-review/2025-07-09"
-        "?source=mock&start_date=2025-07-09&end_date=2025-07-30"
+        "?start_date=2025-07-09&end_date=2025-07-30"
         "&metric=rms_vel&dimension=x"
     )
 
@@ -915,14 +906,7 @@ def _prepare_mock_window(settings: AppSettings) -> None:
     end = date(2025, 7, 11)
     for run_date in [start, date(2025, 7, 10), end]:
         fetch_waites(settings=settings, run_date=run_date, facility_id=679)
-        load_waites_observations(
-            settings=settings,
-            run_date=run_date,
-            source="mock",
-        )
         build_sensor_snapshot(settings=settings, run_date=run_date)
-    build_trends(settings=settings, start_date=start, end_date=end)
-    build_cluster_window(settings=settings, start_date=start, end_date=end, source="mock", dimension="x", k=4)
 
 
 def _seed_representative_sqlite_window(

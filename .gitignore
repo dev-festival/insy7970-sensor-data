@@ -16,6 +16,9 @@ reports/
 app.db
 .pytest_cache/
 .ruff_cache/
+maintenance/
+.test-tmp/
+.insy-0.6.6-rehearsal-*/
 
 
 # References

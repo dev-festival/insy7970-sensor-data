@@ -11,7 +11,7 @@ from insy_sensor_data.snapshots.schema import SNAPSHOT_FIELDS, SNAPSHOT_METADATA
 from insy_sensor_data.snapshots.trends import (
     EQUIPMENT_TREND_FIELDS,
     SENSOR_TREND_FIELDS,
-    _equipment_trends,
+    equipment_trends,
 )
 from insy_sensor_data.store.snapshots import load_snapshot_view, query_trend_rows
 from insy_sensor_data.store.events import query_waites_events
@@ -103,7 +103,7 @@ def export_trend_csvs(
         {field: row.get(field) for field in SENSOR_TREND_FIELDS}
         for row in queried["rows"]
     ]
-    equipment_rows = _equipment_trends(sensor_rows)
+    equipment_rows = equipment_trends(sensor_rows)
     sensor_path = destination / "sensor_trends.csv"
     equipment_path = destination / "equipment_trends.csv"
     metadata_path = destination / "metadata.json"

@@ -20,6 +20,7 @@ from insy_sensor_data.observations import (
     load_ingestion_ledger,
     verify_sensor_daily_snapshot,
 )
+from insy_sensor_data.raw_lifecycle import apply_retention
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
 from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.store.connection import read_store, schema_version, store_path
@@ -27,7 +28,6 @@ from insy_sensor_data.store.events import backfill_waites_events
 from insy_sensor_data.store.schema import active_snapshot_table
 from insy_sensor_data.waites.fetch import fetch_waites
 from insy_sensor_data.waites.validate import validate_waites_raw
-from insy_sensor_data.workflows import apply_retention
 
 
 WRITER_LEASE_DURATION = timedelta(hours=6)
@@ -57,7 +57,6 @@ def run_sync(
     end_date: date | None = None,
     max_days: int | None = None,
     defer_models: bool = False,
-    keep_native: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     target_date = source_yesterday(settings, now=now)
@@ -121,7 +120,6 @@ def run_sync(
                     settings,
                     run_date=selected_date,
                     defer_models=defer_models,
-                    keep_native=keep_native,
                     heartbeat=lease.heartbeat,
                 )
                 results.append(result)
@@ -167,7 +165,6 @@ def run_rebuild(
     end_date: date | None = None,
     component: str = "all",
     allow_refetch: bool = False,
-    keep_native: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_component = component.strip().lower()
@@ -206,7 +203,6 @@ def run_rebuild(
                         settings=settings,
                         run_date=selected_date,
                         source=settings.source_mode,
-                        input_mode="raw",
                     )
                     retention = apply_retention(
                         settings=settings,
@@ -214,7 +210,6 @@ def run_rebuild(
                         source=settings.source_mode,
                         snapshot_summary=snapshot,
                         raw_retention=settings.raw_retention_mode,
-                        keep_native=keep_native,
                     )
                     results.append(
                         {
@@ -275,7 +270,6 @@ def run_rebuild(
                                 source=settings.source_mode,
                                 snapshot_summary={"record_count": verification["row_count"]},
                                 raw_retention=settings.raw_retention_mode,
-                                keep_native=keep_native,
                             )
                 results.append({"component": "events", **events})
                 lease.heartbeat()
@@ -583,7 +577,6 @@ def _sync_one_day(
     *,
     run_date: date,
     defer_models: bool,
-    keep_native: bool,
     heartbeat: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     state = _start_sync_date(settings, run_date)
@@ -606,7 +599,6 @@ def _sync_one_day(
                 settings=settings,
                 run_date=run_date,
                 source=settings.source_mode,
-                input_mode="raw",
             )
             verification = snapshot["snapshot_store"]
             data_action = "built"
@@ -663,11 +655,7 @@ def _sync_one_day(
                 heartbeat()
 
         ledger = load_ingestion_ledger(settings, run_date, settings.source_mode)
-        if not _retention_satisfied(
-            ledger,
-            settings.raw_retention_mode,
-            keep_native=keep_native,
-        ):
+        if not _retention_satisfied(ledger, settings.raw_retention_mode):
             snapshot_summary = {
                 "record_count": int(verification["row_count"]),
             }
@@ -677,7 +665,6 @@ def _sync_one_day(
                 source=settings.source_mode,
                 snapshot_summary=snapshot_summary,
                 raw_retention=settings.raw_retention_mode,
-                keep_native=keep_native,
             )
             retention_action = "applied"
             retention_status = retention["raw_retention_status"]
@@ -953,18 +940,15 @@ def _record_sync_stage(
 def _retention_satisfied(
     ledger: dict[str, Any] | None,
     requested: str,
-    *,
-    keep_native: bool,
 ) -> bool:
     if ledger is None:
         return False
     raw_status = str(ledger.get("raw_retention_status") or "")
-    native_status = str(ledger.get("native_retention_status") or "")
     if requested == "keep":
         return raw_status in {"kept", "compressed", "released"}
     if requested == "compress":
         return raw_status in {"compressed", "released"}
-    return raw_status == "released" and (keep_native or native_status == "purged")
+    return raw_status == "released"
 
 
 def _validate_date_selection(

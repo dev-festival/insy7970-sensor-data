@@ -10,7 +10,7 @@ from insy_sensor_data.services.exploration import (
     load_drift_overview,
 )
 from insy_sensor_data.services.review import load_snapshot_review
-from insy_sensor_data.store.context import browser_context, service_context
+from insy_sensor_data.store.context import browser_context
 from insy_sensor_data.store.models import (
     list_models,
     load_cluster,
@@ -20,12 +20,7 @@ from insy_sensor_data.store.models import (
 from insy_sensor_data.store.references import list_equipment, list_equipment_tree
 
 
-router = APIRouter(prefix="/api", tags=["artifacts"])
-
-
-@router.get("/artifacts")
-def read_artifacts(request: Request) -> dict[str, Any]:
-    return service_context(request.app.state.settings)
+router = APIRouter(prefix="/api", tags=["service"])
 
 
 @router.get("/context")
@@ -36,14 +31,13 @@ def read_context(request: Request) -> dict[str, Any]:
 @router.get("/equipment")
 def read_equipment(
     request: Request,
-    source: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict[str, Any]:
     try:
         return list_equipment(
             request.app.state.settings,
-            source=source,
+            source=request.app.state.settings.source_mode,
             start_date=date.fromisoformat(start_date) if start_date else None,
             end_date=date.fromisoformat(end_date) if end_date else None,
         )
@@ -54,14 +48,13 @@ def read_equipment(
 @router.get("/equipment-tree")
 def read_equipment_tree(
     request: Request,
-    source: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict[str, Any]:
     try:
         return list_equipment_tree(
             request.app.state.settings,
-            source=source,
+            source=request.app.state.settings.source_mode,
             start_date=date.fromisoformat(start_date) if start_date else None,
             end_date=date.fromisoformat(end_date) if end_date else None,
         )
@@ -73,7 +66,6 @@ def read_equipment_tree(
 def read_snapshot_review(
     snapshot_date: str,
     request: Request,
-    source: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     scope: str = "all",
@@ -85,15 +77,13 @@ def read_snapshot_review(
     sensor_id: str | None = None,
     metric: str = "rms_vel",
     dimension: str = "x",
-    feature_space: str | None = None,
     stat: str = "mean",
-    k: int | None = None,
 ) -> dict[str, Any]:
     try:
         return load_snapshot_review(
             settings=request.app.state.settings,
             run_date=date.fromisoformat(snapshot_date),
-            source=source,
+            source=request.app.state.settings.source_mode,
             start_date=date.fromisoformat(start_date) if start_date else None,
             end_date=date.fromisoformat(end_date) if end_date else None,
             scope=scope_type or scope,
@@ -104,9 +94,7 @@ def read_snapshot_review(
             sensor_id=sensor_id,
             metric=metric,
             dimension=dimension,
-            feature_space=feature_space,
             stat=stat,
-            k=k,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -158,21 +146,16 @@ def read_drift_overview(
 def read_clusters(
     request: Request,
     cluster_date: str = Query(..., alias="date"),
-    source: str | None = None,
     dimension: str = "x",
-    feature_space: str | None = None,
     metric: str | None = None,
-    k: int | None = None,
 ) -> dict[str, Any]:
     try:
         return load_cluster(
             settings=request.app.state.settings,
             run_date=date.fromisoformat(cluster_date),
-            source=source or request.app.state.settings.source_mode,
+            source=request.app.state.settings.source_mode,
             metric=metric,
             dimension=dimension,
-            feature_space=feature_space,
-            k=k,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -183,22 +166,17 @@ def read_drift(
     request: Request,
     from_date: str,
     to_date: str,
-    source: str | None = None,
     dimension: str = "x",
-    feature_space: str | None = None,
     metric: str | None = None,
-    k: int | None = None,
 ) -> dict[str, Any]:
     try:
         return load_drift(
             settings=request.app.state.settings,
             from_date=date.fromisoformat(from_date),
             to_date=date.fromisoformat(to_date),
-            source=source or request.app.state.settings.source_mode,
+            source=request.app.state.settings.source_mode,
             metric=metric,
             dimension=dimension,
-            feature_space=feature_space,
-            k=k,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -209,22 +187,17 @@ def read_cluster_windows(
     request: Request,
     start_date: str,
     end_date: str,
-    source: str | None = None,
     dimension: str = "x",
-    feature_space: str | None = None,
     metric: str | None = None,
-    k: int | None = None,
 ) -> dict[str, Any]:
     try:
         return load_cluster_window(
             settings=request.app.state.settings,
             start_date=date.fromisoformat(start_date),
             end_date=date.fromisoformat(end_date),
-            source=source or request.app.state.settings.source_mode,
+            source=request.app.state.settings.source_mode,
             metric=metric,
             dimension=dimension,
-            feature_space=feature_space,
-            k=k,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -233,14 +206,13 @@ def read_cluster_windows(
 @router.get("/cluster-models")
 def read_cluster_models(
     request: Request,
-    source: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict[str, Any]:
     try:
         return list_models(
             settings=request.app.state.settings,
-            source=source or request.app.state.settings.source_mode,
+            source=request.app.state.settings.source_mode,
             start_date=date.fromisoformat(start_date) if start_date else None,
             end_date=date.fromisoformat(end_date) if end_date else None,
         )

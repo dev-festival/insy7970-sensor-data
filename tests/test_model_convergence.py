@@ -21,9 +21,9 @@ from insy_sensor_data.config import AppSettings
 from insy_sensor_data.observations import (
     connect_observation_store,
     load_sensor_daily_snapshots,
-    store_sensor_daily_snapshots,
 )
 from insy_sensor_data.snapshots.build import build_sensor_snapshot
+from insy_sensor_data.store.schema import snapshot_revision
 from insy_sensor_data.waites.fetch import fetch_waites
 
 
@@ -115,16 +115,33 @@ def test_targeted_rebuild_only_replaces_one_model_and_adjacent_drift(tmp_path: P
     before_drift = _timestamps(settings, "cluster_drift_runs", "from_date || '->' || to_date")
 
     rebuilt_date = dates[1]
-    rebuilt_rows = load_sensor_daily_snapshots(settings, rebuilt_date, source="mock")
-    rebuilt_rows[0]["rms_accel_mean_x"] = float(
-        rebuilt_rows[0]["rms_accel_mean_x"]
-    ) + 0.001
-    store_sensor_daily_snapshots(
-        settings,
-        rebuilt_date,
-        source="mock",
-        rows=rebuilt_rows,
-    )
+    with connect_observation_store(settings) as connection:
+        connection.execute(
+            """
+            UPDATE sensor_daily_facts
+            SET rms_accel_mean_x = rms_accel_mean_x + 0.001
+            WHERE source = 'mock' AND source_date = ?
+              AND installation_point_id = (
+                  SELECT MIN(installation_point_id)
+                  FROM sensor_daily_facts
+                  WHERE source = 'mock' AND source_date = ?
+              )
+            """,
+            (rebuilt_date.isoformat(), rebuilt_date.isoformat()),
+        )
+        connection.commit()
+    updated_rows = load_sensor_daily_snapshots(settings, rebuilt_date, source="mock")
+    updated_revision = snapshot_revision("mock", rebuilt_date.isoformat(), updated_rows)
+    with connect_observation_store(settings) as connection:
+        connection.execute(
+            """
+            UPDATE snapshot_revisions
+            SET snapshot_revision = ?
+            WHERE source = 'mock' AND source_date = ?
+            """,
+            (updated_revision, rebuilt_date.isoformat()),
+        )
+        connection.commit()
     assert active_model_readiness(
         settings,
         source="mock",

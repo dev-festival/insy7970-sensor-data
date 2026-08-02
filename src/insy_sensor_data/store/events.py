@@ -490,23 +490,7 @@ def backfill_waites_events(
                 state = "imported" if rows else "genuinely_empty"
                 input_mode = "retained_raw"
             else:
-                legacy_rows = _legacy_action_rows(
-                    connection,
-                    selected_source,
-                    source_date,
-                )
-                if legacy_rows:
-                    upsert_waites_events(
-                        connection,
-                        source=selected_source,
-                        source_date=source_date,
-                        observed_at=observed_at,
-                        rows=legacy_rows,
-                    )
-                    state = "imported"
-                    input_mode = "retained_sqlite"
-                    rows = legacy_rows
-                elif int(endpoint_counts.get("action-items") or 0) == 0:
+                if int(endpoint_counts.get("action-items") or 0) == 0:
                     state = "genuinely_empty"
                     input_mode = None
                     rows = []
@@ -707,55 +691,6 @@ def _read_action_rows(path: Path) -> list[dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     rows = payload.get("list", [])
     return [row for row in rows if isinstance(row, dict)]
-
-
-def _legacy_action_rows(
-    connection: sqlite3.Connection,
-    source: str,
-    source_date: str,
-) -> list[dict[str, Any]]:
-    recorded_sources = {
-        str(row["source"])
-        for row in connection.execute(
-            """
-            SELECT DISTINCT source
-            FROM waites_loads
-            WHERE source_date = ?
-            """,
-            (source_date,),
-        ).fetchall()
-    }
-    if recorded_sources != {source}:
-        return []
-    rows = connection.execute(
-        """
-        SELECT
-            source_date,
-            action_item_id,
-            wo_number,
-            wo_status,
-            sensor_id,
-            type,
-            status,
-            installation_point_id,
-            equipment_id,
-            title,
-            description,
-            urgency,
-            closed_at,
-            facility_id,
-            raw_json
-        FROM waites_action_items
-        WHERE source_date = ?
-        ORDER BY action_item_id
-        """,
-        (source_date,),
-    ).fetchall()
-    output = []
-    for row in rows:
-        raw = _json_object(row["raw_json"])
-        output.append({**dict(row), **raw})
-    return output
 
 
 def _json_object(value: Any) -> dict[str, Any]:

@@ -28,42 +28,6 @@ class StoragePaths:
         return self.raw_dir / "maximo"
 
     @property
-    def processed_waites_dir(self) -> Path:
-        return self.processed_dir / "waites"
-
-    @property
-    def snapshots_dir(self) -> Path:
-        return self.processed_dir / "snapshots"
-
-    @property
-    def trends_dir(self) -> Path:
-        return self.processed_dir / "trends"
-
-    @property
-    def features_dir(self) -> Path:
-        return self.processed_dir / "features"
-
-    @property
-    def clusters_dir(self) -> Path:
-        return self.processed_dir / "clusters"
-
-    @property
-    def drift_dir(self) -> Path:
-        return self.processed_dir / "drift"
-
-    @property
-    def cluster_windows_dir(self) -> Path:
-        return self.processed_dir / "cluster_windows"
-
-    @property
-    def cluster_models_dir(self) -> Path:
-        return self.processed_dir / "cluster_models"
-
-    @property
-    def cluster_model_drift_dir(self) -> Path:
-        return self.processed_dir / "cluster_model_drift"
-
-    @property
     def observations_db_path(self) -> Path:
         return self.processed_dir / "observations.sqlite"
 
@@ -71,15 +35,7 @@ class StoragePaths:
         dirs = [
             self.raw_waites_dir,
             self.raw_maximo_dir,
-            self.processed_waites_dir,
-            self.snapshots_dir,
-            self.trends_dir,
-            self.features_dir,
-            self.clusters_dir,
-            self.drift_dir,
-            self.cluster_windows_dir,
-            self.cluster_models_dir,
-            self.cluster_model_drift_dir,
+            self.processed_dir,
         ]
         for path in dirs:
             path.mkdir(parents=True, exist_ok=True)
@@ -87,19 +43,6 @@ class StoragePaths:
 
     def raw_waites_run_dir(self, run_date: str) -> Path:
         return self.raw_waites_dir / f"date={run_date}"
-
-    def waites_reference_dir(self) -> Path:
-        return self.processed_waites_dir / "reference"
-
-    def snapshot_dir(self, run_date: str) -> Path:
-        return self.snapshots_dir / f"date={run_date}"
-
-    def trend_dir(self, start_date: str, end_date: str) -> Path:
-        return self.trends_dir / f"start={start_date}_end={end_date}"
-
-    def feature_dir(self, run_date: str, source: str) -> Path:
-        return self.features_dir / f"date={run_date}_source={source}"
-
 
 def get_storage_paths(data_dir: str | Path) -> StoragePaths:
     return StoragePaths(data_dir=Path(data_dir))

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-import json
 
 import pytest
 
@@ -19,10 +18,7 @@ from insy_sensor_data.store.errors import StoreMigrationRequiredError
 from insy_sensor_data.store.exports import export_snapshot_csv, export_trend_csvs
 from insy_sensor_data.store.schema import (
     FIXED_SNAPSHOT_TABLE,
-    LEGACY_SNAPSHOT_TABLE,
     active_snapshot_table,
-    migrate_snapshot_store,
-    set_snapshot_authority,
 )
 from insy_sensor_data.waites.asset_tree import asset_tree_records_from_payload
 from insy_sensor_data.waites.fetch import fetch_waites
@@ -42,9 +38,16 @@ def test_direct_ingestion_is_idempotent_and_writes_no_routine_artifacts(tmp_path
         assert _count(connection, FIXED_SNAPSHOT_TABLE) == 9
         assert _count(connection, "waites_installation_point_reference") == 8
         assert _count(connection, "waites_events") == 4
-        assert _count(connection, "waites_rms_observations") == 0
-        assert _count(connection, "waites_temperature_observations") == 0
-        assert _count(connection, "waites_impact_observations") == 0
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert "sensor_daily_snapshots" not in tables
+        assert "waites_rms_observations" not in tables
+        assert "waites_temperature_observations" not in tables
+        assert "waites_impact_observations" not in tables
         state = connection.execute(
             "SELECT state FROM ingestion_runs WHERE source = 'mock' AND source_date = '2025-07-09'"
         ).fetchone()[0]
@@ -65,7 +68,7 @@ def test_direct_ingestion_failure_keeps_previous_date_atomic(
     run_date = date(2025, 7, 9)
     fetch_waites(settings=settings, run_date=run_date, facility_id=679)
     successful = build_sensor_snapshot(settings=settings, run_date=run_date)
-    original_rows = load_sensor_daily_snapshots(settings, run_date)
+    original_rows = load_sensor_daily_snapshots(settings, run_date, source="mock")
     changed_rows = [dict(row) for row in original_rows]
     changed_rows[0]["rms_vel_mean_x"] = 999.0
     raw_dir = settings.data_dir / "raw" / "waites" / "date=2025-07-09"
@@ -82,7 +85,7 @@ def test_direct_ingestion_failure_keeps_previous_date_atomic(
             failure_point=failure_point,
         )
 
-    assert load_sensor_daily_snapshots(settings, run_date) == original_rows
+    assert load_sensor_daily_snapshots(settings, run_date, source="mock") == original_rows
     with connect_observation_store(settings) as connection:
         run = connection.execute(
             "SELECT state FROM ingestion_runs WHERE source = 'mock' AND source_date = '2025-07-09'"
@@ -94,54 +97,20 @@ def test_direct_ingestion_failure_keeps_previous_date_atomic(
         assert ledger[0] == successful["snapshot_store"]["snapshot_revision"]
 
 
-def test_legacy_migration_verifies_null_zero_and_rollback(tmp_path: Path) -> None:
+def test_clean_store_has_one_fixed_snapshot_authority(tmp_path: Path) -> None:
     settings = AppSettings(data_dir=tmp_path / "data")
     with connect_observation_store(settings) as connection:
-        connection.execute(
-            """
-            INSERT INTO sensor_daily_snapshots (
-                source, source_date, installation_point_id, built_at,
-                snapshot_csv_path, snapshot_json
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "mock",
-                "2025-07-09",
-                "101",
-                "2025-07-10T00:00:00Z",
-                "legacy.csv",
-                json.dumps(
-                    {
-                        "installation_point_id": "101",
-                        "equipment_id": None,
-                        "impact_mean": 0,
-                        "rms_vel_mean_x": 1.25,
-                    }
-                ),
-            ),
-        )
-        connection.execute(
-            """
-            UPDATE operational_store_state
-            SET snapshot_authority = ?, migration_status = 'legacy', configured_source = NULL
-            WHERE state_id = 1
-            """,
-            (LEGACY_SNAPSHOT_TABLE,),
-        )
-        connection.commit()
-
-    result = migrate_snapshot_store(settings, "mock")
-
-    assert result["status"] == "complete"
-    assert result["legacy_row_count"] == result["fixed_row_count"] == 1
-    assert result["legacy_hash"] == result["fixed_hash"]
-    assert result["null_value_count"] > 0
-    assert result["zero_value_count"] == 1
-    assert load_sensor_daily_snapshots(settings, date(2025, 7, 9))[0]["rms_vel_mean_x"] == 1.25
-    set_snapshot_authority(settings, LEGACY_SNAPSHOT_TABLE)
-    with connect_observation_store(settings) as connection:
-        assert active_snapshot_table(connection) == LEGACY_SNAPSHOT_TABLE
-    set_snapshot_authority(settings, FIXED_SNAPSHOT_TABLE)
+        assert active_snapshot_table(connection) == FIXED_SNAPSHOT_TABLE
+        assert connection.execute(
+            "SELECT snapshot_authority FROM operational_store_state WHERE state_id = 1"
+        ).fetchone()[0] == FIXED_SNAPSHOT_TABLE
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert "sensor_daily_snapshots" not in tables
 
 
 def test_exports_are_explicit_and_source_conflict_blocks_startup(tmp_path: Path) -> None:

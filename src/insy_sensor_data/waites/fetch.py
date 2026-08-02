@@ -3,16 +3,12 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
-import csv
 import json
 
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.raw_lifecycle import refresh_waites_manifest_artifacts
-from insy_sensor_data.storage import StoragePaths, get_storage_paths
-from insy_sensor_data.waites.asset_tree import (
-    asset_tree_records_from_payload,
-    normalize_asset_tree_records,
-)
+from insy_sensor_data.storage import get_storage_paths
+from insy_sensor_data.waites.asset_tree import asset_tree_records_from_payload
 from insy_sensor_data.waites.client import (
     WaitesApiClient,
     WaitesApiError,
@@ -20,25 +16,6 @@ from insy_sensor_data.waites.client import (
     build_waites_requests,
 )
 from insy_sensor_data.waites.fixtures import describe_mock_trend_date, load_waites_fixture
-
-
-REFERENCE_FIELDS = {
-    "asset-tree": ["asset_tree_id", "name", "parent_asset_tree_id", "facility_id", "asset_tree_path"],
-    "equipment": ["equipment_id", "asset_tree_id", "name", "facility_id", "customer_asset_id"],
-    "installation-points": [
-        "installation_point_id",
-        "name",
-        "equipment_id",
-        "sensor_id",
-        "facility_id",
-        "last_seen",
-        "is_route_collector",
-        "idle_threshold",
-        "customer_asset_id",
-        "idle_threshold_type",
-        "alerts",
-    ],
-}
 
 
 def fetch_waites(
@@ -208,57 +185,6 @@ def _record_count(endpoint: str, payload: dict[str, Any]) -> int:
     return len(payload["list"])
 
 
-def write_waites_reference_tables(
-    storage: StoragePaths,
-    envelopes: dict[str, dict[str, Any]],
-) -> dict[str, str]:
-    reference_dir = storage.waites_reference_dir()
-    reference_dir.mkdir(parents=True, exist_ok=True)
-
-    equipment_path = reference_dir / "equipment.csv"
-    asset_tree_path = reference_dir / "asset_tree.csv"
-    installation_points_path = reference_dir / "installation_points.csv"
-    metadata_path = reference_dir / "metadata.json"
-
-    asset_tree_rows = normalize_asset_tree_records(
-        asset_tree_records_from_payload(envelopes.get("asset-tree", {}))
-    )
-    _write_csv(asset_tree_path, asset_tree_rows, REFERENCE_FIELDS["asset-tree"])
-    _write_csv(equipment_path, envelopes["equipment"]["list"], REFERENCE_FIELDS["equipment"])
-    _write_csv(
-        installation_points_path,
-        envelopes["installation-points"]["list"],
-        REFERENCE_FIELDS["installation-points"],
-    )
-    _write_json(
-        metadata_path,
-        {
-            "source": "waites",
-            "tables": {
-                "asset_tree": {
-                    "path": _path_string(asset_tree_path),
-                    "record_count": len(asset_tree_rows),
-                },
-                "equipment": {
-                    "path": _path_string(equipment_path),
-                    "record_count": len(envelopes["equipment"]["list"]),
-                },
-                "installation_points": {
-                    "path": _path_string(installation_points_path),
-                    "record_count": len(envelopes["installation-points"]["list"]),
-                },
-            },
-        },
-    )
-
-    return {
-        "asset_tree": _path_string(asset_tree_path),
-        "equipment": _path_string(equipment_path),
-        "installation_points": _path_string(installation_points_path),
-        "metadata": _path_string(metadata_path),
-    }
-
-
 def list_raw_waites_runs(settings: AppSettings) -> list[dict[str, Any]]:
     storage = get_storage_paths(settings.data_dir)
     if not storage.raw_waites_dir.exists():
@@ -295,21 +221,6 @@ def list_raw_waites_runs(settings: AppSettings) -> list[dict[str, Any]]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            normalized = {field: _csv_value(row.get(field)) for field in fieldnames}
-            writer.writerow(normalized)
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (list, dict)):
-        return json.dumps(value, sort_keys=True)
-    return value
 
 
 def _path_string(path: Path) -> str:

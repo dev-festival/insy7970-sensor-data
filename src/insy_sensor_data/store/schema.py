@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Iterable
 import hashlib
 import json
@@ -13,15 +12,13 @@ from insy_sensor_data.snapshots.schema import (
     snapshot_column_type,
     snapshot_column_value,
 )
-from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.store.errors import StoreMigrationRequiredError
 
 
-OPERATIONAL_SCHEMA_VERSION = 9
-SNAPSHOT_MIGRATION_VERSION = 7
+OPERATIONAL_SCHEMA_VERSION = 10
+SNAPSHOT_MIGRATION_VERSION = OPERATIONAL_SCHEMA_VERSION
 LEGACY_SNAPSHOT_TABLE = "sensor_daily_snapshots"
 FIXED_SNAPSHOT_TABLE = "sensor_daily_facts"
-VALID_SNAPSHOT_AUTHORITIES = {LEGACY_SNAPSHOT_TABLE, FIXED_SNAPSHOT_TABLE}
 
 
 def resolve_configured_source(settings: AppSettings, requested: str | None = None) -> str:
@@ -202,10 +199,14 @@ def initialize_operational_schema(connection: sqlite3.Connection) -> None:
         "SELECT 1 FROM operational_store_state WHERE state_id = 1"
     ).fetchone()
     if state is None:
-        legacy_count = int(
-            connection.execute(
-                f"SELECT COUNT(*) FROM {LEGACY_SNAPSHOT_TABLE}"
-            ).fetchone()[0]
+        legacy_count = (
+            int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM {LEGACY_SNAPSHOT_TABLE}"
+                ).fetchone()[0]
+            )
+            if _table_exists(connection, LEGACY_SNAPSHOT_TABLE)
+            else 0
         )
         authority = LEGACY_SNAPSHOT_TABLE if legacy_count else FIXED_SNAPSHOT_TABLE
         status = "legacy" if legacy_count else "ready"
@@ -223,7 +224,7 @@ def initialize_operational_schema(connection: sqlite3.Connection) -> None:
 
 def active_snapshot_table(connection: sqlite3.Connection) -> str:
     if not _table_exists(connection, "operational_store_state"):
-        return LEGACY_SNAPSHOT_TABLE
+        return FIXED_SNAPSHOT_TABLE
     row = connection.execute(
         """
         SELECT snapshot_authority
@@ -232,13 +233,14 @@ def active_snapshot_table(connection: sqlite3.Connection) -> str:
         """
     ).fetchone()
     if row is None:
-        return LEGACY_SNAPSHOT_TABLE
+        return FIXED_SNAPSHOT_TABLE
     authority = str(row[0])
-    if authority not in VALID_SNAPSHOT_AUTHORITIES:
+    if authority != FIXED_SNAPSHOT_TABLE:
         raise StoreMigrationRequiredError(
-            f"Unsupported snapshot authority in operational store: {authority}"
+            "The operational store still selects the retired snapshot representation. "
+            "Run the 0.6.6 retirement dry run and migration rehearsal before serving it."
         )
-    return authority
+    return FIXED_SNAPSHOT_TABLE
 
 
 def configured_source(connection: sqlite3.Connection) -> str | None:
@@ -293,228 +295,82 @@ def validate_service_source(connection: sqlite3.Connection, source: str) -> None
         )
 
 
-def migrate_snapshot_store(settings: AppSettings, source: str) -> dict[str, Any]:
-    path = get_storage_paths(settings.data_dir).observations_db_path
-    if not path.is_file():
-        raise FileNotFoundError(f"Operational SQLite store is missing: {path.as_posix()}")
-    bytes_before = path.stat().st_size
-    connection = sqlite3.connect(path)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    started_at = _utc_now()
-    migration_started = False
-    try:
-        initialize_operational_schema(connection)
-        claim_configured_source(connection, source)
-        current = configured_source(connection)
-        if current != source:
-            raise StoreMigrationRequiredError(f"Unable to configure source {source!r}.")
-        connection.execute(
-            """
-            UPDATE operational_store_state
-            SET migration_status = 'started', updated_at = ?
-            WHERE state_id = 1
-            """,
-            (started_at,),
-        )
-        connection.execute(
-            """
-            INSERT INTO snapshot_migration_audit (
-                source, migration_version, status, started_at, database_bytes_before
-            ) VALUES (?, ?, 'started', ?, ?)
-            ON CONFLICT(source, migration_version) DO UPDATE SET
-                status = 'started', started_at = excluded.started_at,
-                completed_at = NULL, error = NULL,
-                database_bytes_before = excluded.database_bytes_before
-            """,
-            (source, SNAPSHOT_MIGRATION_VERSION, started_at, bytes_before),
-        )
-        connection.commit()
-        migration_started = True
-
-        dates = [
-            str(row[0])
-            for row in connection.execute(
-                f"""
-                SELECT DISTINCT source_date
-                FROM {LEGACY_SNAPSHOT_TABLE}
-                WHERE source = ?
-                ORDER BY source_date
-                """,
+def audit_legacy_snapshot_parity(
+    connection: sqlite3.Connection,
+    source: str,
+) -> dict[str, Any]:
+    """Compare the retired JSON rows with fixed facts without changing authority."""
+    if not _table_exists(connection, LEGACY_SNAPSHOT_TABLE):
+        fixed_count = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM {FIXED_SNAPSHOT_TABLE} WHERE source = ?",
                 (source,),
-            ).fetchall()
-        ]
-        legacy_digest = hashlib.sha256()
-        legacy_row_count = 0
-        null_count = 0
-        zero_count = 0
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            f"DELETE FROM {FIXED_SNAPSHOT_TABLE} WHERE source = ?", (source,)
+            ).fetchone()[0]
         )
-        connection.execute(
-            "DELETE FROM snapshot_revisions WHERE source = ?", (source,)
-        )
-        for source_date in dates:
-            rows_with_context = _load_legacy_rows(connection, source, source_date)
-            date_nulls, date_zeros = _update_snapshot_digest(
-                legacy_digest,
-                rows_with_context,
-                include_built_at=False,
-            )
-            legacy_row_count += len(rows_with_context)
-            null_count += date_nulls
-            zero_count += date_zeros
-            built_at = max(str(row["built_at"]) for row in rows_with_context)
-            rows = [
-                {field: row.get(field) for field in SNAPSHOT_FIELDS}
-                for row in rows_with_context
-            ]
-            revision = snapshot_revision(source, source_date, rows)
-            _replace_fixed_rows(
-                connection,
-                source=source,
-                source_date=source_date,
-                built_at=built_at,
-                revision=revision,
-                rows=rows,
-            )
-        legacy_hash = legacy_digest.hexdigest()
-        fixed_digest = hashlib.sha256()
-        fixed_row_count = 0
-        fixed_nulls = 0
-        fixed_zeros = 0
-        for source_date in dates:
-            fixed_rows = _load_fixed_rows(connection, source, source_date)
-            date_nulls, date_zeros = _update_snapshot_digest(
-                fixed_digest,
-                fixed_rows,
-                include_built_at=False,
-            )
-            fixed_row_count += len(fixed_rows)
-            fixed_nulls += date_nulls
-            fixed_zeros += date_zeros
-        fixed_hash = fixed_digest.hexdigest()
-        if fixed_row_count != legacy_row_count or fixed_hash != legacy_hash:
-            raise StoreMigrationRequiredError(
-                "Fixed snapshot migration parity check failed; legacy authority was retained."
-            )
-        if (fixed_nulls, fixed_zeros) != (null_count, zero_count):
-            raise StoreMigrationRequiredError(
-                "Fixed snapshot null/zero parity check failed; legacy authority was retained."
-            )
-        completed_at = _utc_now()
-        connection.execute(
-            """
-            UPDATE operational_store_state
-            SET snapshot_authority = ?, migration_status = 'complete',
-                migration_version = ?, updated_at = ?
-            WHERE state_id = 1
-            """,
-            (FIXED_SNAPSHOT_TABLE, SNAPSHOT_MIGRATION_VERSION, completed_at),
-        )
-        connection.execute(
-            """
-            UPDATE snapshot_migration_audit
-            SET status = 'complete', completed_at = ?, legacy_row_count = ?,
-                fixed_row_count = ?, legacy_hash = ?, fixed_hash = ?,
-                null_value_count = ?, zero_value_count = ?
-            WHERE source = ? AND migration_version = ?
-            """,
-            (
-                completed_at,
-                legacy_row_count,
-                fixed_row_count,
-                legacy_hash,
-                fixed_hash,
-                null_count,
-                zero_count,
-                source,
-                SNAPSHOT_MIGRATION_VERSION,
-            ),
-        )
-        connection.commit()
-        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        bytes_side_by_side = path.stat().st_size
-        connection.execute(
-            """
-            UPDATE snapshot_migration_audit
-            SET database_bytes_side_by_side = ?
-            WHERE source = ? AND migration_version = ?
-            """,
-            (bytes_side_by_side, source, SNAPSHOT_MIGRATION_VERSION),
-        )
-        connection.commit()
         return {
+            "status": "absent",
             "source": source,
-            "migration_version": SNAPSHOT_MIGRATION_VERSION,
-            "status": "complete",
-            "legacy_row_count": legacy_row_count,
-            "fixed_row_count": fixed_row_count,
-            "date_count": len(dates),
-            "legacy_hash": legacy_hash,
-            "fixed_hash": fixed_hash,
-            "null_value_count": null_count,
-            "zero_value_count": zero_count,
-            "database_bytes_before": bytes_before,
-            "database_bytes_side_by_side": bytes_side_by_side,
+            "legacy_row_count": 0,
+            "fixed_row_count": fixed_count,
+            "legacy_hash": None,
+            "fixed_hash": None,
+            "null_value_count": None,
+            "zero_value_count": None,
         }
-    except Exception as exc:
-        connection.rollback()
-        if not migration_started:
-            raise
-        try:
-            initialize_operational_schema(connection)
-            connection.execute(
-                """
-                UPDATE operational_store_state
-                SET snapshot_authority = ?, migration_status = 'failed', updated_at = ?
-                WHERE state_id = 1
-                """,
-                (LEGACY_SNAPSHOT_TABLE, _utc_now()),
-            )
-            connection.execute(
-                """
-                UPDATE snapshot_migration_audit
-                SET status = 'failed', completed_at = ?, error = ?
-                WHERE source = ? AND migration_version = ?
-                """,
-                (_utc_now(), str(exc), source, SNAPSHOT_MIGRATION_VERSION),
-            )
-            connection.commit()
-        finally:
-            pass
-        raise
-    finally:
-        connection.close()
 
-
-def set_snapshot_authority(settings: AppSettings, authority: str) -> dict[str, Any]:
-    if authority not in VALID_SNAPSHOT_AUTHORITIES:
-        raise ValueError(f"authority must be one of: {', '.join(sorted(VALID_SNAPSHOT_AUTHORITIES))}")
-    path = get_storage_paths(settings.data_dir).observations_db_path
-    connection = sqlite3.connect(path)
-    connection.row_factory = sqlite3.Row
-    try:
-        initialize_operational_schema(connection)
-        if authority == FIXED_SNAPSHOT_TABLE:
-            row = connection.execute(
-                "SELECT migration_status FROM operational_store_state WHERE state_id = 1"
-            ).fetchone()
-            if row is None or str(row[0]) != "complete":
-                raise StoreMigrationRequiredError("Cannot activate fixed snapshots before a verified migration.")
-        connection.execute(
-            """
-            UPDATE operational_store_state
-            SET snapshot_authority = ?, updated_at = ?
-            WHERE state_id = 1
-            """,
-            (authority, _utc_now()),
+    dates = [
+        str(row[0])
+        for row in connection.execute(
+            f"SELECT DISTINCT source_date FROM {LEGACY_SNAPSHOT_TABLE} "
+            "WHERE source = ? ORDER BY source_date",
+            (source,),
+        ).fetchall()
+    ]
+    legacy_digest = hashlib.sha256()
+    fixed_digest = hashlib.sha256()
+    legacy_count = 0
+    fixed_count = 0
+    legacy_nulls = 0
+    legacy_zeros = 0
+    fixed_nulls = 0
+    fixed_zeros = 0
+    for source_date in dates:
+        legacy_rows = _load_legacy_rows(connection, source, source_date)
+        fixed_rows = _load_fixed_rows(connection, source, source_date)
+        nulls, zeros = _update_snapshot_digest(
+            legacy_digest,
+            legacy_rows,
+            include_built_at=False,
         )
-        connection.commit()
-        return {"snapshot_authority": authority, "status": "active"}
-    finally:
-        connection.close()
+        legacy_count += len(legacy_rows)
+        legacy_nulls += nulls
+        legacy_zeros += zeros
+        nulls, zeros = _update_snapshot_digest(
+            fixed_digest,
+            fixed_rows,
+            include_built_at=False,
+        )
+        fixed_count += len(fixed_rows)
+        fixed_nulls += nulls
+        fixed_zeros += zeros
+    legacy_hash = legacy_digest.hexdigest()
+    fixed_hash = fixed_digest.hexdigest()
+    ready = (
+        legacy_count == fixed_count
+        and legacy_hash == fixed_hash
+        and (legacy_nulls, legacy_zeros) == (fixed_nulls, fixed_zeros)
+    )
+    return {
+        "status": "ready" if ready else "mismatch",
+        "source": source,
+        "date_count": len(dates),
+        "legacy_row_count": legacy_count,
+        "fixed_row_count": fixed_count,
+        "legacy_hash": legacy_hash,
+        "fixed_hash": fixed_hash,
+        "null_value_count": legacy_nulls,
+        "zero_value_count": legacy_zeros,
+    }
 
 
 def snapshot_revision(source: str, source_date: str, rows: Iterable[dict[str, Any]]) -> str:

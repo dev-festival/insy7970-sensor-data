@@ -15,7 +15,6 @@ router = APIRouter(prefix="/api/snapshots", tags=["snapshots"])
 def read_snapshot(
     snapshot_date: str,
     request: Request,
-    source: str | None = None,
     equipment_id: str | None = None,
     installation_point_id: str | None = None,
     customer_asset_id: str | None = None,
@@ -25,7 +24,7 @@ def read_snapshot(
         payload = load_snapshot_view(
             settings=request.app.state.settings,
             run_date=run_date,
-            source=source,
+            source=request.app.state.settings.source_mode,
             equipment_id=equipment_id,
             installation_point_id=installation_point_id,
             customer_asset_id=customer_asset_id,

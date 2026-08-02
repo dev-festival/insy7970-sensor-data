@@ -8,7 +8,7 @@ from insy_sensor_data.clustering.policy import ACTIVE_MODEL_POLICY
 from insy_sensor_data.joins import index_snapshot_assets, normalize_asset_number
 from insy_sensor_data.maximo.db import MaximoDatabaseError
 from insy_sensor_data.maximo.history import load_asset_history
-from insy_sensor_data.snapshots.build import SNAPSHOT_FIELDS
+from insy_sensor_data.snapshots.schema import SNAPSHOT_FIELDS
 from insy_sensor_data.services.trends import (
     AXIS_METRICS,
     NON_AXIS_METRICS,

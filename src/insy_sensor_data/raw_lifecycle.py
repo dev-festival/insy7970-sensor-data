@@ -11,6 +11,10 @@ import shutil
 
 from insy_sensor_data.artifacts import read_json, resolve_artifact_path, write_json
 from insy_sensor_data.config import AppSettings
+from insy_sensor_data.observations import (
+    update_ingestion_retention,
+    verify_sensor_daily_snapshot,
+)
 from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.waites.client import ENDPOINT_FILENAMES
 from insy_sensor_data.waites.validate import ensure_waites_raw_valid
@@ -24,6 +28,60 @@ RAW_SOURCE_WAITES = "waites"
 class ArtifactDigest:
     byte_count: int
     sha256: str
+
+
+def apply_retention(
+    settings: AppSettings,
+    run_date: date,
+    source: str,
+    snapshot_summary: dict[str, Any],
+    raw_retention: str,
+) -> dict[str, Any]:
+    """Apply the raw-evidence policy after fixed daily facts are verified."""
+    retention_mode = raw_retention.strip().lower()
+    if retention_mode not in {"release", "compress", "keep"}:
+        raise ValueError("raw_retention must be one of: compress, keep, release")
+    snapshot_verification = verify_sensor_daily_snapshot(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        expected_row_count=int(snapshot_summary.get("record_count") or 0),
+    )
+    if snapshot_verification["error_count"]:
+        raise ValueError(
+            "Daily snapshot persistence could not be verified; refusing retention action."
+        )
+
+    raw_summary: dict[str, Any] | None = None
+    if retention_mode == "keep":
+        raw_status = "kept"
+    elif retention_mode == "compress":
+        raw_summary = compress_raw_waites(settings=settings, run_date=run_date)
+        raw_status = "compressed"
+    else:
+        raw_summary = release_raw_waites(settings=settings, run_date=run_date)
+        raw_status = "released"
+
+    ledger_update = update_ingestion_retention(
+        settings=settings,
+        run_date=run_date,
+        source=source,
+        raw_retention_mode=retention_mode,
+        raw_retention_status=raw_status,
+        native_retention_status="not_applicable",
+    )
+    result = {
+        "source": source,
+        "date": run_date.isoformat(),
+        "raw_retention_mode": retention_mode,
+        "raw_retention_status": raw_status,
+        "native_retention_status": "not_applicable",
+        "snapshot_verification": snapshot_verification,
+        "ledger": ledger_update,
+    }
+    if raw_summary is not None:
+        result["raw"] = raw_summary
+    return result
 
 
 def build_plain_artifact_metadata(path: Path) -> dict[str, Any]:

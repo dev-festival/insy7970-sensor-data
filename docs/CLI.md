@@ -45,8 +45,9 @@ a task scheduler never maintains its own last-run date.
 
 `INSY_SOURCE_TIMEZONE` controls the source calendar and the meaning of yesterday.
 `INSY_RAW_RETENTION` accepts `release`, `compress`, or `keep`. `release` is the
-sustainable default: raw endpoint payloads and timestamp-native staging are removed
-after durable facts, models, and verification succeed.
+sustainable default: raw endpoint payloads are removed after durable facts, models,
+and verification succeed. Durable events and the small manifest/validation record
+remain.
 
 Keep `.env` and `data/` out of Git. Secret values are not included in command JSON or
 audit summaries.
@@ -192,11 +193,49 @@ Snapshot and trend exports support optional `--equipment-id`,
 Event exports support equipment and installation-point scope. Every export has
 `--json` summary output and does not alter operational facts.
 
-## Deprecated compatibility commands
+## Startup and deployment
 
-The old fetch, raw, store, snapshot, trend, workflow, report, clustering, health, and
-Maximo diagnostic families remain callable but are hidden from primary help during
-`0.6.5`. They print replacement guidance and receive no new behavior. Sprint `0.6.6`
-removes them after parity and cleanup gates pass.
+Run the service from the project root with the intended `.env`. A service manager
+should capture stdout/stderr and restart only after configuration errors are fixed.
+`serve` performs source/store preflight before Uvicorn starts, including reload mode;
+source mismatch and migration-required errors are concise and traceback-free.
 
-Use the public commands for all new operating procedures.
+Use a separate directory for every source/environment. The established API instance
+is `INSY_SOURCE_MODE=api` with `INSY_DATA_DIR=data`; the example mock instance is
+`INSY_SOURCE_MODE=mock` with `INSY_DATA_DIR=data-mock`.
+
+## Schema maintenance
+
+Everyday commands initialize a clean schema but never delete historical live data.
+Legacy retirement is owned by the service operator and uses the versioned script:
+
+```powershell
+uv run python scripts/retire_0_6_6.py --manifest maintenance/0.6.6-manifest.json
+```
+
+The default is read-only. Inspect the manifest's source, database SHA-256, integrity,
+parity, table counts, exact file targets, and manifest SHA-256. Store all maintenance
+outputs outside `data/processed`.
+
+Applying the manifest is destructive and requires a separate approval. After stopping
+the service or proving no active writer lease, the approved form is:
+
+```powershell
+uv run python scripts/retire_0_6_6.py --apply `
+  --manifest maintenance/0.6.6-manifest.json `
+  --confirm-manifest-sha256 EXACT_HASH `
+  --backup maintenance/observations-pre-0.6.6.sqlite `
+  --restore-test maintenance/observations-restore-rehearsal.sqlite `
+  --vacuum-output maintenance/observations-compacted.sqlite `
+  --result maintenance/0.6.6-apply-result.json
+```
+
+Before replacing any live database with the compacted output, verify its integrity,
+source, protected row counts, representative web responses, `doctor`, and exports.
+Keep the backup and restore rehearsal until the release is accepted. Rollback stops
+the service and restores the verified backup to the configured observations path.
+The cleanup script never targets raw evidence.
+
+The retired fetch, raw, store, snapshot, trend, workflow, report, clustering, health,
+and Maximo diagnostic CLI families no longer exist. Use the five public commands or
+the versioned maintenance script.

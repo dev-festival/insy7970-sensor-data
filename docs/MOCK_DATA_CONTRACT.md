@@ -5,10 +5,10 @@ This document defines the fixture shapes and awkward cases that should guide spr
 ## Goals
 
 1. Let every test run without Waites credentials, Maximo access, ODBC drivers, or plant network access.
-2. Preserve the same artifact names and schemas that real source pulls will use.
+2. Preserve the same raw evidence names and operational schemas that real pulls use.
 3. Include enough awkward cases that later snapshot, clustering, and join logic does not quietly assume perfect data.
 4. Keep fixtures inspectable by humans.
-5. Make raw evidence and processed reference outputs easy to compare.
+5. Make raw evidence and durable SQLite references easy to compare.
 
 ## Fixture Location
 
@@ -52,22 +52,21 @@ data/
 
 The raw files should be close to source responses. Avoid transforming fields during raw capture.
 
-## Processed Reference Location
+## Durable Reference Location
 
-Sprint `0.1.0` should also emit small reference tables:
+Mock ingestion writes the same compact references as API ingestion:
 
 ```text
 data/
   processed/
-    waites/
-      reference/
-        asset_tree.csv
-        equipment.csv
-        installation_points.csv
-        metadata.json
+    observations.sqlite
 ```
 
-These files are used by later snapshot and asset alignment work.
+The `waites_asset_tree_reference`, `waites_equipment_reference`, and
+`waites_installation_point_reference` tables are the only operational reference
+representation. Mock fetch itself writes raw evidence; validated snapshot ingestion
+atomically writes these references with events and fixed daily facts. No processed
+reference CSV mirror is created.
 
 ## Waites Response Envelopes
 
@@ -112,7 +111,8 @@ Known optional live fields:
 - `path`
 - `label`
 
-The processed `asset_tree.csv` flattens nested structures into `asset_tree_id`, `name`, `parent_asset_tree_id`, `facility_id`, and `asset_tree_path`.
+The durable asset-tree reference flattens nested structures into `asset_tree_id`,
+`name`, `parent_asset_tree_id`, `facility_id`, and `asset_tree_path`.
 
 ## Equipment Fixture
 
@@ -536,7 +536,8 @@ Sprint `0.1.0` should add pytest coverage that checks:
 - Required fields are present for each record type.
 - Awkward cases are represented.
 - Mock fetch writes the raw artifacts and manifest.
-- Processed reference tables preserve `equipment_id`, `installation_point_id`, `sensor_id`, and `customer_asset_id`.
+- Durable reference tables preserve `equipment_id`, `installation_point_id`, `sensor_id`, and `customer_asset_id`.
+- Clean ingestion creates no processed snapshot, trend, feature, cluster, drift, window, or reference mirrors.
 
 ## Update Rule
 
