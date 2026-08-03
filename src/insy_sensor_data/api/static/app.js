@@ -628,17 +628,38 @@ async function renderDrift() {
   ]);
   const grouped = groupBy(payload.pairs || [], "feature_space");
   const colors = ["#287271", "#5d7f9f", "#a64253", "#8a6f3d"];
-  const traces = Object.entries(grouped).map(([featureSpace, rows], index) => ({
-    type: "bar",
-    name: featureSpaceLabel(featureSpace),
-    x: rows.map((row) => `${row.from_date} to ${row.to_date}`),
-    y: rows.map((row) => numeric(row.aligned_changed_ratio)),
-    marker: { color: colors[index % colors.length] },
-  }));
+  const traces = Object.entries(grouped).map(([featureSpace, rows], index) => {
+    const ordered = rows.slice().sort((left, right) => String(left.to_date).localeCompare(String(right.to_date)));
+    const color = colors[index % colors.length];
+    return {
+      type: "scatter",
+      mode: "lines+markers",
+      name: featureSpaceLabel(featureSpace),
+      x: ordered.map((row) => row.to_date),
+      y: ordered.map((row) => {
+        const ratio = numeric(row.aligned_changed_ratio);
+        return ratio === null ? null : ratio * 100;
+      }),
+      text: ordered.map((row) => (
+        `${row.from_date} → ${row.to_date} | `
+        + `${row.aligned_changed_count || 0} of ${row.matched_sensor_count || 0} sensors changed | `
+        + (row.interpretation || "")
+      )),
+      line: { color },
+      marker: {
+        size: ordered.map((row) => row.warning_count ? 10 : 8),
+        line: {
+          width: ordered.map((row) => row.warning_count ? 2 : 0),
+          color: "#8a6f3d",
+        },
+      },
+      timeSeries: true,
+    };
+  });
   plotChart(traces, {
-    title: "Aligned drift across active feature spaces",
-    xaxis: { title: "Date pair" },
-    yaxis: { title: "Ratio" },
+    title: "Aligned cluster movement over time",
+    xaxis: { title: "To date" },
+    yaxis: { title: "Matched sensors changing cluster (%)", range: [0, 100] },
   });
   const gapRows = (payload.gaps || []).map((row) => ({
     ...row,

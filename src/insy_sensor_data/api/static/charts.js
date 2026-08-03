@@ -64,7 +64,7 @@
         temporalX,
       )
       : null;
-    const yDomain = paddedDomain(
+    const yDomain = configuredDomain(layout.yaxis?.range) || paddedDomain(
       traces.flatMap((trace) => trace.points.map((point) => point.y)).concat(hasBars ? [0] : []),
       hasBars,
     );
