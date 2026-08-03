@@ -40,7 +40,7 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.6.3](0.6.3-registered-model-convergence.md) | Registered model convergence | One store-backed model pipeline with versioned readiness and gap-tolerant drift |
 | [0.6.4](0.6.4-web-workflow-reshaping.md) | Web workflow reshaping | Review, Fleet Trends, Cluster, and Drift over compact service-owned state |
 | [0.6.5](0.6.5-admin-cli-contraction.md) | Admin CLI contraction and sustainment sync | Five operator-oriented commands plus scheduler-ready catch-up through yesterday |
-| [0.6.6](0.6.6-legacy-retirement-and-release-hardening.md) | Legacy retirement and release hardening | Checkpoint A code/schema/tooling complete; live cleanup waits for separately approved Checkpoint B |
+| [0.6.6](0.6.6-legacy-retirement-and-release-hardening.md) | Legacy retirement and release hardening | Checkpoints A and B complete; legacy files/tables retired with verified rollback and compaction |
 
 ## 0.6.x Reshaping Phase
 

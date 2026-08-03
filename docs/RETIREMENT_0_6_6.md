@@ -109,5 +109,8 @@ bundle containing the manifest, verified SQLite backup/restore, and exact proces
 artifact archive. Apply revalidates that bundle before deletion, and compacted-store
 activation retains the displaced database. The frozen 2026-08-03 live package passed
 backup, restore, archive, disposable compaction, protected-count, and representative
-web-read checks. Checkpoint B remains unexecuted; all 832 historical files remain in
-place.
+web-read checks. Checkpoint B was explicitly approved and completed on 2026-08-03:
+all 832 manifested files and nine legacy tables were retired, the verified compacted
+database was activated, and raw evidence was unchanged. The pre-retirement backup,
+restore rehearsal, artifact archive, and displaced uncompacted database remain under
+ignored `maintenance/` for release rollback.
