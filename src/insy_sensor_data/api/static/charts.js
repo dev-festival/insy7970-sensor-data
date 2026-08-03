@@ -1,6 +1,8 @@
 (function () {
   const SVG_NS = "http://www.w3.org/2000/svg";
   const COLORS = ["#287271", "#5d7f9f", "#a64253", "#8a6f3d", "#59656f", "#3d8068", "#b7791f", "#4263eb"];
+  const BAND_UPPER_COLOR = "#efb6b6";
+  const BAND_LOWER_COLOR = "#b9dfbf";
 
   function render(container, traces, layout) {
     if (!container) {
@@ -65,7 +67,9 @@
       )
       : null;
     const yDomain = configuredDomain(layout.yaxis?.range) || paddedDomain(
-      traces.flatMap((trace) => trace.points.map((point) => point.y)).concat(hasBars ? [0] : []),
+      traces.flatMap((trace) => trace.points.flatMap((point) => (
+        [point.y, point.bandLower, point.bandUpper]
+      ))).concat(hasBars ? [0] : []),
       hasBars,
     );
     const scales = {
@@ -115,6 +119,8 @@
             xNumber: xDateNumber ?? toNumber(xRaw),
             xIsDate: xDateNumber !== null,
             y,
+            bandLower: toNumber(valueAt(trace.band?.lower, index)),
+            bandUpper: toNumber(valueAt(trace.band?.upper, index)),
             label: valueLabel(valueAt(trace.text, index)) || `${xLabel}: ${formatNumber(y)}`,
             color: colorAt(trace.marker?.color, index) || baseColor,
             size: markerSize(trace.marker?.size, index),
@@ -264,6 +270,8 @@
       y: scales.y(point.y),
     }));
 
+    drawBand(svg, coordinates, trace, scales);
+
     if (trace.mode.includes("lines") && coordinates.length > 1) {
       if (trace.timeSeries) {
         drawTemporalSpline(svg, coordinates, trace);
@@ -307,6 +315,58 @@
         svg.append(circle);
       });
     }
+  }
+
+  function drawBand(svg, coordinates, trace, scales) {
+    const bandCoordinates = coordinates.filter(({ point }) => (
+      point.bandLower !== null && point.bandUpper !== null
+    ));
+    if (bandCoordinates.length < 2) return;
+    const average = bandCoordinates.map(({ x, y }) => ({ x, y }));
+    const upper = bandCoordinates.map(({ point, x }) => ({
+      x,
+      y: scales.y(point.bandUpper),
+    }));
+    const lower = bandCoordinates.map(({ point, x }) => ({
+      x,
+      y: scales.y(point.bandLower),
+    }));
+    svg.append(svgElement("path", {
+      class: "chart-band chart-band-upper",
+      d: bandAreaPath(upper, average),
+      fill: BAND_UPPER_COLOR,
+      opacity: 0.72,
+      stroke: "none",
+      "pointer-events": "none",
+    }));
+    svg.append(svgElement("path", {
+      class: "chart-band chart-band-lower",
+      d: bandAreaPath(average, lower),
+      fill: BAND_LOWER_COLOR,
+      opacity: 0.72,
+      stroke: "none",
+      "pointer-events": "none",
+    }));
+  }
+
+  function bandAreaPath(top, bottom) {
+    const topTangents = monotoneTangents(top);
+    const bottomTangents = monotoneTangents(bottom);
+    const parts = [`M ${top[0].x} ${top[0].y}`];
+    for (let index = 1; index < top.length; index += 1) {
+      parts.push(splineSegmentCommand(top[index - 1], top[index], topTangents[index - 1], topTangents[index]));
+    }
+    parts.push(`L ${bottom[bottom.length - 1].x} ${bottom[bottom.length - 1].y}`);
+    for (let index = bottom.length - 1; index > 0; index -= 1) {
+      parts.push(reverseSplineSegmentCommand(
+        bottom[index],
+        bottom[index - 1],
+        bottomTangents[index],
+        bottomTangents[index - 1],
+      ));
+    }
+    parts.push("Z");
+    return parts.join(" ");
   }
 
   function drawTemporalSpline(svg, coordinates, trace) {
@@ -372,15 +432,31 @@
   }
 
   function splineSegmentPath(from, to, fromTangent, toTangent) {
+    return `M ${from.x} ${from.y} ${splineSegmentCommand(from, to, fromTangent, toTangent)}`;
+  }
+
+  function splineSegmentCommand(from, to, fromTangent, toTangent) {
     const width = to.x - from.x;
     if (width <= 0) {
-      return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+      return `L ${to.x} ${to.y}`;
     }
     const controlWidth = width / 3;
     return [
-      `M ${from.x} ${from.y}`,
       `C ${from.x + controlWidth} ${from.y + fromTangent * controlWidth}`,
       `${to.x - controlWidth} ${to.y - toTangent * controlWidth}`,
+      `${to.x} ${to.y}`,
+    ].join(" ");
+  }
+
+  function reverseSplineSegmentCommand(from, to, fromTangent, toTangent) {
+    const width = from.x - to.x;
+    if (width <= 0) {
+      return `L ${to.x} ${to.y}`;
+    }
+    const controlWidth = width / 3;
+    return [
+      `C ${from.x - controlWidth} ${from.y - fromTangent * controlWidth}`,
+      `${to.x + controlWidth} ${to.y + toTangent * controlWidth}`,
       `${to.x} ${to.y}`,
     ].join(" ");
   }

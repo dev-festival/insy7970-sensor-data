@@ -54,6 +54,10 @@ def load_trend_view(
         selected_dimension,
         selected_stat,
     )
+    range_fields = (
+        metric_field(selected_metric, "min", selected_dimension),
+        metric_field(selected_metric, "max", selected_dimension),
+    )
     scope_context = _scope_context or resolve_scope(
         settings,
         source=resolved_source,
@@ -89,6 +93,7 @@ def load_trend_view(
         detail_limit=selected_limit,
         detail_offset=selected_offset,
         aggregate_series=scope_context["type"] in {"all", "asset_tree"},
+        range_fields=range_fields,
         equipment_ids=query_equipment_ids,
         installation_point_ids=query_installation_ids,
         sensor_id=sensor_id,
@@ -301,6 +306,8 @@ def trend_series(
                     {
                         "date": row.get("date"),
                         "installation_point_id": installation_id,
+                        "range_min": row.get("range_min"),
+                        "range_max": row.get("range_max"),
                         value_field: row.get(value_field),
                     }
                     for row in chronological

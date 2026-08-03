@@ -563,8 +563,8 @@ async function renderTrend() {
     { label: "Metric", value: metric.label },
     { label: "Scope", value: scopeLabel() },
   ]);
-  plotChart(trendSeriesTraces(payload.series || [], meanField), {
-    title: `${metric.label} Trend`,
+  plotChart(fleetTrendTraces(payload.series || [], meanField), {
+    title: `${metric.label} Trend · average with min–max range`,
     xaxis: { title: "Date", range: [state.startDate, state.endDate] },
     yaxis: { title: metric.unit },
   });
@@ -1045,9 +1045,21 @@ function trendSeriesTraces(series, field, selectedDate = "") {
   }).filter(Boolean);
 }
 
+function fleetTrendTraces(series, field) {
+  const palette = ["#287271", "#5d7f9f", "#a64253", "#8a6f3d", "#59656f", "#3d8068"];
+  return series.slice(0, 12).map((item, index) => {
+    const rows = (item.rows || []).slice().sort((left, right) => String(left.date).localeCompare(String(right.date)));
+    return lineTrace(rows, field, item.label || item.id || `Series ${index + 1}`, palette[index % palette.length], {
+      bandLowerField: "range_min",
+      bandUpperField: "range_max",
+      timeSeries: true,
+    });
+  }).filter(Boolean);
+}
+
 function lineTrace(rows, field, name, color, options = {}) {
   if (!rows.some((row) => numeric(row[field]) !== null)) return null;
-  return {
+  const trace = {
     type: "scatter",
     mode: "lines+markers",
     name,
@@ -1060,6 +1072,13 @@ function lineTrace(rows, field, name, color, options = {}) {
     },
     timeSeries: options.timeSeries === true,
   };
+  if (options.bandLowerField && options.bandUpperField) {
+    trace.band = {
+      lower: rows.map((row) => numeric(row[options.bandLowerField])),
+      upper: rows.map((row) => numeric(row[options.bandUpperField])),
+    };
+  }
+  return trace;
 }
 
 function snapshotStat(labelText, valueText) {

@@ -266,6 +266,7 @@ def query_trend_product(
     detail_limit: int,
     detail_offset: int,
     aggregate_series: bool,
+    range_fields: tuple[str, str] | None = None,
     equipment_ids: Iterable[str] | None = None,
     installation_point_ids: Iterable[str] | None = None,
     sensor_id: str | None = None,
@@ -276,6 +277,7 @@ def query_trend_product(
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
     selected_detail_fields = list(dict.fromkeys(detail_fields))
+    selected_range_fields = list(dict.fromkeys(range_fields or ()))
     with read_store(
         settings,
         required_tables=("waites_ingestion_ledger",),
@@ -284,7 +286,12 @@ def query_trend_product(
         available = set(table_columns(connection, table))
         _require_columns(
             available,
-            [*SNAPSHOT_IDENTIFIER_FIELDS, value_field, *selected_detail_fields],
+            [
+                *SNAPSHOT_IDENTIFIER_FIELDS,
+                value_field,
+                *selected_detail_fields,
+                *selected_range_fields,
+            ],
         )
         clauses = [
             "source = ?",
@@ -332,15 +339,22 @@ def query_trend_product(
                 f"Snapshots are unavailable for source {resolved_source} from "
                 f"{start_date.isoformat()} to {end_date.isoformat()}."
             )
+        range_projection = ""
+        if len(selected_range_fields) == 2:
+            range_projection = (
+                f', "{selected_range_fields[0]}" AS range_min'
+                f', "{selected_range_fields[1]}" AS range_max'
+            )
         summary_rows = connection.execute(
             f"""
-            SELECT
+                SELECT
                 source_date AS date,
                 installation_point_id,
                 installation_point_name,
                 sensor_id,
                 equipment_id,
                 "{value_field}" AS value
+                {range_projection}
             FROM {table}
             WHERE {where}
             ORDER BY
@@ -406,20 +420,30 @@ def query_trend_product(
                             "installation_point_name"
                         ],
                         "sensor_id": raw_sensor_id,
+                        "range_min": row["range_min"] if len(selected_range_fields) == 2 else None,
+                        "range_max": row["range_max"] if len(selected_range_fields) == 2 else None,
                         value_field: row["value"],
                     }
                 )
         if aggregate_series:
-            date_values: dict[str, list[float | int]] = {}
+            date_values: dict[str, list[float]] = {}
             for (raw_date, _equipment_id), (total, count) in equipment_values.items():
-                aggregate = date_values.setdefault(raw_date, [0.0, 0])
-                aggregate[0] += total / count
-                aggregate[1] += 1
+                date_values.setdefault(raw_date, []).append(total / count)
             series_rows = [
                 {
                     "date": raw_date,
                     value_field: (
-                        date_values[raw_date][0] / date_values[raw_date][1]
+                        sum(date_values[raw_date]) / len(date_values[raw_date])
+                        if raw_date in date_values
+                        else None
+                    ),
+                    "range_min": (
+                        min(date_values[raw_date])
+                        if raw_date in date_values
+                        else None
+                    ),
+                    "range_max": (
+                        max(date_values[raw_date])
                         if raw_date in date_values
                         else None
                     ),

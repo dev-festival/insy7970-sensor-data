@@ -73,6 +73,8 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     chart_response = client.get("/static/charts.js")
     assert chart_response.status_code == 200
     assert "window.SensorCharts" in chart_response.text
+    assert "chart-band-upper" in chart_response.text
+    assert "chart-band-lower" in chart_response.text
 
     app_response = client.get("/static/app.js")
     assert app_response.status_code == 200
@@ -83,6 +85,7 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert '"Selected view"' in app_response.text
     assert "explained_variance_ratio" in app_response.text
     assert "/api/drift-overview" in app_response.text
+    assert "fleetTrendTraces" in app_response.text
     assert 'title: "Aligned cluster movement over time"' in app_response.text
     assert 'mode: "lines+markers"' in app_response.text
     assert "/api/artifacts" not in app_response.text
@@ -763,6 +766,7 @@ def test_snapshot_and_trend_endpoints_support_sensor_filters(tmp_path: Path) -> 
     assert 0 < scoped["sensor_row_count"] < 27
     assert scoped["filtered_sensor_row_count"] == scoped["sensor_row_count"]
     assert scoped["series"][0]["aggregation"] == "mean_of_equipment_means"
+    assert {"range_min", "range_max"}.issubset(scoped["series"][0]["rows"][0])
 
 
 @pytest.mark.parametrize(
@@ -809,6 +813,7 @@ def test_trend_endpoint_projects_and_bounds_each_scope(
     }
     assert len(payload["sensor_rows"]) == 2
     assert payload["series"][0]["aggregation"] == aggregation
+    assert {"range_min", "range_max"}.issubset(payload["series"][0]["rows"][0])
     assert set(payload["sensor_rows"][0]) == {
         "date",
         "installation_point_id",
