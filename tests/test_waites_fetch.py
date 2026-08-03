@@ -4,8 +4,14 @@ import csv
 import json
 
 from insy_sensor_data.config import AppSettings
-from insy_sensor_data.waites.client import WaitesApiError, WaitesApiResponse, build_waites_requests, utc_day_bounds
-from insy_sensor_data.waites.fetch import fetch_waites
+from insy_sensor_data.waites.client import (
+    WaitesApiError,
+    WaitesApiResponse,
+    build_waites_reference_requests,
+    build_waites_requests,
+    utc_day_bounds,
+)
+from insy_sensor_data.waites.fetch import fetch_waites, refresh_waites_references
 from insy_sensor_data.waites.fixtures import MOCK_TREND_DATES
 import pytest
 
@@ -28,6 +34,17 @@ def test_build_waites_requests_uses_expected_endpoint_params() -> None:
     assert by_endpoint["readings-rms"].params["start_date"] == "2025-07-09T00:00:00Z"
     assert by_endpoint["readings-rms"].params["end_date"] == "2025-07-09T23:59:59Z"
     assert by_endpoint["action-items"].params["action_item_status"] == "active"
+
+
+def test_build_waites_reference_requests_are_facility_scoped() -> None:
+    requests = build_waites_reference_requests(facility_id=679)
+
+    assert [request.endpoint for request in requests] == [
+        "asset-tree",
+        "equipment",
+        "installation-points",
+    ]
+    assert all(request.params == {"facility[]": 679} for request in requests)
 
 
 def test_utc_day_bounds() -> None:
@@ -176,6 +193,88 @@ def test_fetch_waites_api_writes_error_manifest_without_secret(tmp_path: Path) -
     assert "access-token" not in manifest_text
 
 
+def test_refresh_waites_references_mock_writes_bounded_manifest_and_updates_store(
+    tmp_path: Path,
+) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+
+    summary = refresh_waites_references(
+        settings=settings,
+        source="mock",
+        source_date=date(2025, 7, 9),
+    )
+
+    assert summary["status"] == "complete"
+    assert summary["row_counts"] == {
+        "asset_trees": 3,
+        "equipment": 6,
+        "installation_points": 8,
+    }
+    manifest_path = tmp_path / "data" / "raw" / "waites" / "reference-refresh.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["status"] == "complete"
+    assert manifest["source_date"] == "2025-07-09"
+    assert set(manifest["row_counts"]) == {
+        "asset_trees",
+        "equipment",
+        "installation_points",
+    }
+    assert not list((tmp_path / "data" / "raw" / "waites").glob("date=*"))
+
+    import sqlite3
+
+    with sqlite3.connect(tmp_path / "data" / "processed" / "observations.sqlite") as connection:
+        assert connection.execute(
+            "SELECT name FROM waites_equipment_reference "
+            "WHERE equipment_id = 55577"
+        ).fetchone()[0] == " BL - Steel Pinch Roll "
+
+
+def test_refresh_waites_references_api_calls_only_reference_endpoints(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data", waites_access_token="token-123")
+    client = ReferenceWaitesClient(_api_payloads())
+
+    summary = refresh_waites_references(
+        settings=settings,
+        source="api",
+        api_client=client,
+        source_date=date(2025, 7, 9),
+    )
+
+    assert summary["status"] == "complete"
+    assert client.endpoints == ["asset-tree", "equipment", "installation-points"]
+    manifest_text = (
+        tmp_path / "data" / "raw" / "waites" / "reference-refresh.json"
+    ).read_text(encoding="utf-8")
+    assert "token-123" not in manifest_text
+    assert "access-token" not in manifest_text
+
+
+def test_refresh_waites_references_invalid_payload_preserves_existing_rows(tmp_path: Path) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    refresh_waites_references(settings=settings, source="mock", source_date=date(2025, 7, 9))
+
+    invalid_payloads = _api_payloads()
+    del invalid_payloads["equipment"]["list"][0]["name"]
+    client = ReferenceWaitesClient(invalid_payloads)
+
+    with pytest.raises(ValueError, match="reference validation failed"):
+        refresh_waites_references(
+            settings=settings,
+            source="api",
+            api_client=client,
+            source_date=date(2025, 7, 10),
+        )
+
+    import sqlite3
+
+    with sqlite3.connect(tmp_path / "data" / "processed" / "observations.sqlite") as connection:
+        assert connection.execute(
+            "SELECT name FROM waites_equipment_reference "
+            "WHERE equipment_id = 55576"
+        ).fetchone()[0] == "BL - Aluminium Pinch Roll"
+
+
 class FakeWaitesClient:
     def __init__(self, payloads: dict[str, dict[str, object]]) -> None:
         self.payloads = payloads
@@ -187,6 +286,16 @@ class FakeWaitesClient:
             elapsed_ms=7,
             payload=self.payloads[request.endpoint],
         )
+
+
+class ReferenceWaitesClient(FakeWaitesClient):
+    def __init__(self, payloads: dict[str, dict[str, object]]) -> None:
+        super().__init__(payloads)
+        self.endpoints: list[str] = []
+
+    def fetch(self, request: object) -> WaitesApiResponse:
+        self.endpoints.append(request.endpoint)
+        return super().fetch(request)
 
 
 class ErrorWaitesClient:

@@ -99,13 +99,20 @@ def sync(
         bool,
         typer.Option("--defer-models", help="Persist daily facts without building active models."),
     ] = False,
+    tree: Annotated[
+        bool,
+        typer.Option(
+            "--tree",
+            help="Refresh current asset-tree, equipment, and installation-point references only.",
+        ),
+    ] = False,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Print a machine-readable summary."),
     ] = False,
     env_file: EnvFileOption = Path(".env"),
 ) -> None:
-    """Catch up durable data and active models through yesterday."""
+    """Catch up daily data, or refresh current Waites references with --tree."""
     settings = _admin_settings(env_file, "sync", json_output)
     try:
         summary = run_sync(
@@ -115,6 +122,7 @@ def sync(
             end_date=_parse_optional_run_date(end_date, "end-date"),
             max_days=max_days,
             defer_models=defer_models,
+            tree=tree,
         )
     except (
         FileNotFoundError,
@@ -380,6 +388,8 @@ def _emit_admin_summary(summary: dict[str, object], json_output: bool) -> None:
     typer.echo(f"{operation}: {status}")
     if summary.get("source"):
         typer.echo(f"Source: {summary['source']}")
+    if summary.get("mode"):
+        typer.echo(f"Mode: {summary['mode']}")
     start_date = summary.get("start_date") or summary.get("date")
     end_date = summary.get("end_date")
     if start_date and end_date and start_date != end_date:
@@ -396,6 +406,14 @@ def _emit_admin_summary(summary: dict[str, object], json_output: bool) -> None:
         typer.echo(f"Output: {summary['destination']}")
     if summary.get("row_count") is not None:
         typer.echo(f"Rows: {summary['row_count']}")
+    row_counts = summary.get("row_counts")
+    if isinstance(row_counts, dict):
+        formatted_counts = ", ".join(
+            f"{key}={row_counts[key]}" for key in sorted(row_counts)
+        )
+        typer.echo(f"Reference rows: {formatted_counts}")
+    if summary.get("capture_manifest"):
+        typer.echo(f"Capture: {summary['capture_manifest']}")
     synchronization = summary.get("synchronization")
     if isinstance(synchronization, dict):
         typer.echo(

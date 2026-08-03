@@ -178,6 +178,59 @@ def validation_summary(report: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_waites_reference_payloads(
+    payloads: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Validate the three non-time-series Waites payloads in memory."""
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "invalid",
+        "error_count": 0,
+        "warning_count": 0,
+        "endpoints": [],
+        "issues": [],
+    }
+    for endpoint in ("asset-tree", "equipment", "installation-points"):
+        payload = payloads.get(endpoint)
+        if not isinstance(payload, Mapping):
+            _add_issue(
+                report,
+                "error",
+                endpoint,
+                "bad_envelope",
+                "Expected endpoint JSON object.",
+            )
+            report["endpoints"].append({"name": endpoint, "record_count": 0})
+            continue
+
+        records = (
+            asset_tree_records_from_payload(dict(payload))
+            if endpoint == "asset-tree"
+            else payload.get("list")
+        )
+        summary: dict[str, Any] = {
+            "name": endpoint,
+            "record_count": len(records) if isinstance(records, list) else 0,
+            "required_fields": sorted(REQUIRED_FIELDS[endpoint]),
+            "extra_fields": [],
+            "null_counts": {},
+        }
+        report["endpoints"].append(summary)
+        if not isinstance(records, list) or not records:
+            _add_issue(
+                report,
+                "error",
+                endpoint,
+                "bad_envelope",
+                "Expected a non-empty endpoint record list.",
+            )
+            continue
+        _validate_records(endpoint, records, summary, report)
+
+    _finalize_report(report)
+    return report
+
+
 def ensure_waites_raw_valid(
     settings: AppSettings,
     run_date: date,

@@ -148,6 +148,51 @@ def test_cli_sync_doctor_rebuild_and_exports_use_operational_surface(tmp_path: P
     assert (export_dir / "models.json").is_file()
 
 
+def test_cli_sync_tree_refreshes_reference_only(tmp_path: Path) -> None:
+    env_file = _env_file(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["sync", "--tree", "--json", "--env-file", str(env_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["operation"] == "sync"
+    assert payload["mode"] == "tree"
+    assert payload["status"] == "complete"
+    assert payload["row_counts"]["equipment"] == 6
+
+    human = runner.invoke(
+        app,
+        ["sync", "--tree", "--env-file", str(env_file)],
+    )
+    assert human.exit_code == 0, human.output
+    assert "Mode: tree" in human.stdout
+    assert "Reference rows:" in human.stdout
+
+
+def test_cli_sync_tree_conflicts_with_date(tmp_path: Path) -> None:
+    env_file = _env_file(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "--tree",
+            "--date",
+            "2025-07-09",
+            "--json",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert "--tree cannot be combined with --date" in payload["error"]
+
+
 def test_cli_admin_json_failures_are_machine_readable_and_secret_safe(tmp_path: Path) -> None:
     env_file = tmp_path / "invalid.env"
     env_file.write_text(

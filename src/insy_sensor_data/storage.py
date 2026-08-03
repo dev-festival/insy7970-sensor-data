@@ -44,6 +44,11 @@ class StoragePaths:
     def raw_waites_run_dir(self, run_date: str) -> Path:
         return self.raw_waites_dir / f"date={run_date}"
 
+    @property
+    def raw_waites_reference_manifest_path(self) -> Path:
+        """Bounded metadata for the latest reference-only Waites refresh."""
+        return self.raw_waites_dir / "reference-refresh.json"
+
 def get_storage_paths(data_dir: str | Path) -> StoragePaths:
     return StoragePaths(data_dir=Path(data_dir))
 

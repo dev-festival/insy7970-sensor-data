@@ -453,6 +453,41 @@ def persist_validated_waites_day(
     }
 
 
+def persist_waites_references(
+    settings: AppSettings,
+    *,
+    source: str,
+    source_date: str,
+    loaded_at: str,
+    payloads: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Atomically publish a validated reference-only Waites refresh."""
+    source_mode = _validate_source(source)
+    with connect_observation_store(settings) as connection:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            claim_configured_source(connection, source_mode)
+            reference_counts = _upsert_durable_waites_references(
+                connection,
+                source=source_mode,
+                source_date=source_date,
+                loaded_at=loaded_at,
+                payloads=payloads,
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    return {
+        "source": source_mode,
+        "source_date": source_date,
+        "loaded_at": loaded_at,
+        "database_path": observation_db_path(settings).as_posix(),
+        "row_counts": reference_counts,
+    }
+
+
 def load_sensor_daily_snapshots(
     settings: AppSettings,
     run_date: date,

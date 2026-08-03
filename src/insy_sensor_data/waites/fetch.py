@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+import hashlib
 from pathlib import Path
 from typing import Any
 import json
@@ -13,9 +14,12 @@ from insy_sensor_data.waites.client import (
     WaitesApiClient,
     WaitesApiError,
     WaitesRequest,
+    build_waites_reference_requests,
     build_waites_requests,
 )
 from insy_sensor_data.waites.fixtures import describe_mock_trend_date, load_waites_fixture
+from insy_sensor_data.waites.validate import validate_waites_reference_payloads
+from insy_sensor_data.observations import persist_waites_references
 
 
 def fetch_waites(
@@ -89,6 +93,123 @@ def fetch_waites(
     }
 
 
+def refresh_waites_references(
+    settings: AppSettings,
+    *,
+    source: str = "mock",
+    facility_id: int | None = None,
+    fixture_dir: Path | None = None,
+    api_client: Any | None = None,
+    source_date: date | None = None,
+) -> dict[str, Any]:
+    """Fetch, validate, and atomically publish current Waites references."""
+    if source not in {"mock", "api"}:
+        raise ValueError("source must be one of: api, mock")
+
+    selected_facility_id = facility_id if facility_id is not None else settings.waites_facility_id
+    storage = get_storage_paths(settings.data_dir)
+    storage.ensure_base_dirs()
+    captured_at = _utc_timestamp()
+    reference_source_date = (source_date or datetime.now(UTC).date()).isoformat()
+    requests = build_waites_reference_requests(selected_facility_id)
+    payloads: dict[str, dict[str, Any]] = {}
+    endpoint_summaries: list[dict[str, Any]] = []
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "operation": "sync --tree",
+        "source": source,
+        "facility_id": selected_facility_id,
+        "source_date": reference_source_date,
+        "fetched_at": captured_at,
+        "status": "failed",
+        "endpoints": endpoint_summaries,
+    }
+
+    client = api_client
+    if source == "api":
+        client = client or _build_api_client(settings)
+
+    try:
+        for request in requests:
+            try:
+                if source == "mock":
+                    envelope = load_waites_fixture(request.endpoint, fixture_dir=fixture_dir)
+                    endpoint_summary = {
+                        "name": request.endpoint,
+                        "record_count": _record_count(request.endpoint, envelope),
+                        "params": request.params,
+                    }
+                else:
+                    assert client is not None
+                    response = client.fetch(request)
+                    envelope = response.payload
+                    _validate_waites_envelope(
+                        request.endpoint,
+                        envelope,
+                        status_code=response.status_code,
+                        elapsed_ms=response.elapsed_ms,
+                    )
+                    endpoint_summary = {
+                        "name": request.endpoint,
+                        "record_count": _record_count(request.endpoint, envelope),
+                        "params": request.params,
+                        "status_code": response.status_code,
+                        "elapsed_ms": response.elapsed_ms,
+                    }
+                payloads[request.endpoint] = envelope
+                endpoint_summary["sha256"] = _payload_sha256(envelope)
+                endpoint_summaries.append(endpoint_summary)
+            except WaitesApiError as exc:
+                endpoint_summaries.append(_reference_error_manifest_entry(request, exc))
+                raise
+
+        validation = validate_waites_reference_payloads(payloads)
+        manifest["validation"] = {
+            "status": validation["status"],
+            "error_count": validation["error_count"],
+            "warning_count": validation["warning_count"],
+            "issues": validation["issues"],
+        }
+        if validation["error_count"]:
+            raise ValueError(
+                "Waites reference validation failed with "
+                f"{validation['error_count']} error(s)."
+            )
+
+        normalized_payloads = {
+            "asset-tree": asset_tree_records_from_payload(payloads["asset-tree"]),
+            "equipment": payloads["equipment"]["list"],
+            "installation-points": payloads["installation-points"]["list"],
+        }
+        persisted = persist_waites_references(
+            settings,
+            source=source,
+            source_date=reference_source_date,
+            loaded_at=captured_at,
+            payloads=normalized_payloads,
+        )
+        manifest["status"] = "complete"
+        manifest["row_counts"] = persisted["row_counts"]
+        _write_json(storage.raw_waites_reference_manifest_path, manifest)
+        return {
+            "source": source,
+            "facility_id": selected_facility_id,
+            "status": "complete",
+            "fetched_at": captured_at,
+            "source_date": reference_source_date,
+            "row_counts": persisted["row_counts"],
+            "endpoint_counts": {
+                entry["name"]: entry["record_count"] for entry in endpoint_summaries
+            },
+            "validation": manifest["validation"],
+            "capture_manifest": storage.raw_waites_reference_manifest_path.as_posix(),
+        }
+    except Exception as exc:
+        manifest["error"] = str(exc)
+        _write_json(storage.raw_waites_reference_manifest_path, manifest)
+        raise
+
+
 def _build_api_client(settings: AppSettings) -> WaitesApiClient:
     if not settings.waites_token_configured:
         raise ValueError("WAITES_ACCESS_TOKEN must be configured for --source api.")
@@ -96,6 +217,31 @@ def _build_api_client(settings: AppSettings) -> WaitesApiClient:
         base_url=settings.waites_base_url,
         access_token=settings.waites_access_token,
     )
+
+
+def _reference_error_manifest_entry(
+    request: WaitesRequest,
+    exc: WaitesApiError,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "name": request.endpoint,
+        "params": request.params,
+        "error": str(exc),
+    }
+    if exc.status_code is not None:
+        entry["status_code"] = exc.status_code
+    if exc.elapsed_ms is not None:
+        entry["elapsed_ms"] = exc.elapsed_ms
+    return entry
+
+
+def _payload_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _fetch_live_endpoint(

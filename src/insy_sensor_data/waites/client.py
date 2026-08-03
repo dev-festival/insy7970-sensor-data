@@ -28,6 +28,12 @@ READING_ENDPOINTS = {
     "readings-temperature",
 }
 
+REFERENCE_ENDPOINTS = (
+    "asset-tree",
+    "equipment",
+    "installation-points",
+)
+
 ENDPOINT_PATHS = {
     "asset-tree": "asset-tree",
     "equipment": "equipment",
@@ -174,6 +180,14 @@ def build_waites_requests(run_date: date, facility_id: int) -> list[WaitesReques
                 "action_item_status": "active",
             },
         ),
+    ]
+
+
+def build_waites_reference_requests(facility_id: int) -> list[WaitesRequest]:
+    """Build the facility-scoped requests used by a reference-only refresh."""
+    return [
+        WaitesRequest(endpoint, ENDPOINT_FILENAMES[endpoint], _facility_params(facility_id))
+        for endpoint in REFERENCE_ENDPOINTS
     ]
 
 

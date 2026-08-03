@@ -96,6 +96,19 @@ uv run sensor-data sync --defer-models
 uv run sensor-data sync --json
 ```
 
+To refresh only the current Waites navigation references, without reading data,
+action items, models, daily facts, or the synchronization cursor, use:
+
+```powershell
+uv run sensor-data sync --tree
+uv run sensor-data sync --tree --json
+```
+
+`--tree` fetches and atomically updates the asset-tree, equipment, and
+installation-point references. It is mutually exclusive with `--date`,
+`--start-date`, `--end-date`, `--max-days`, and `--defer-models`. The latest
+reference-capture metadata is kept at `data/raw/waites/reference-refresh.json`.
+
 Automatic and explicit synchronization reject the current and future source dates.
 `--max-days` bounds one invocation; a remaining backlog returns partial status rather
 than claiming the instance is current. `--defer-models` advances durable sensor data

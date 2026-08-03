@@ -69,6 +69,46 @@ def test_sync_builds_complete_day_and_bare_sync_is_non_mutating_noop(tmp_path: P
         ).fetchone()[0] == before_audits
 
 
+def test_sync_tree_refreshes_references_without_daily_sync_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(
+        admin,
+        "refresh_waites_references",
+        lambda *_args, **_kwargs: {
+            "status": "complete",
+            "source": "mock",
+            "facility_id": 679,
+            "source_date": "2025-07-09",
+            "row_counts": {
+                "asset_trees": 2,
+                "equipment": 6,
+                "installation_points": 8,
+            },
+        },
+    )
+
+    result = run_sync(settings, tree=True, now=RUN_NOW)
+
+    assert result["mode"] == "tree"
+    assert result["status"] == "complete"
+    with sqlite3.connect(settings.data_dir / "processed" / "observations.sqlite") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sync_control").fetchone()[0] == 0
+        audit = connection.execute(
+            "SELECT component, status FROM admin_action_audit"
+        ).fetchone()
+        assert audit == ("tree", "complete")
+
+
+def test_sync_tree_rejects_daily_options(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+
+    with pytest.raises(ValueError, match="--tree cannot be combined with --date"):
+        run_sync(settings, tree=True, run_date=RUN_DATE, now=RUN_NOW)
+
+
 def test_sync_requires_start_boundary_and_rejects_current_date(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
 

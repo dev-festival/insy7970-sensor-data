@@ -26,7 +26,7 @@ from insy_sensor_data.storage import get_storage_paths
 from insy_sensor_data.store.connection import read_store, schema_version, store_path
 from insy_sensor_data.store.events import backfill_waites_events
 from insy_sensor_data.store.schema import active_snapshot_table
-from insy_sensor_data.waites.fetch import fetch_waites
+from insy_sensor_data.waites.fetch import fetch_waites, refresh_waites_references
 from insy_sensor_data.waites.validate import validate_waites_raw
 
 
@@ -57,8 +57,19 @@ def run_sync(
     end_date: date | None = None,
     max_days: int | None = None,
     defer_models: bool = False,
+    tree: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    if tree:
+        _validate_tree_selection(
+            run_date=run_date,
+            start_date=start_date,
+            end_date=end_date,
+            max_days=max_days,
+            defer_models=defer_models,
+        )
+        return _run_tree_refresh(settings, now=now)
+
     target_date = source_yesterday(settings, now=now)
     _validate_date_selection(run_date, start_date, end_date, target_date)
     control = _initialize_sync_control(
@@ -705,6 +716,47 @@ def _sync_one_day(
         raise
 
 
+def _run_tree_refresh(
+    settings: AppSettings,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    action_id = secrets.token_hex(16)
+    with writer_lease(settings, operation="sync --tree") as lease:
+        _start_audit(
+            settings,
+            action_id=action_id,
+            operation="sync",
+            start_date=None,
+            end_date=None,
+            component="tree",
+        )
+        try:
+            summary = refresh_waites_references(
+                settings,
+                source=settings.source_mode,
+                source_date=source_yesterday(settings, now=now),
+            )
+            lease.heartbeat()
+            result = {
+                "operation": "sync",
+                "mode": "tree",
+                "source": settings.source_mode,
+                "status": "complete",
+                **summary,
+            }
+            _finish_audit(settings, action_id, status="complete", summary=result)
+            return result
+        except Exception as exc:
+            _finish_audit(
+                settings,
+                action_id,
+                status="failed",
+                summary={"operation": "sync", "mode": "tree", "error": str(exc)},
+            )
+            raise
+
+
 def _validated_raw_or_fetch(settings: AppSettings, run_date: date) -> dict[str, Any]:
     raw_dir = get_storage_paths(settings.data_dir).raw_waites_run_dir(run_date.isoformat())
     if raw_dir.joinpath("manifest.json").is_file():
@@ -975,6 +1027,30 @@ def _validate_date_selection(
         raise ValueError("end_date must be on or after start_date")
 
 
+def _validate_tree_selection(
+    *,
+    run_date: date | None,
+    start_date: date | None,
+    end_date: date | None,
+    max_days: int | None,
+    defer_models: bool,
+) -> None:
+    selected = []
+    if run_date is not None:
+        selected.append("--date")
+    if start_date is not None:
+        selected.append("--start-date")
+    if end_date is not None:
+        selected.append("--end-date")
+    if max_days is not None:
+        selected.append("--max-days")
+    if defer_models:
+        selected.append("--defer-models")
+    if selected:
+        joined = ", ".join(selected)
+        raise ValueError(f"--tree cannot be combined with {joined}; run it by itself.")
+
+
 def _explicit_dates(
     run_date: date | None,
     start_date: date | None,
@@ -1001,8 +1077,8 @@ def _start_audit(
     *,
     action_id: str,
     operation: str,
-    start_date: date,
-    end_date: date,
+    start_date: date | None,
+    end_date: date | None,
     component: str | None = None,
 ) -> None:
     with connect_observation_store(settings) as connection:
@@ -1013,8 +1089,8 @@ def _start_audit(
                 action_id,
                 operation,
                 settings.source_mode,
-                start_date.isoformat(),
-                end_date.isoformat(),
+                start_date.isoformat() if start_date else None,
+                end_date.isoformat() if end_date else None,
                 component,
                 datetime.now(UTC).isoformat(),
             ),
