@@ -103,6 +103,11 @@ absent.
 ## Checkpoint decision
 
 Checkpoint A is implemented and rehearsed. The checked-in maintenance utility is
-dry-run-first, and the environment-specific manifest is kept under ignored
-`maintenance/`. Checkpoint B remains unexecuted: the live database is still
-244,944,896 bytes and all 832 historical files remain in place.
+dry-run-first, and environment-specific evidence is kept under ignored
+`maintenance/`. Checkpoint B preparation now produces one checksum-bound approval
+bundle containing the manifest, verified SQLite backup/restore, and exact processed
+artifact archive. Apply revalidates that bundle before deletion, and compacted-store
+activation retains the displaced database. The frozen 2026-08-03 live package passed
+backup, restore, archive, disposable compaction, protected-count, and representative
+web-read checks. Checkpoint B remains unexecuted; all 832 historical files remain in
+place.

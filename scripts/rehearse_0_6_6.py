@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,6 +23,7 @@ from insy_sensor_data.retirement import (
     build_retirement_manifest,
     create_database_backup,
     database_integrity,
+    prepare_retirement_checkpoint,
 )
 
 
@@ -58,15 +60,30 @@ def main() -> int:
         manifest_path = root / "manifest.json"
         manifest = build_retirement_manifest(rehearsed, manifest_path)
         before = manifest["database"]["protected_table_rows"]
-        result = apply_retirement_manifest(
+        audit_row_added = not _migration_audit_exists(
+            database,
+            str(manifest["source"]),
+            int(manifest["database"]["target_schema_version"]),
+        )
+        preparation = prepare_retirement_checkpoint(
             manifest_path,
             expected_manifest_sha256=manifest["manifest_sha256"],
             backup_path=root / "pre-retirement.sqlite",
             restore_test_path=root / "restore-rehearsal.sqlite",
+            artifact_archive_path=root / "retired-artifacts.zip",
+            approval_bundle_path=root / "approval-bundle.json",
+        )
+        result = apply_retirement_manifest(
+            manifest_path,
+            expected_manifest_sha256=manifest["manifest_sha256"],
+            approval_bundle_path=root / "approval-bundle.json",
+            expected_approval_bundle_sha256=preparation["approval_bundle_sha256"],
             vacuum_output=root / "compacted.sqlite",
         )
         after = _counts(database, PROTECTED_TABLES)
         expected = {table: count for table, count in before.items() if count is not None}
+        if audit_row_added:
+            expected["snapshot_migration_audit"] += 1
         actual = {table: after[table] for table in expected}
         if actual != expected:
             raise RuntimeError("Protected-table counts changed during the rehearsal.")
@@ -76,7 +93,7 @@ def main() -> int:
         if remaining_legacy:
             raise RuntimeError(f"Legacy tables survived the rehearsal: {remaining_legacy}")
 
-        with sqlite3.connect(root / "restore-rehearsal.sqlite") as connection:
+        with closing(sqlite3.connect(root / "restore-rehearsal.sqlite")) as connection:
             restored_facts = int(
                 connection.execute("SELECT COUNT(*) FROM sensor_daily_facts").fetchone()[0]
             )
@@ -112,6 +129,7 @@ def main() -> int:
             "restored_fixed_fact_rows": restored_facts,
             "restored_legacy_snapshot_rows": restored_legacy,
             "protected_counts_preserved": True,
+            "migration_audit_rows_added": int(audit_row_added),
             "legacy_tables_remaining": remaining_legacy,
             "representative_reads": context_reads,
             "temporary_outputs_removed_on_exit": True,
@@ -144,7 +162,7 @@ def _representative_reads(settings: AppSettings) -> dict[str, int]:
 
 
 def _counts(path: Path, tables: tuple[str, ...]) -> dict[str, int | None]:
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         return {
             table: (
                 int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
@@ -159,9 +177,17 @@ def _counts(path: Path, tables: tuple[str, ...]) -> dict[str, int | None]:
 
 
 def _table_exists(path: Path, table: str) -> bool:
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         return connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone() is not None
+
+
+def _migration_audit_exists(path: Path, source: str, version: int) -> bool:
+    with closing(sqlite3.connect(path)) as connection:
+        return connection.execute(
+            "SELECT 1 FROM snapshot_migration_audit WHERE source = ? AND migration_version = ?",
+            (source, version),
         ).fetchone() is not None
 
 

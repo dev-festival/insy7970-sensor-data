@@ -135,11 +135,13 @@ uv run python scripts/retire_0_6_6.py --manifest maintenance/0.6.6-manifest.json
 ```
 
 The script records exact paths, sizes, SHA-256 checksums, schema/source identity,
-table counts, parity, integrity, and writer state. Applying a manifest requires its
-exact checksum, a SQLite-consistent backup, and a restored rehearsal database.
-Live deletion and compaction are a separate approval checkpoint; generating a dry
-run does not authorize them. See [Service Administration CLI](docs/CLI.md#schema-maintenance)
-for the full stop/backup/restore procedure.
+table counts, parity, integrity, and writer state. Its non-destructive `--prepare`
+mode creates a SQLite-consistent backup, proves a disposable restore, archives the
+exact historical files, and binds their checksums into one approval bundle. Live
+deletion, compaction, and activation remain separately confirmed operations; neither
+a dry run nor preparation authorizes them. See
+[Service Administration CLI](docs/CLI.md#schema-maintenance) for the complete
+operator workflow.
 
 ## Development
 

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
+import gc
 import hashlib
 import json
 import sqlite3
+import zipfile
 
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.store.schema import (
@@ -149,7 +152,9 @@ def create_database_backup(database_path: Path, destination: Path) -> dict[str, 
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         raise FileExistsError(f"Backup destination already exists: {target.as_posix()}")
-    with sqlite3.connect(source) as source_connection, sqlite3.connect(target) as target_connection:
+    with closing(sqlite3.connect(source)) as source_connection, closing(
+        sqlite3.connect(target)
+    ) as target_connection:
         source_connection.backup(target_connection)
     integrity = database_integrity(target)
     if integrity != "ok":
@@ -171,42 +176,137 @@ def rehearse_database_restore(backup_path: Path, destination: Path) -> dict[str,
     return restored
 
 
-def apply_retirement_manifest(
+def prepare_retirement_checkpoint(
     manifest_path: Path,
     *,
     expected_manifest_sha256: str,
     backup_path: Path,
     restore_test_path: Path,
-    vacuum_output: Path | None = None,
+    artifact_archive_path: Path,
+    approval_bundle_path: Path,
 ) -> dict[str, Any]:
-    """Apply only a verified manifest; intended for rehearsals until separately approved."""
-    manifest_path = manifest_path.resolve()
-    actual_manifest_sha256 = _sha256(manifest_path)
-    if actual_manifest_sha256 != expected_manifest_sha256:
-        raise ValueError("Manifest checksum does not match the explicit confirmation value.")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("status") != "dry_run" or manifest.get("raw_evidence_targeted") is not False:
-        raise ValueError("Manifest is not an eligible 0.6.6 dry run.")
+    """Create the verified, non-destructive evidence required to approve Checkpoint B."""
+    manifest_path, manifest = _load_manifest(manifest_path, expected_manifest_sha256)
     processed_dir = Path(str(manifest["processed_dir"])).resolve()
     database_path = Path(str(manifest["database"]["absolute_path"])).resolve()
-    maintenance_paths = [backup_path.resolve(), restore_test_path.resolve()]
-    if vacuum_output is not None:
-        maintenance_paths.append(vacuum_output.resolve())
-    if len(set(maintenance_paths)) != len(maintenance_paths):
-        raise ValueError("Backup, restore rehearsal, and vacuum destinations must be distinct.")
-    for path in maintenance_paths:
-        if _is_within(path, processed_dir):
-            raise ValueError("Maintenance outputs must be stored outside data/processed.")
-    _verify_database_identity(database_path, manifest["database"])
-    _verify_manifest_files(manifest["files"], processed_dir)
+    outputs = [
+        backup_path.resolve(),
+        restore_test_path.resolve(),
+        artifact_archive_path.resolve(),
+        approval_bundle_path.resolve(),
+    ]
+    _validate_maintenance_paths(outputs, processed_dir)
+    if manifest_path in outputs:
+        raise ValueError("Preparation outputs must differ from the manifest.")
 
+    _verify_live_targets(manifest, processed_dir, database_path)
     backup = create_database_backup(database_path, backup_path)
-    restore_rehearsal = rehearse_database_restore(backup_path, restore_test_path)
-    _verify_database_identity(database_path, manifest["database"])
+    backup["database"] = _database_inventory(backup_path.resolve(), str(manifest["source"]))
+    _verify_inventory_matches_manifest(backup["database"], manifest["database"])
+
+    restore = rehearse_database_restore(backup_path, restore_test_path)
+    restore["database"] = _database_inventory(
+        restore_test_path.resolve(), str(manifest["source"])
+    )
+    if _inventory_signature(restore["database"]) != _inventory_signature(backup["database"]):
+        raise RuntimeError("Restored database inventory does not match the verified backup.")
+
+    archive = create_artifact_archive(manifest, artifact_archive_path)
+    _verify_live_targets(manifest, processed_dir, database_path)
+
+    bundle = {
+        "retirement_version": RETIREMENT_VERSION,
+        "operation": "checkpoint_b_preparation",
+        "status": "prepared",
+        "prepared_at": _utc_now(),
+        "manifest": {
+            "absolute_path": manifest_path.as_posix(),
+            "sha256": expected_manifest_sha256,
+            "generated_at": manifest["generated_at"],
+        },
+        "source": manifest["source"],
+        "database": manifest["database"],
+        "backup": backup,
+        "restore_rehearsal": restore,
+        "artifact_archive": archive,
+        "approved_cleanup": {
+            "file_count": manifest["file_count"],
+            "file_bytes": manifest["file_bytes"],
+            "candidate_table_rows": manifest["database"]["candidate_table_rows"],
+            "raw_evidence_targeted": False,
+        },
+        "approved": False,
+    }
+    destination = approval_bundle_path.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise FileExistsError(f"Approval bundle already exists: {destination.as_posix()}")
+    destination.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {
+        **bundle,
+        "approval_bundle_path": destination.as_posix(),
+        "approval_bundle_sha256": _sha256(destination),
+    }
+
+
+def create_artifact_archive(manifest: dict[str, Any], destination: Path) -> dict[str, Any]:
+    """Archive only the exact manifested processed files and verify every payload hash."""
+    processed_dir = Path(str(manifest["processed_dir"])).resolve()
+    target = destination.resolve()
+    if _is_within(target, processed_dir):
+        raise ValueError("Artifact archive must be stored outside data/processed.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        raise FileExistsError(f"Artifact archive already exists: {target.as_posix()}")
     _verify_manifest_files(manifest["files"], processed_dir)
+    with zipfile.ZipFile(
+        target,
+        mode="x",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+        allowZip64=True,
+    ) as archive:
+        for entry in manifest["files"]:
+            path = Path(str(entry["absolute_path"])).resolve()
+            archive.write(path, arcname=f"processed/{entry['relative_path']}")
+    verification = _verify_artifact_archive(target, manifest)
+    return {
+        "absolute_path": target.as_posix(),
+        "byte_count": target.stat().st_size,
+        "sha256": _sha256(target),
+        "format": "zip",
+        **verification,
+        "created_at": _utc_now(),
+    }
+
+
+def apply_retirement_manifest(
+    manifest_path: Path,
+    *,
+    expected_manifest_sha256: str,
+    approval_bundle_path: Path,
+    expected_approval_bundle_sha256: str,
+    vacuum_output: Path,
+) -> dict[str, Any]:
+    """Apply a separately approved preparation bundle to its still-identical live targets."""
+    manifest_path, manifest = _load_manifest(manifest_path, expected_manifest_sha256)
+    processed_dir = Path(str(manifest["processed_dir"])).resolve()
+    database_path = Path(str(manifest["database"]["absolute_path"])).resolve()
+    vacuum_output = vacuum_output.resolve()
+    _validate_maintenance_paths(
+        [approval_bundle_path.resolve(), vacuum_output], processed_dir
+    )
+    preparation = verify_retirement_checkpoint(
+        manifest_path,
+        expected_manifest_sha256=expected_manifest_sha256,
+        approval_bundle_path=approval_bundle_path,
+        expected_approval_bundle_sha256=expected_approval_bundle_sha256,
+    )
+    if vacuum_output.exists():
+        raise FileExistsError(f"Vacuum output already exists: {vacuum_output.as_posix()}")
     started_at = _utc_now()
     table_actions: list[dict[str, Any]] = []
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         if _writer_active(connection):
@@ -322,48 +422,305 @@ def apply_retirement_manifest(
             }
         )
 
-    vacuum: dict[str, Any] | None = None
-    if vacuum_output is not None:
-        output = vacuum_output.resolve()
-        if output.exists():
-            raise FileExistsError(f"Vacuum output already exists: {output.as_posix()}")
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(database_path) as connection:
-            escaped = output.as_posix().replace("'", "''")
-            connection.execute(f"VACUUM INTO '{escaped}'")
-        vacuum = {
-            "absolute_path": output.as_posix(),
-            "byte_count": output.stat().st_size,
-            "sha256": _sha256(output),
-            "integrity_check": database_integrity(output),
-        }
+    vacuum_output.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(database_path)) as connection:
+        escaped = vacuum_output.as_posix().replace("'", "''")
+        connection.execute(f"VACUUM INTO '{escaped}'")
+    vacuum = _database_record(vacuum_output, str(manifest["source"]))
+    database_after = _database_record(database_path, str(manifest["source"]))
+    if _inventory_signature(vacuum["database"]) != _inventory_signature(
+        database_after["database"]
+    ):
+        raise RuntimeError("Compacted database inventory does not match the retired live database.")
     return {
         "operation": "legacy_retirement",
         "status": "complete",
         "source": manifest["source"],
         "manifest_path": manifest_path.as_posix(),
-        "manifest_sha256": actual_manifest_sha256,
-        "backup": backup,
-        "restore_rehearsal": restore_rehearsal,
+        "manifest_sha256": expected_manifest_sha256,
+        "approval_bundle_path": approval_bundle_path.resolve().as_posix(),
+        "approval_bundle_sha256": expected_approval_bundle_sha256,
+        "backup": preparation["backup"],
+        "restore_rehearsal": preparation["restore_rehearsal"],
+        "artifact_archive": preparation["artifact_archive"],
         "table_actions": table_actions,
         "file_actions": file_actions,
         "directory_actions": directory_actions,
         "deleted_file_count": deleted_files,
         "deleted_file_bytes": deleted_bytes,
         "database_integrity_check": database_integrity(database_path),
+        "database_after": database_after,
         "vacuum_output": vacuum,
         "completed_at": _utc_now(),
     }
 
 
+def verify_retirement_checkpoint(
+    manifest_path: Path,
+    *,
+    expected_manifest_sha256: str,
+    approval_bundle_path: Path,
+    expected_approval_bundle_sha256: str,
+) -> dict[str, Any]:
+    """Verify the complete approval bundle and prove that every live target is unchanged."""
+    manifest_path, manifest = _load_manifest(manifest_path, expected_manifest_sha256)
+    bundle_path = approval_bundle_path.resolve()
+    if _sha256(bundle_path) != expected_approval_bundle_sha256:
+        raise ValueError("Approval bundle checksum does not match the explicit confirmation value.")
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    if bundle.get("status") != "prepared" or bundle.get("approved") is not False:
+        raise ValueError("Approval bundle is not an eligible Checkpoint B preparation.")
+    recorded_manifest = bundle.get("manifest", {})
+    if (
+        Path(str(recorded_manifest.get("absolute_path"))).resolve() != manifest_path
+        or recorded_manifest.get("sha256") != expected_manifest_sha256
+    ):
+        raise ValueError("Approval bundle does not identify the confirmed manifest.")
+
+    processed_dir = Path(str(manifest["processed_dir"])).resolve()
+    database_path = Path(str(manifest["database"]["absolute_path"])).resolve()
+    if bundle.get("source") != manifest.get("source"):
+        raise ValueError("Approval bundle source does not match the manifest.")
+    if bundle.get("database") != manifest.get("database"):
+        raise ValueError("Approval bundle database evidence does not match the manifest.")
+
+    backup = bundle["backup"]
+    restore = bundle["restore_rehearsal"]
+    archive = bundle["artifact_archive"]
+    maintenance_paths = [
+        bundle_path,
+        Path(str(backup["absolute_path"])).resolve(),
+        Path(str(restore["absolute_path"])).resolve(),
+        Path(str(archive["absolute_path"])).resolve(),
+    ]
+    _validate_maintenance_paths(maintenance_paths, processed_dir)
+    _verify_recorded_file(backup)
+    if database_integrity(Path(str(backup["absolute_path"]))) != "ok":
+        raise RuntimeError("Prepared database backup no longer passes integrity checks.")
+    backup_inventory = _database_inventory(
+        Path(str(backup["absolute_path"])).resolve(), str(manifest["source"])
+    )
+    _verify_inventory_matches_manifest(backup_inventory, manifest["database"])
+
+    _verify_recorded_file(restore)
+    if restore.get("source_backup_sha256") != backup["sha256"]:
+        raise RuntimeError("Restore rehearsal is not bound to the prepared backup.")
+    restore_inventory = _database_inventory(
+        Path(str(restore["absolute_path"])).resolve(), str(manifest["source"])
+    )
+    if _inventory_signature(restore_inventory) != _inventory_signature(backup_inventory):
+        raise RuntimeError("Restore rehearsal inventory no longer matches the backup.")
+
+    _verify_recorded_file(archive)
+    _verify_artifact_archive(Path(str(archive["absolute_path"])), manifest)
+    _verify_live_targets(manifest, processed_dir, database_path)
+    return bundle
+
+
+def activate_compacted_database(
+    apply_result_path: Path,
+    *,
+    expected_apply_result_sha256: str,
+    expected_vacuum_sha256: str,
+    displaced_database_path: Path,
+) -> dict[str, Any]:
+    """Atomically activate a verified compacted database while retaining its predecessor."""
+    result_path = apply_result_path.resolve()
+    if _sha256(result_path) != expected_apply_result_sha256:
+        raise ValueError("Apply-result checksum does not match the explicit confirmation value.")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    if result.get("status") != "complete":
+        raise ValueError("Apply result is not complete and cannot be activated.")
+    live_record = result["database_after"]
+    vacuum_record = result["vacuum_output"]
+    live_path = Path(str(live_record["absolute_path"])).resolve()
+    vacuum_path = Path(str(vacuum_record["absolute_path"])).resolve()
+    displaced = displaced_database_path.resolve()
+    processed_dir = live_path.parent.resolve()
+    _validate_maintenance_paths([result_path, vacuum_path, displaced], processed_dir)
+    if displaced.exists():
+        raise FileExistsError(f"Displaced database destination already exists: {displaced.as_posix()}")
+    if vacuum_record.get("sha256") != expected_vacuum_sha256:
+        raise ValueError("Vacuum checksum does not match the apply result.")
+    _verify_recorded_file(live_record)
+    _verify_recorded_file(vacuum_record)
+    if database_integrity(live_path) != "ok" or database_integrity(vacuum_path) != "ok":
+        raise RuntimeError("Live or compacted database failed integrity checks before activation.")
+    live_inventory = live_record["database"]
+    current_live_inventory = _database_inventory(live_path, str(result["source"]))
+    compacted_inventory = _database_inventory(vacuum_path, str(result["source"]))
+    if current_live_inventory.get("active_writer") is not None:
+        raise RuntimeError("An administrative writer lease is active; activation is blocked.")
+    if (
+        _inventory_signature(current_live_inventory) != _inventory_signature(live_inventory)
+        or _inventory_signature(compacted_inventory) != _inventory_signature(live_inventory)
+    ):
+        raise RuntimeError("Live and compacted database inventories do not match.")
+    sidecars = [Path(f"{live_path}{suffix}") for suffix in ("-wal", "-shm", "-journal")]
+    existing_sidecars = [path.as_posix() for path in sidecars if path.exists()]
+    if existing_sidecars:
+        raise RuntimeError(f"SQLite sidecar files remain; stop the service first: {existing_sidecars}")
+
+    # sqlite3 connection/statement cycles can otherwise retain a Windows file handle
+    # briefly after verification, even though every explicit connection is closed.
+    gc.collect()
+    displaced.parent.mkdir(parents=True, exist_ok=True)
+    live_path.replace(displaced)
+    try:
+        vacuum_path.replace(live_path)
+        activated = _database_record(live_path, str(result["source"]))
+        if activated["sha256"] != expected_vacuum_sha256:
+            raise RuntimeError(
+                "Activated database checksum does not match the verified compacted output."
+            )
+    except Exception:
+        if live_path.exists() and not vacuum_path.exists():
+            live_path.replace(vacuum_path)
+        if displaced.exists() and not live_path.exists():
+            displaced.replace(live_path)
+        raise
+    return {
+        "operation": "checkpoint_b_activation",
+        "status": "complete",
+        "source": result["source"],
+        "apply_result_path": result_path.as_posix(),
+        "apply_result_sha256": expected_apply_result_sha256,
+        "activated_database": activated,
+        "displaced_database": _database_record(displaced, str(result["source"])),
+        "completed_at": _utc_now(),
+    }
+
+
 def database_integrity(path: Path) -> str:
-    with sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True) as connection:
+    with closing(
+        sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True)
+    ) as connection:
         row = connection.execute("PRAGMA integrity_check").fetchone()
     return str(row[0]) if row else "missing_result"
 
 
+def _load_manifest(
+    manifest_path: Path,
+    expected_manifest_sha256: str,
+) -> tuple[Path, dict[str, Any]]:
+    path = manifest_path.resolve()
+    if _sha256(path) != expected_manifest_sha256:
+        raise ValueError("Manifest checksum does not match the explicit confirmation value.")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("status") != "dry_run" or manifest.get("raw_evidence_targeted") is not False:
+        raise ValueError("Manifest is not an eligible 0.6.6 dry run.")
+    return path, manifest
+
+
+def _validate_maintenance_paths(paths: Iterable[Path], processed_dir: Path) -> None:
+    resolved = [path.resolve() for path in paths]
+    if len(set(resolved)) != len(resolved):
+        raise ValueError("Maintenance outputs must use distinct paths.")
+    for path in resolved:
+        if _is_within(path, processed_dir):
+            raise ValueError("Maintenance outputs must be stored outside data/processed.")
+
+
+def _verify_live_targets(
+    manifest: dict[str, Any],
+    processed_dir: Path,
+    database_path: Path,
+) -> None:
+    _verify_database_identity(database_path, manifest["database"])
+    _verify_manifest_files(manifest["files"], processed_dir)
+    inventory = _database_inventory(database_path, str(manifest["source"]))
+    if inventory.get("active_writer") is not None:
+        raise RuntimeError("An administrative writer lease is active; retirement is blocked.")
+    _verify_inventory_matches_manifest(inventory, manifest["database"])
+
+
+def _database_record(path: Path, source: str) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "absolute_path": resolved.as_posix(),
+        "byte_count": resolved.stat().st_size,
+        "sha256": _sha256(resolved),
+        "integrity_check": database_integrity(resolved),
+        "database": _database_inventory(resolved, source),
+    }
+
+
+def _verify_recorded_file(record: dict[str, Any]) -> None:
+    path = Path(str(record["absolute_path"])).resolve()
+    if not path.is_file():
+        raise RuntimeError(f"Prepared maintenance file is missing: {path.as_posix()}")
+    if path.stat().st_size != int(record["byte_count"]) or _sha256(path) != record["sha256"]:
+        raise RuntimeError(f"Prepared maintenance file changed: {path.as_posix()}")
+
+
+def _verify_inventory_matches_manifest(
+    inventory: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    if _inventory_signature(inventory) != _inventory_signature(expected):
+        raise RuntimeError("Database inventory no longer matches the retirement manifest.")
+
+
+def _inventory_signature(inventory: dict[str, Any]) -> dict[str, Any]:
+    parity = inventory.get("legacy_snapshot_parity") or {}
+    return {
+        "schema_version": inventory.get("schema_version"),
+        "configured_source": inventory.get("configured_source"),
+        "integrity_check": inventory.get("integrity_check"),
+        "legacy_snapshot_parity": {
+            key: parity.get(key)
+            for key in (
+                "status",
+                "source",
+                "legacy_row_count",
+                "fixed_row_count",
+                "legacy_hash",
+                "fixed_hash",
+                "null_value_count",
+                "zero_value_count",
+            )
+        },
+        "legacy_snapshot_other_source_rows": inventory.get(
+            "legacy_snapshot_other_source_rows"
+        ),
+        "candidate_table_rows": inventory.get("candidate_table_rows"),
+        "protected_table_rows": inventory.get("protected_table_rows"),
+    }
+
+
+def _verify_artifact_archive(
+    archive_path: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    expected = {
+        f"processed/{entry['relative_path']}": entry for entry in manifest["files"]
+    }
+    with zipfile.ZipFile(archive_path.resolve(), mode="r") as archive:
+        names = archive.namelist()
+        if len(names) != len(set(names)) or set(names) != set(expected):
+            raise RuntimeError("Artifact archive contents do not match the retirement manifest.")
+        for name, entry in expected.items():
+            info = archive.getinfo(name)
+            digest = hashlib.sha256()
+            with archive.open(info, mode="r") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if info.file_size != int(entry["byte_count"]) or digest.hexdigest() != entry["sha256"]:
+                raise RuntimeError(f"Artifact archive payload failed verification: {name}")
+        bad_member = archive.testzip()
+        if bad_member is not None:
+            raise RuntimeError(f"Artifact archive CRC check failed: {bad_member}")
+    return {
+        "file_count": len(expected),
+        "payload_bytes": sum(int(entry["byte_count"]) for entry in expected.values()),
+        "verification": "complete",
+    }
+
+
 def _database_inventory(path: Path, expected_source: str) -> dict[str, Any]:
-    with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+    with closing(
+        sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    ) as connection:
         connection.row_factory = sqlite3.Row
         tables = {
             str(row[0])

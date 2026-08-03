@@ -217,24 +217,54 @@ The default is read-only. Inspect the manifest's source, database SHA-256, integ
 parity, table counts, exact file targets, and manifest SHA-256. Store all maintenance
 outputs outside `data/processed`.
 
-Applying the manifest is destructive and requires a separate approval. After stopping
-the service or proving no active writer lease, the approved form is:
+With the service and scheduled writers stopped, preparation is still non-destructive:
+
+```powershell
+uv run python scripts/retire_0_6_6.py --prepare `
+  --manifest maintenance/0.6.6-manifest.json `
+  --confirm-manifest-sha256 EXACT_MANIFEST_HASH `
+  --backup maintenance/observations-pre-0.6.6.sqlite `
+  --restore-test maintenance/observations-restore-rehearsal.sqlite `
+  --archive maintenance/0.6.6-retired-artifacts.zip `
+  --approval-bundle maintenance/0.6.6-approval-bundle.json
+```
+
+Preparation rechecks the live targets, creates and verifies a SQLite-consistent
+backup, proves a disposable restore, archives every exact file target, and binds all
+checksums into the approval bundle. Keep the service stopped so that bundle remains
+current. Applying it is destructive and requires separate approval naming both the
+manifest and approval-bundle hashes:
 
 ```powershell
 uv run python scripts/retire_0_6_6.py --apply `
   --manifest maintenance/0.6.6-manifest.json `
-  --confirm-manifest-sha256 EXACT_HASH `
-  --backup maintenance/observations-pre-0.6.6.sqlite `
-  --restore-test maintenance/observations-restore-rehearsal.sqlite `
+  --confirm-manifest-sha256 EXACT_MANIFEST_HASH `
+  --approval-bundle maintenance/0.6.6-approval-bundle.json `
+  --confirm-approval-sha256 EXACT_APPROVAL_BUNDLE_HASH `
   --vacuum-output maintenance/observations-compacted.sqlite `
   --result maintenance/0.6.6-apply-result.json
 ```
 
-Before replacing any live database with the compacted output, verify its integrity,
-source, protected row counts, representative web responses, `doctor`, and exports.
-Keep the backup and restore rehearsal until the release is accepted. Rollback stops
-the service and restores the verified backup to the configured observations path.
-The cleanup script never targets raw evidence.
+The apply step revalidates the complete bundle before dropping or deleting anything.
+It produces a compacted candidate but does not activate it automatically. After the
+apply result, compacted database, protected counts, representative reads, `doctor`,
+and exports are verified, activate the exact compacted candidate while retaining the
+post-retirement predecessor:
+
+```powershell
+uv run python scripts/retire_0_6_6.py --activate `
+  --apply-result maintenance/0.6.6-apply-result.json `
+  --confirm-result-sha256 EXACT_RESULT_HASH `
+  --confirm-vacuum-sha256 EXACT_COMPACTED_HASH `
+  --displaced-database maintenance/observations-post-retirement-uncompacted.sqlite `
+  --activation-result maintenance/0.6.6-activation-result.json
+```
+
+Activation refuses active writer leases, SQLite sidecar files, checksum changes, or
+count/source/integrity mismatches. Keep the backup, restore rehearsal, artifact
+archive, and displaced predecessor until the release is accepted. Rollback stops the
+service and restores the verified backup to the configured observations path. The
+cleanup script never targets raw evidence.
 
 The retired fetch, raw, store, snapshot, trend, workflow, report, clustering, health,
 and Maximo diagnostic CLI families no longer exist. Use the five public commands or
