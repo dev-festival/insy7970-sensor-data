@@ -41,6 +41,7 @@ Read the project-level design first: [Grand Design](../GRAND_DESIGN.md).
 | [0.6.4](0.6.4-web-workflow-reshaping.md) | Web workflow reshaping | Review, Fleet Trends, Cluster, and Drift over compact service-owned state |
 | [0.6.5](0.6.5-admin-cli-contraction.md) | Admin CLI contraction and sustainment sync | Five operator-oriented commands plus scheduler-ready catch-up through yesterday |
 | [0.6.6](0.6.6-legacy-retirement-and-release-hardening.md) | Legacy retirement and release hardening | Checkpoints A and B complete; legacy files/tables retired with verified rollback and compaction |
+| [0.7.0](0.7.0-waites-reference-refresh.md) | Waites reference refresh | On-demand `sync --tree` refreshes current asset, equipment, and sensor navigation references without daily fact ingestion |
 
 ## 0.6.x Reshaping Phase
 
