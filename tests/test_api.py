@@ -79,6 +79,9 @@ def test_root_serves_static_shell(tmp_path: Path) -> None:
     assert 'params.set("k"' not in app_response.text
     assert 'fetchJson("/api/context")' in app_response.text
     assert "/api/cluster-explorer" in app_response.text
+    assert '"All sensors"' in app_response.text
+    assert '"Selected view"' in app_response.text
+    assert "explained_variance_ratio" in app_response.text
     assert "/api/drift-overview" in app_response.text
     assert "/api/artifacts" not in app_response.text
     assert "filterRowsForScope" not in app_response.text

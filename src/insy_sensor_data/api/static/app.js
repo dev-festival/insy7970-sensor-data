@@ -379,7 +379,7 @@ async function renderSnapshotReview() {
   setStatus(`Review ${payload.date} · ${payload.scope.label}`);
   renderSnapshotContext(payload);
   renderSnapshotTrendPanel(payload.trend || {});
-  renderSnapshotClusterPanel(payload.cluster_context || {});
+  await renderSnapshotClusterPanel(payload.cluster_context || {});
   renderSnapshotEventsPanel(payload.events || {});
   renderSnapshotMeasurements(payload.measurements || {}, payload.date);
   renderSnapshotDiagnostics(payload.trend?.coverage || {});
@@ -425,26 +425,58 @@ function renderSnapshotTrendPanel(trend) {
   });
 }
 
-function renderSnapshotClusterPanel(clusterContext) {
-  const modelLabel = clusterContext.feature_space ? `${featureSpaceLabel(clusterContext.feature_space)} | ` : "";
+async function renderSnapshotClusterPanel(clusterContext) {
+  const modelLabel = clusterContext.feature_space ? featureSpaceLabel(clusterContext.feature_space) : "";
   const readiness = readinessForDate(state.date);
   const missingMessage = readiness && !readiness.registered_model_ready
     ? "Model pending for this date"
     : clusterContext.message || "No cluster data for this date";
-  elements.snapshotClusterStatus.textContent = clusterContext.status === "available"
-    ? `${clusterContext.row_count || 0} scoped sensors | ${modelLabel}k=${clusterContext.k}`
-    : missingMessage;
-  const counts = clusterContext.cluster_counts || [];
-  plotInto(elements.snapshotClusterChart, counts.length ? [{
-    type: "bar",
-    x: counts.map((row) => `Cluster ${row.cluster}`),
-    y: counts.map((row) => row.sensor_count),
-    marker: { color: "#287271" },
-  }] : [], {
-    title: "Cluster membership",
-    xaxis: { title: "Active cluster" },
-    yaxis: { title: "Sensors" },
-  });
+  const chartLayout = {
+    title: "Sensor positions in the PCA cluster cloud",
+    xaxis: { title: "PC1" },
+    yaxis: { title: "PC2" },
+    emptyText: "PCA projection unavailable",
+  };
+  if (clusterContext.status !== "available") {
+    elements.snapshotClusterStatus.textContent = missingMessage;
+    plotInto(elements.snapshotClusterChart, [], chartLayout);
+    return;
+  }
+
+  elements.snapshotClusterStatus.textContent = "Loading PCA projection...";
+  try {
+    const allProjectionPromise = fetchJson(clusterExplorerUrl("all"));
+    const selectedProjectionPromise = state.scopeType === "all"
+      ? allProjectionPromise
+      : fetchJson(clusterExplorerUrl(state.scopeType, state.scopeId));
+    const [allProjection, selectedProjection] = await Promise.all([
+      allProjectionPromise,
+      selectedProjectionPromise,
+    ]);
+    const allRows = allProjection.pca_rows || [];
+    const selectedRows = selectedProjection.pca_rows || [];
+    const selectedCount = selectedProjection.row_count ?? clusterContext.row_count ?? selectedRows.length;
+    const allCount = allProjection.all_row_count ?? allRows.length;
+    const variance = allProjection.metrics?.pca?.explained_variance_ratio || [];
+    chartLayout.xaxis.title = pcaAxisTitle("PC1", variance[0]);
+    chartLayout.yaxis.title = pcaAxisTitle("PC2", variance[1]);
+    elements.snapshotClusterStatus.textContent = [
+      `${selectedCount} selected of ${allCount} sensors`,
+      modelLabel,
+      `k=${clusterContext.k}`,
+    ].filter(Boolean).join(" | ");
+    plotInto(
+      elements.snapshotClusterChart,
+      snapshotClusterTraces(allRows, selectedRows),
+      chartLayout,
+    );
+  } catch (error) {
+    elements.snapshotClusterStatus.textContent = `${clusterContext.row_count || 0} scoped sensors | PCA projection unavailable`;
+    plotInto(elements.snapshotClusterChart, [], {
+      ...chartLayout,
+      emptyText: error?.message || "PCA projection unavailable",
+    });
+  }
 }
 
 function renderSnapshotEventsPanel(events) {
@@ -926,6 +958,59 @@ function resetSnapshotPane() {
 function snapshotTrendTraces(trend, field) {
   if (trend.status !== "available") return [];
   return trendSeriesTraces(trend.series || [], field, state.date);
+}
+
+function clusterExplorerUrl(scopeType, scopeId = "") {
+  const params = new URLSearchParams();
+  params.set("date", state.date);
+  params.set("metric", state.metric);
+  params.set("dimension", state.dimension);
+  params.set("scope_type", scopeType);
+  if (scopeType !== "all" && scopeId) params.set("scope_id", scopeId);
+  return `/api/cluster-explorer?${params}`;
+}
+
+function snapshotClusterTraces(allRows, selectedRows) {
+  const validRows = (rows) => rows.filter((row) => (
+    numeric(row.pc1) !== null && numeric(row.pc2) !== null
+  ));
+  const all = validRows(allRows);
+  const selected = validRows(selectedRows);
+  const traces = [];
+  if (all.length) traces.push(clusterPcaTrace("All sensors", all, "#c1c8d1", false));
+  if (selected.length) traces.push(clusterPcaTrace("Selected view", selected, "#287271", true));
+  return traces;
+}
+
+function clusterPcaTrace(name, rows, color, selected) {
+  return {
+    type: "scatter",
+    mode: "markers",
+    name,
+    x: rows.map((row) => numeric(row.pc1)),
+    y: rows.map((row) => numeric(row.pc2)),
+    text: rows.map(clusterPcaPointLabel),
+    marker: {
+      color,
+      size: selected ? 11 : 7,
+      line: {
+        color: selected ? "#153c3a" : "#aeb7c2",
+        width: selected ? 2 : 1,
+      },
+    },
+  };
+}
+
+function clusterPcaPointLabel(row) {
+  const sensor = row.installation_point_name || row.installation_point_id || row.sensor_id || "Unknown sensor";
+  const equipment = row.equipment_name || row.equipment_id;
+  const cluster = row.cluster === null || row.cluster === undefined ? "" : `Cluster ${row.cluster}`;
+  return [sensor, equipment, cluster].filter(Boolean).join(" | ");
+}
+
+function pcaAxisTitle(axis, explainedVariance) {
+  const ratio = numeric(explainedVariance);
+  return ratio === null ? axis : `${axis} (${(ratio * 100).toFixed(1)}% variance)`;
 }
 
 function trendSeriesTraces(series, field, selectedDate = "") {
