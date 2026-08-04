@@ -49,6 +49,13 @@ INSY_SOURCE_MODE=mock
 INSY_DATA_DIR=data-mock
 ```
 
+Initialize a mock installation by loading the sample fixture with:
+
+```powershell
+uv run sensor-data sync --start-date 2025-07-09 --end-date 2025-07-11
+```
+before attempting to start the service.
+
 The existing API-backed store uses this matched pair:
 
 ```env
