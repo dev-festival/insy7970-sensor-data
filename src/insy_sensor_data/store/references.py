@@ -237,8 +237,8 @@ def list_equipment_tree(
         tree["equipment"].append(
             {
                 "equipment_id": equipment_id,
-                "equipment_name": equipment["equipment_name"]
-                or _text(equipment_ref.get("name"))
+                "equipment_name": _text(equipment_ref.get("name"))
+                or equipment["equipment_name"]
                 or f"Equipment {equipment_id}",
                 "customer_asset_id": equipment["customer_asset_id"]
                 or _text(equipment_ref.get("customer_asset_id")),

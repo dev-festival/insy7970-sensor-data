@@ -1114,14 +1114,14 @@ function setOptions(select, values, labeler, selected) {
   else if (rows.length) select.value = String(rows[0].value);
 }
 
-function compactEquipmentLabel(label = "") {
-  const parts = String(label).split(" - ");
-  return parts.length > 1 ? parts.slice(1).join(" - ").trim() : label;
-}
-
 function dateRangeLabel(row) {
   if (row.first_date && row.last_date && row.first_date !== row.last_date) return `${row.first_date} to ${row.last_date}`;
   return row.first_date || row.last_date || "";
+}
+
+function compactEquipmentLabel(label = "") {
+  const parts = String(label).split(" - ");
+  return parts.length > 1 ? parts.slice(1).join(" - ").trim() : label;
 }
 
 function featureSpaceLabel(value) {

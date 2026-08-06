@@ -234,6 +234,35 @@ def test_equipment_tree_repository_uses_direct_store_references(tmp_path: Path) 
     assert operational["sensor_count"] == 9
 
 
+def test_equipment_tree_prefers_current_reference_name_over_daily_fact_name(
+    tmp_path: Path,
+) -> None:
+    settings = AppSettings(data_dir=tmp_path / "data")
+    _prepare_operational_window(settings)
+    with connect_observation_store(settings) as connection:
+        connection.execute(
+            "UPDATE waites_equipment_reference SET name = ? "
+            "WHERE source = 'mock' AND equipment_id = 55576",
+            ("Current - Aluminium Pinch Roll",),
+        )
+        connection.commit()
+
+    operational = list_equipment_tree(
+        settings,
+        source="mock",
+        start_date=date(2025, 7, 9),
+        end_date=date(2025, 7, 11),
+    )
+    equipment = next(
+        equipment
+        for tree in operational["asset_trees"]
+        for equipment in tree["equipment"]
+        if equipment["equipment_id"] == "55576"
+    )
+
+    assert equipment["equipment_name"] == "Current - Aluminium Pinch Roll"
+
+
 def test_operational_routes_do_not_read_legacy_artifacts(
     tmp_path: Path,
 ) -> None:
