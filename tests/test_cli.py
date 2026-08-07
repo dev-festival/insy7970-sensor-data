@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from insy_sensor_data.cli import app
@@ -26,21 +27,23 @@ def _env_file(tmp_path: Path, *, retention: str = "release") -> Path:
 
 
 def test_cli_serve_help_is_discoverable() -> None:
-    result = runner.invoke(app, ["serve", "--help"])
+    result = runner.invoke(app, ["serve", "--help"], env={"FORCE_COLOR": "1"})
+    output = unstyle(result.stdout)
 
     assert result.exit_code == 0
-    assert "--env-file" in result.stdout
-    assert "--source" not in result.stdout
-    assert "--host" in result.stdout
-    assert "--port" in result.stdout
+    assert "--env-file" in output
+    assert "--source" not in output
+    assert "--host" in output
+    assert "--port" in output
 
 
 def test_cli_primary_help_contains_exactly_five_operator_commands() -> None:
     result = runner.invoke(app, ["--help"])
+    output = unstyle(result.stdout)
 
     assert result.exit_code == 0
     for command in ["serve", "sync", "rebuild", "doctor", "export"]:
-        assert command in result.stdout
+        assert command in output
     for retired in [
         "health",
         "waites",
