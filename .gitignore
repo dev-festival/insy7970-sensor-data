@@ -17,7 +17,8 @@ app.db
 .pytest_cache/
 .ruff_cache/
 maintenance/
-.test-tmp/
+.test-tmp*/
+codex-pytest-temp*/
 .insy-0.6.6-rehearsal-*/
 
 

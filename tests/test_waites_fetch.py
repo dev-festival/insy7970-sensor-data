@@ -1,6 +1,5 @@
 from datetime import date
 from pathlib import Path
-import csv
 import json
 
 from insy_sensor_data.config import AppSettings

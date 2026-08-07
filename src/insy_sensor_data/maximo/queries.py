@@ -3,15 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from insy_sensor_data.storage import PROJECT_ROOT
-
-
-QUERY_DIR = PROJECT_ROOT / "queries"
+QUERY_DIR = Path(__file__).resolve().parent / "sql"
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def read_query(name: str) -> str:
-    """Read a repository-owned SQL file without allowing path traversal."""
+    """Read a package-owned SQL file without allowing path traversal."""
     candidate = Path(name)
     if candidate.name != name or candidate.suffix != ".sql":
         raise ValueError("Query name must be a single .sql filename")

@@ -73,8 +73,6 @@ def test_build_sensor_snapshot_reads_api_raw_after_validation(tmp_path: Path) ->
     assert summary["source"] == "api"
     assert summary["record_count"] == 1
     assert summary["validation_status"] in {"valid", "valid_with_warnings"}
-    snapshot_path = tmp_path / "data" / "processed" / "snapshots" / "date=2025-07-09" / "sensor_snapshot.csv"
-    metadata_path = tmp_path / "data" / "processed" / "snapshots" / "date=2025-07-09" / "metadata.json"
     rows = {
         str(row["installation_point_id"]): row
         for row in load_sensor_daily_snapshots(settings, run_date, source="api")

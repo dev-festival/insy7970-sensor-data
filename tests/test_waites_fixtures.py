@@ -1,9 +1,12 @@
+import json
 from pathlib import Path
 from typing import Any
-import json
+
+from insy_sensor_data.storage import get_default_fixture_dir
+from insy_sensor_data.waites.fixtures import load_waites_fixture
 
 
-FIXTURE_DIR = Path(__file__).parent / "fixtures"
+FIXTURE_DIR = get_default_fixture_dir()
 WAITES_DIR = FIXTURE_DIR / "waites"
 
 WAITES_REQUIRED_FIELDS = {
@@ -106,6 +109,15 @@ def test_maximo_fixture_includes_future_join_cases() -> None:
     assert any(record["assetnum"] == "LEVF412TS" for record in records)
     assert any(record["assetnum"] == "MAXIMO-ONLY" for record in records)
     assert any(record["actfinish"] is None for record in records)
+
+
+def test_waites_fixture_loader_preserves_explicit_directory_override(tmp_path: Path) -> None:
+    waites_dir = tmp_path / "waites"
+    waites_dir.mkdir()
+    payload = {"list": [{"equipment_id": 42}]}
+    (waites_dir / "equipment.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_waites_fixture("equipment", fixture_dir=tmp_path) == payload
 
 
 def _load_waites(name: str) -> dict[str, list[dict[str, Any]]]:

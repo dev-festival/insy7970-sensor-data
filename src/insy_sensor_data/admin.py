@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 from typing import Any, Callable, Iterator
 from zoneinfo import ZoneInfo
 import json

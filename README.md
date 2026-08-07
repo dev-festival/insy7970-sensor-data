@@ -31,14 +31,84 @@ The browser provides four workflows:
 Source, feature mapping, and model `k` are service-owned. Browser requests do not
 select them.
 
-## Requirements and setup
+## Requirements
 
 - Python 3.13 or newer
 - [uv](https://docs.astral.sh/uv/)
 - For live Maximo reads, a DB2 ODBC driver and server-managed DSN
 
+The GitHub Release provides two package artifacts. Use the wheel to install and run
+the packaged service. Use the source archive to run the complete quality suite and
+rebuild the release evidence. The offline mock path requires no Waites token, ODBC
+driver, DB2 connection, or plant network.
+
+## Install and verify the wheel
+
+Download `insy7970_sensor_data-0.7.1-py3-none-any.whl` from the GitHub Release into
+an otherwise empty directory. From that directory, create a virtual environment and
+install the wheel:
+
 ```powershell
-uv sync --dev
+uv venv --python 3.13
+uv pip install .\insy7970_sensor_data-0.7.1-py3-none-any.whl
+@'
+INSY_SOURCE_MODE=mock
+INSY_DATA_DIR=data-mock
+'@ | Set-Content .env
+
+.\.venv\Scripts\sensor-data.exe --help
+.\.venv\Scripts\sensor-data.exe sync --start-date 2025-07-09 --end-date 2025-07-11
+.\.venv\Scripts\sensor-data.exe doctor --json
+```
+
+Start the installed service:
+
+```powershell
+.\.venv\Scripts\sensor-data.exe serve --host 127.0.0.1 --port 8000
+```
+
+With the service running, use a second PowerShell window in the same directory to
+verify health and one representative application read:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8000/api/snapshots/2025-07-09
+```
+
+On macOS or Linux, the installed executable is
+`.venv/bin/sensor-data` instead of `.venv\Scripts\sensor-data.exe`.
+
+## Evaluate the source archive
+
+Download `insy7970_sensor_data-0.7.1.tar.gz` from the same GitHub Release, extract
+it, and enter the extracted directory:
+
+```powershell
+tar -xf .\insy7970_sensor_data-0.7.1.tar.gz
+Set-Location .\insy7970_sensor_data-0.7.1
+uv sync --locked --dev
+Copy-Item .env.example .env
+```
+
+Run the release quality gates and rebuild both package artifacts:
+
+```powershell
+uv run ruff check .
+uv run pytest
+uv build --no-sources
+```
+
+A successful build creates the wheel and source archive under `dist/`. The complete
+test suite and build evidence are evaluated from the source archive; the clean wheel
+procedure above proves that the installed package can operate without repository
+files.
+
+## Repository setup
+
+From a repository checkout, create the locked development environment with:
+
+```powershell
+uv sync --locked --dev
 Copy-Item .env.example .env
 ```
 

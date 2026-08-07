@@ -4,7 +4,7 @@ from datetime import date
 from typing import Any
 import sqlite3
 
-from insy_sensor_data.config import AppSettings, VALID_SOURCE_MODES
+from insy_sensor_data.config import AppSettings
 from insy_sensor_data.store.connection import read_store
 from insy_sensor_data.store.errors import StoreNotFoundError
 from insy_sensor_data.store.revision import data_revision

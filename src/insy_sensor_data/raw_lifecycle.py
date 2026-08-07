@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 import gzip
 import hashlib
-import json
 import shutil
 
 from insy_sensor_data.artifacts import read_json, resolve_artifact_path, write_json

@@ -1,6 +1,6 @@
 [project]
 name = "insy7970-sensor-data"
-version = "0.7.0"
+version = "0.7.1"
 description = "Lightweight vibration monitoring service for Waites sensor data and Maximo maintenance history."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -31,6 +31,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/insy_sensor_data"]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

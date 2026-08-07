@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date
+import json
+from pathlib import Path
 from types import SimpleNamespace
 import sys
 
@@ -8,6 +10,7 @@ import pytest
 
 from insy_sensor_data.config import AppSettings
 from insy_sensor_data.maximo.db import MaximoDatabaseError, fetch_asset_workorders
+from insy_sensor_data.maximo.fixtures import load_workorder_fixture
 from insy_sensor_data.maximo.history import load_asset_history
 from insy_sensor_data.maximo.queries import read_query, render_query, render_workorder_query
 
@@ -35,6 +38,18 @@ def test_mock_asset_history_filters_by_asset_and_report_date() -> None:
             "actfinish": "",
         }
     ]
+
+
+def test_maximo_fixture_loader_preserves_explicit_directory_override(tmp_path: Path) -> None:
+    maximo_dir = tmp_path / "maximo"
+    maximo_dir.mkdir()
+    rows = [{"wonum": "TEST-1"}]
+    (maximo_dir / "workorders.json").write_text(
+        json.dumps({"list": rows}),
+        encoding="utf-8",
+    )
+
+    assert load_workorder_fixture(fixture_dir=tmp_path) == rows
 
 
 def test_live_history_uses_one_bounded_query_for_distinct_assets() -> None:
